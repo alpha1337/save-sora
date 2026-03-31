@@ -1,0 +1,47 @@
+/**
+ * Cached DOM bindings for the popup UI.
+ *
+ * Centralizing selectors keeps the rest of the popup modules focused on behavior
+ * instead of repetitive `document.getElementById(...)` calls.
+ */
+export const dom = {
+  totalCount: document.getElementById("total-count"),
+  warningBox: document.getElementById("warning-box"),
+  errorBox: document.getElementById("error-box"),
+  fetchButton: document.getElementById("fetch-button"),
+  fetchButtonLabel: document.querySelector("#fetch-button .button-label"),
+  downloadButton: document.getElementById("download-button"),
+  selectAllButton: document.getElementById("select-all-button"),
+  clearSelectionButton: document.getElementById("clear-selection-button"),
+  summaryPanel: document.querySelector(".summary-panel"),
+  selectionSummary: document.getElementById("selection-summary"),
+  emptyState: document.getElementById("empty-state"),
+  emptyStateImage: document.querySelector(".empty-state-image"),
+  emptyStateText: document.getElementById("empty-state-text"),
+  itemsList: document.getElementById("items-list"),
+  pickerToolbar: document.querySelector(".picker-toolbar"),
+  controlsPanel: document.querySelector(".controls-panel"),
+  searchInput: document.getElementById("search-input"),
+  sourceSelectField: document.querySelector(".source-select-field"),
+  sourceSelect: document.getElementById("source-select"),
+  sortSelect: document.getElementById("sort-select"),
+  runForm: document.getElementById("run-form"),
+  appShell: document.querySelector(".app"),
+  backToTopButton: document.getElementById("back-to-top-button"),
+  downloadOverlay: document.getElementById("download-overlay"),
+  downloadOverlayTitle: document.getElementById("download-overlay-title"),
+  downloadOverlayStatus: document.getElementById("download-overlay-status"),
+  downloadOverlayCount: document.getElementById("download-overlay-count"),
+  downloadOverlayPercent: document.getElementById("download-overlay-percent"),
+  downloadOverlayFill: document.getElementById("download-overlay-fill"),
+  downloadOverlayThanks: document.getElementById("download-overlay-thanks"),
+  downloadOverlayCancel: document.getElementById("download-overlay-cancel"),
+  tabButtons: [...document.querySelectorAll(".tab-button")],
+  tabPanels: [...document.querySelectorAll(".tab-panel")],
+  maxVideosInput: document.getElementById("max-videos-input"),
+  defaultSourceInput: document.getElementById("default-source-input"),
+  defaultSortInput: document.getElementById("default-sort-input"),
+  defaultThemeInput: document.getElementById("default-theme-input"),
+  settingsStatus: document.getElementById("settings-status"),
+  themeToggle: document.getElementById("theme-toggle"),
+};

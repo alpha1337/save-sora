@@ -79,6 +79,7 @@ body {
 body {
   position: relative;
   display: block;
+  color: var(--text);
   background:
     radial-gradient(circle at top, rgba(69, 133, 136, 0.18), transparent 26%),
     linear-gradient(180deg, #1d2021 0%, #282828 100%);
@@ -1330,6 +1331,18 @@ body[data-theme="light"] .back-to-top {
   gap: 10px;
 }
 
+.about-contact {
+  display: grid;
+  gap: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+}
+
+.about-handle {
+  color: var(--text);
+  font-weight: 700;
+}
+
 .about-link {
   color: var(--blue);
   font-weight: 700;
@@ -1367,14 +1380,19 @@ body[data-theme="light"] .back-to-top {
   align-items: center;
   justify-content: flex-start;
   width: fit-content;
+  color: var(--blue);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.4;
   text-decoration: none;
 }
 
-.kofi-badge {
-  display: block;
-  width: auto;
-  height: 36px;
-  border: 0;
+.kofi-badge-link:hover {
+  text-decoration: underline;
+}
+
+body[data-theme="light"] .kofi-badge-link {
+  color: #076678;
 }
 
 .tip-panel {

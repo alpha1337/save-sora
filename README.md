@@ -32,9 +32,16 @@ Review and selectively download your own Sora videos and drafts for backup.
 
 The extension has a deliberately small architecture:
 
+- `index.html`: Responsive GitHub Pages landing page for product overview, documentation links, repository links, and support/contact details.
 - `manifest.json`: Declares permissions, host access, the popup, and the background service worker.
 - `background.js`: Owns extension state, opens the inactive Sora tab, injects packaged code into that tab, fetches Sora data through the user's existing session, and manages the download queue.
-- `popup.html`, `popup.js`, `popup.css`: Render the review UI and send user actions to the background worker.
+- `popup.html`, `popup.css`: Define the popup shell and styles.
+- `popup.js`: Tiny bootstrap entrypoint that loads the modular popup app.
+- `popup/`: Popup modules split by concern so the flow is easy to follow end-to-end:
+  - `controllers/`: Event handlers, selection persistence, and settings actions.
+  - `ui/list/`: List-level rendering, empty states, and item-card builders.
+  - `ui/render/`: Focused helpers for status text, settings synchronization, and control states.
+  - `utils/`, `dom.js`, `state.js`, `runtime.js`: Shared helpers, element lookups, popup-local state, and background messaging.
 - `privacy.html`: Public privacy policy page intended for GitHub Pages or any public static host.
 - `assets/`: Icons, screenshots, and UI media.
 
@@ -144,6 +151,13 @@ The public privacy policy should clearly say:
 
 This repository includes that policy in `privacy.html`.
 
+## GitHub Pages Notes
+
+- `index.html` is currently a responsive landing page for documentation, project status, repository links, and contact details.
+- `privacy.html` is intended to stand on its own as a public privacy policy page on GitHub Pages.
+- A standalone web app is disabled for now and has been removed from the project.
+- If there is enough support for a dedicated standalone web workflow later, it can be designed and built as a separate follow-up effort.
+
 ## Load The Extension In Chrome
 
 1. Open `chrome://extensions`.
@@ -151,13 +165,42 @@ This repository includes that policy in `privacy.html`.
 3. Click `Load unpacked`.
 4. Select this repository folder.
 
+## Build A Distribution Package
+
+Local development still runs directly from the repository root, but releases can
+now be packaged into a clean `dist/` output:
+
+1. Run `npm run build:dist`.
+2. Load `dist/save-sora/` as the unpacked extension if you want to test the exact release build.
+3. Upload `dist/save-sora-v<version>.zip` when you want a packaged handoff artifact.
+
+The distribution build intentionally includes only the extension runtime files:
+
+- `manifest.json`
+- `background.js`
+- `popup.html`, `popup.css`, `popup.js`
+- `popup/` modules
+- Only the asset files referenced by the extension itself
+
+The GitHub Pages landing page, `privacy.html`, screenshots, and other non-runtime
+project files stay in the repository but are not bundled into the extension
+release package.
+
 ## Development Notes
 
-- No build step is required for the current codebase.
+- No build step is required for local development.
+- `npm run build:dist` creates a release-ready `dist/save-sora/` folder and a versioned zip archive.
 - The extension is intentionally plain HTML, CSS, and JavaScript.
 - The background worker is the source of truth for scan state, selection state, and download progress.
 - The popup is designed to be disposable and can be reopened while a scan or download continues.
+- The popup code is intentionally split into small modules so an open-source handoff is easier to follow end-to-end.
 - The codebase is heavily commented because this project is intended to be inspectable by users, contributors, and reviewers.
+
+## Contact
+
+- Email: `caseyjardin@gmail.com`
+- Discord: `for.fox.sake`
+- Repository: <https://github.com/alpha1337/save-sora>
 
 ## Open-Source Review Notes
 

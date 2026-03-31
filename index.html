@@ -1,0 +1,433 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Save Sora</title>
+    <meta
+      name="description"
+      content="Save Sora is an open-source Chrome extension for reviewing and selectively downloading your own Sora videos and drafts for backup."
+    />
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #f6f8fb;
+        --surface: #ffffff;
+        --surface-muted: #eef3f8;
+        --border: #d0d7de;
+        --text: #1f2328;
+        --muted: #59636e;
+        --heading: #0f1720;
+        --link: #0969da;
+        --accent: #0a7f6f;
+        --shadow: 0 18px 48px rgba(15, 23, 32, 0.08);
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+          sans-serif;
+        line-height: 1.65;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        scroll-behavior: smooth;
+      }
+
+      body {
+        margin: 0;
+        background:
+          radial-gradient(circle at top, rgba(10, 127, 111, 0.08), transparent 32%),
+          linear-gradient(180deg, #f9fbfd 0%, #f3f6fa 100%);
+        color: var(--text);
+      }
+
+      a {
+        color: var(--link);
+      }
+
+      a:hover {
+        text-decoration-thickness: 2px;
+      }
+
+      .page {
+        width: min(960px, calc(100% - 32px));
+        margin: 0 auto;
+        padding: 32px 0 56px;
+      }
+
+      .hero {
+        display: grid;
+        gap: 24px;
+        padding: 32px;
+        border: 1px solid var(--border);
+        background: rgba(255, 255, 255, 0.88);
+        box-shadow: var(--shadow);
+        backdrop-filter: blur(10px);
+      }
+
+      .hero-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1.2fr) minmax(260px, 0.8fr);
+        gap: 22px;
+        align-items: start;
+      }
+
+      .eyebrow {
+        margin: 0 0 8px;
+        color: var(--accent);
+        font-size: 0.78rem;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      h1,
+      h2,
+      h3 {
+        margin: 0;
+        color: var(--heading);
+        line-height: 1.12;
+      }
+
+      h1 {
+        font-size: clamp(2rem, 4vw, 3.1rem);
+        letter-spacing: -0.04em;
+      }
+
+      h2 {
+        font-size: 1.35rem;
+        letter-spacing: -0.02em;
+      }
+
+      h3 {
+        font-size: 1.05rem;
+        letter-spacing: -0.01em;
+      }
+
+      .hero-lead,
+      .section p,
+      .section li,
+      .note,
+      .meta {
+        font-size: 1rem;
+      }
+
+      .hero-lead {
+        max-width: 62ch;
+        margin: 16px 0 0;
+        color: var(--muted);
+      }
+
+      .meta {
+        margin: 14px 0 0;
+        color: var(--muted);
+      }
+
+      .toc {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin: 18px 0 0;
+      }
+
+      .toc a,
+      .button-link {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 8px 12px;
+        border: 1px solid var(--border);
+        background: var(--surface-muted);
+        color: var(--text);
+        font-size: 0.95rem;
+        font-weight: 600;
+        text-decoration: none;
+      }
+
+      .toc a:hover,
+      .button-link:hover {
+        border-color: rgba(10, 127, 111, 0.32);
+        background: rgba(10, 127, 111, 0.08);
+      }
+
+      .summary {
+        display: grid;
+        gap: 12px;
+        padding: 18px;
+        border: 1px solid rgba(10, 127, 111, 0.2);
+        background: rgba(10, 127, 111, 0.06);
+      }
+
+      .summary strong {
+        color: var(--heading);
+      }
+
+      .hero-media {
+        overflow: hidden;
+        border: 1px solid var(--border);
+        background: var(--surface-muted);
+      }
+
+      .hero-media img {
+        display: block;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+      }
+
+      .grid {
+        display: grid;
+        gap: 18px;
+        margin-top: 22px;
+      }
+
+      .section {
+        padding: 26px;
+        border: 1px solid var(--border);
+        background: var(--surface);
+        box-shadow: var(--shadow);
+      }
+
+      .section-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 16px;
+        margin-top: 14px;
+      }
+
+      .card {
+        padding: 18px;
+        border: 1px solid var(--border);
+        background: var(--surface-muted);
+      }
+
+      .card p:last-child,
+      .section p:last-child,
+      .section ul:last-child {
+        margin-bottom: 0;
+      }
+
+      .section p:first-of-type,
+      .section ul:first-of-type {
+        margin-top: 14px;
+      }
+
+      ul {
+        margin: 0;
+        padding-left: 20px;
+      }
+
+      li + li {
+        margin-top: 8px;
+      }
+
+      code {
+        padding: 0.15em 0.4em;
+        border: 1px solid rgba(27, 31, 36, 0.1);
+        background: rgba(175, 184, 193, 0.12);
+        border-radius: 6px;
+        font-family:
+          ui-monospace, SFMono-Regular, SFMono-Regular, Menlo, Consolas, "Liberation Mono",
+          monospace;
+        font-size: 0.92em;
+      }
+
+      .footer {
+        margin-top: 18px;
+        color: var(--muted);
+        font-size: 0.95rem;
+        text-align: center;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #0d1117;
+          --surface: rgba(22, 27, 34, 0.95);
+          --surface-muted: rgba(110, 118, 129, 0.14);
+          --border: rgba(240, 246, 252, 0.12);
+          --text: #e6edf3;
+          --muted: #9ba7b4;
+          --heading: #f0f6fc;
+          --link: #58a6ff;
+          --accent: #3fb950;
+          --shadow: 0 18px 48px rgba(0, 0, 0, 0.28);
+        }
+
+        body {
+          background:
+            radial-gradient(circle at top, rgba(63, 185, 80, 0.08), transparent 30%),
+            linear-gradient(180deg, #0d1117 0%, #11161d 100%);
+        }
+
+        .hero {
+          background: rgba(13, 17, 23, 0.82);
+        }
+
+        code {
+          border-color: rgba(240, 246, 252, 0.12);
+          background: rgba(110, 118, 129, 0.18);
+        }
+      }
+
+      @media (max-width: 720px) {
+        .page {
+          width: min(100% - 20px, 960px);
+          padding-top: 20px;
+          padding-bottom: 40px;
+        }
+
+        .hero,
+        .section {
+          padding: 20px;
+        }
+
+        .hero-grid,
+        .section-grid {
+          grid-template-columns: minmax(0, 1fr);
+        }
+
+        .toc {
+          gap: 8px;
+        }
+
+        .toc a,
+        .button-link {
+          width: 100%;
+          text-align: center;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <header class="hero">
+        <div class="hero-grid">
+          <div>
+            <p class="eyebrow">Save Sora</p>
+            <h1>Review and selectively download your own Sora videos and drafts for backup.</h1>
+            <p class="hero-lead">
+              Save Sora is an open-source Chrome extension built for people who want a cleaner way
+              to review their own Sora published videos and drafts, rename what matters, and back
+              up only the files they choose.
+            </p>
+            <p class="meta">GitHub Pages currently provides documentation and privacy information only.</p>
+
+            <nav class="toc" aria-label="Landing page sections">
+              <a href="#what-it-does">What It Does</a>
+              <a href="#web-status">Web Status</a>
+              <a href="#privacy">Privacy</a>
+              <a href="#contact">Contact</a>
+            </nav>
+          </div>
+
+          <div class="hero-media">
+            <img src="assets/screen-1.jpg" alt="Save Sora extension preview" loading="lazy" />
+          </div>
+        </div>
+
+        <section class="summary" aria-label="Project summary">
+          <div><strong>Extension-first:</strong> the working product today is the Chrome extension in this repository.</div>
+          <div><strong>Standalone privacy page:</strong> <a href="privacy.html">/privacy.html</a> is ready to publish independently on GitHub Pages.</div>
+          <div><strong>Standalone web app status:</strong> the web app is disabled for now, but it can be built later if there is enough support for it.</div>
+        </section>
+      </header>
+
+      <div class="grid">
+        <section id="what-it-does" class="section">
+          <h2>What Save Sora Does</h2>
+          <p>
+            Save Sora helps users review and selectively download their own Sora published videos
+            and drafts from their logged-in Sora account for backup.
+          </p>
+
+          <div class="section-grid">
+            <article class="card">
+              <h3>Fetch From Your Existing Session</h3>
+              <p>
+                The extension opens Sora in your current Chrome profile and reads only your own
+                published videos and drafts from the browser session you already control.
+              </p>
+            </article>
+            <article class="card">
+              <h3>Review Before You Download</h3>
+              <p>
+                Search, sort, rename, and select the items you want to keep instead of downloading
+                everything blindly.
+              </p>
+            </article>
+            <article class="card">
+              <h3>Keep State Local</h3>
+              <p>
+                Theme, default source, sort order, renamed titles, selection state, and downloaded
+                state are stored locally in the browser.
+              </p>
+            </article>
+            <article class="card">
+              <h3>Open Source</h3>
+              <p>
+                The repository is public so contributors, reviewers, and users can inspect the
+                implementation end to end.
+              </p>
+            </article>
+          </div>
+        </section>
+
+        <section id="web-status" class="section">
+          <h2>Standalone Web App Status</h2>
+          <p>
+            The GitHub Pages site is intentionally limited to public-facing documentation right now.
+          </p>
+          <ul>
+            <li>The standalone exporter web app has been disabled and removed from this project for now.</li>
+            <li>The current GitHub Pages entry is meant to explain the extension, link to the repository, and provide a standalone privacy policy.</li>
+            <li>If there is enough support for a standalone web experience later, it can be designed and built as a separate follow-up effort.</li>
+          </ul>
+          <p>
+            For the working product today, use the Chrome extension in this repository.
+          </p>
+        </section>
+
+        <section id="privacy" class="section">
+          <h2>Privacy And Trust</h2>
+          <p>
+            Save Sora is designed so users can review and download their own files without sending
+            their Sora library to a developer-owned backend.
+          </p>
+          <ul>
+            <li>No developer-owned backend is used in the current build.</li>
+            <li>No auth tokens or cookies are collected by the developer.</li>
+            <li>No analytics or telemetry are sent by the current extension build.</li>
+            <li>Extension state is stored locally with <code>chrome.storage.local</code>.</li>
+          </ul>
+          <p>
+            Read the standalone privacy page here:
+            <a href="privacy.html">/privacy.html</a>
+          </p>
+        </section>
+
+        <section id="contact" class="section">
+          <h2>Repository And Contact</h2>
+          <p>
+            Repository:
+            <a href="https://github.com/alpha1337/save-sora">https://github.com/alpha1337/save-sora</a>
+          </p>
+          <p>
+            Email:
+            <a href="mailto:caseyjardin@gmail.com">caseyjardin@gmail.com</a>
+          </p>
+          <p>Discord: for.fox.sake</p>
+          <p>
+            <a class="button-link" href="privacy.html">Open the standalone privacy page</a>
+          </p>
+        </section>
+      </div>
+
+      <p class="footer">
+        This landing page is designed to work well on GitHub Pages and on mobile or desktop
+        browsers.
+      </p>
+    </main>
+  </body>
+</html>
