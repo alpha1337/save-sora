@@ -158,12 +158,59 @@ This repository includes that policy in `privacy.html`.
 - A standalone web app is disabled for now and has been removed from the project.
 - If there is enough support for a dedicated standalone web workflow later, it can be designed and built as a separate follow-up effort.
 
+## Quick Start For Anyone
+
+If you are not technical, this is the easiest way to use Save Sora:
+
+1. Open the GitHub repository page.
+2. Click the green `Code` button.
+3. Click `Download ZIP`.
+4. After the ZIP finishes downloading, unzip it to a normal folder on your computer.
+5. Open Chrome and go to `chrome://extensions`.
+6. Turn on `Developer mode` in the top-right corner.
+7. Click `Load unpacked`.
+8. Choose the unzipped Save Sora folder.
+9. Open Sora in the same Chrome profile and sign in normally.
+10. Click the Save Sora extension icon to load your items and start choosing what you want to download.
+
+You do not need to type commands or edit code just to use the extension.
+
+Important:
+
+- Use a desktop or laptop computer with Chrome.
+- The GitHub page is for documentation and privacy information. The working product is the Chrome extension.
+- Save Sora uses your existing logged-in Sora browser session. It does not ask you to paste passwords, tokens, or cookies.
+
+## Everyday Use
+
+Once the extension is installed, the normal flow is:
+
+1. Open Chrome and make sure you are signed in to Sora.
+2. Click the Save Sora extension icon.
+3. Choose `Published`, `Drafts`, or `Both`.
+4. Wait while the extension loads your list.
+5. Search, sort, or rename items if you want to organize them first.
+6. Check only the videos you want to keep.
+7. Start the download and let Chrome save the selected files to your computer.
+
+The extension is designed so you can review first and download only what you actually want.
+
+## If Something Feels Confusing
+
+- If the extension does not show your videos, open Sora in the same Chrome profile first and make sure you are signed in.
+- If Chrome asks for permission to download files, allow it so the selected videos can be saved.
+- If you are using a phone or tablet, use the GitHub page for reading the docs and privacy policy, then switch to a desktop Chrome browser to use the extension itself.
+
 ## Load The Extension In Chrome
+
+If you want the short version, do this:
 
 1. Open `chrome://extensions`.
 2. Enable `Developer mode`.
 3. Click `Load unpacked`.
-4. Select this repository folder.
+4. Select the unzipped repository folder.
+
+If you have not downloaded the project yet, follow the `Quick Start For Anyone` section above first.
 
 ## Build A Distribution Package
 

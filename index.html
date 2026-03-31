@@ -197,6 +197,50 @@
         margin-top: 14px;
       }
 
+      .steps {
+        display: grid;
+        gap: 14px;
+        margin-top: 16px;
+      }
+
+      .step {
+        padding: 18px;
+        border: 1px solid var(--border);
+        background: var(--surface-muted);
+      }
+
+      .step-number {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 32px;
+        height: 32px;
+        margin-bottom: 12px;
+        border: 1px solid rgba(10, 127, 111, 0.24);
+        background: rgba(10, 127, 111, 0.12);
+        color: var(--heading);
+        font-weight: 800;
+      }
+
+      .step h3 {
+        margin-bottom: 8px;
+      }
+
+      .step p {
+        margin: 0;
+      }
+
+      .callout {
+        margin-top: 16px;
+        padding: 18px;
+        border: 1px solid rgba(10, 127, 111, 0.2);
+        background: rgba(10, 127, 111, 0.06);
+      }
+
+      .callout p + p {
+        margin-top: 10px;
+      }
+
       .card {
         padding: 18px;
         border: 1px solid var(--border);
@@ -305,8 +349,8 @@
       <header class="hero">
         <div class="hero-grid">
           <div>
-            <p class="eyebrow">Save Sora</p>
-            <h1>Review and selectively download your own Sora videos and drafts for backup.</h1>
+            <p class="eyebrow">Review and selectively download your own Sora videos and drafts for backup.</p>
+            <h1>Save Sora</h1>
             <p class="hero-lead">
               Save Sora is an open-source Chrome extension built for people who want a cleaner way
               to review their own Sora published videos and drafts, rename what matters, and back
@@ -315,6 +359,7 @@
             <p class="meta">GitHub Pages currently provides documentation and privacy information only.</p>
 
             <nav class="toc" aria-label="Landing page sections">
+              <a href="#how-to-use">How To Use</a>
               <a href="#what-it-does">What It Does</a>
               <a href="#web-status">Web Status</a>
               <a href="#privacy">Privacy</a>
@@ -335,6 +380,78 @@
       </header>
 
       <div class="grid">
+        <section id="how-to-use" class="section">
+          <h2>How To Use Save Sora</h2>
+          <p>
+            The working product is the Chrome extension. The GitHub page is here to explain the
+            project, show the privacy policy, and help you get started.
+          </p>
+
+          <div class="steps" aria-label="Save Sora setup steps">
+            <article class="step">
+              <div class="step-number" aria-hidden="true">1</div>
+              <h3>Download The Project</h3>
+              <p>
+                Open the repository on GitHub, click the green <strong>Code</strong> button, then
+                choose <strong>Download ZIP</strong>. After it downloads, unzip the folder somewhere
+                easy to find, like your Desktop or Downloads folder.
+              </p>
+            </article>
+
+            <article class="step">
+              <div class="step-number" aria-hidden="true">2</div>
+              <h3>Open Chrome Extensions</h3>
+              <p>
+                In Chrome on a desktop or laptop computer, go to <code>chrome://extensions</code>.
+                Turn on <strong>Developer mode</strong> using the switch in the top-right corner.
+              </p>
+            </article>
+
+            <article class="step">
+              <div class="step-number" aria-hidden="true">3</div>
+              <h3>Load Save Sora</h3>
+              <p>
+                Click <strong>Load unpacked</strong> and choose the unzipped Save Sora folder. Chrome
+                will add the extension to your browser right away.
+              </p>
+            </article>
+
+            <article class="step">
+              <div class="step-number" aria-hidden="true">4</div>
+              <h3>Sign In To Sora Normally</h3>
+              <p>
+                Open Sora in the same Chrome profile you normally use and sign in the usual way.
+                Save Sora uses the browser session you already have. It does not ask you to copy or
+                paste tokens, passwords, or cookies.
+              </p>
+            </article>
+
+            <article class="step">
+              <div class="step-number" aria-hidden="true">5</div>
+              <h3>Review And Download</h3>
+              <p>
+                Click the Save Sora extension icon, choose whether you want to see published items,
+                drafts, or both, then let it load your list. From there you can search, rename,
+                sort, select what you want, and download only the videos you choose.
+              </p>
+            </article>
+          </div>
+
+          <div class="callout">
+            <p>
+              <strong>If you are visiting on a phone:</strong> this GitHub page is still useful for
+              reading the docs and privacy policy, but the extension itself is meant for desktop
+              Chrome. The best next step is to open this repository on a computer and follow the
+              setup steps there.
+            </p>
+            <p>
+              <strong>If you only want to learn more first:</strong> you can stay on this page,
+              read the privacy policy, and review the open-source repository before deciding whether
+              to install anything.
+            </p>
+          </div>
+        </section>
+
         <section id="what-it-does" class="section">
           <h2>What Save Sora Does</h2>
           <p>
