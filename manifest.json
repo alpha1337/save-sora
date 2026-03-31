@@ -1,0 +1,38 @@
+{
+  "manifest_version": 3,
+  "name": "Save Sora: Sora Bulk Downloader",
+  "version": "1.0.0",
+  "description": "Bulk download your published Sora posts and drafts.",
+  "icons": {
+    "16": "assets/icon-16.png",
+    "32": "assets/icon-32.png",
+    "48": "assets/icon-48.png",
+    "128": "assets/icon-128.png"
+  },
+  "permissions": [
+    "downloads",
+    "scripting",
+    "storage",
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://sora.chatgpt.com/*",
+    "https://videos.openai.com/*",
+    "https://ogimg.chatgpt.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Save Sora: Sora Bulk Downloader",
+    "default_icon": {
+      "16": "assets/icon-16.png",
+      "32": "assets/icon-32.png",
+      "48": "assets/icon-48.png"
+    }
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'; frame-src https://ko-fi.com https://*.ko-fi.com;"
+  }
+}

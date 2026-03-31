@@ -1,0 +1,319 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Sora Bulk Downloader</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <nav class="top-tabs" aria-label="Sections">
+          <button id="tab-overview" class="tab-button is-active" type="button" data-tab="overview">
+            Overview
+          </button>
+          <button id="tab-settings" class="tab-button" type="button" data-tab="settings">
+            Settings
+          </button>
+          <button id="tab-about" class="tab-button" type="button" data-tab="about">
+            About
+          </button>
+          <button id="tab-donate" class="tab-button" type="button" data-tab="donate">
+            Donate
+          </button>
+        </nav>
+        <div class="brand-lockup">
+          <div class="brand-main">
+            <img class="app-icon" src="assets/icon-128.png" alt="" />
+            <div class="topbar-copy">
+              <p class="eyebrow">"Save Sora"</p>
+              <h1>Sora Bulk Downloader</h1>
+              <p class="subhead">Fetch your videos, rename what matters, and only download the ones you actually want.</p>
+            </div>
+          </div>
+          <label class="theme-toggle" for="theme-toggle">
+            <span class="theme-toggle-label">Theme Picker</span>
+            <input id="theme-toggle" class="theme-toggle-input" type="checkbox" />
+            <span class="theme-toggle-track" aria-hidden="true">
+              <span class="theme-toggle-icon theme-toggle-icon-dark">
+                <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+                  <path d="M14.5 3.2a8.8 8.8 0 1 0 6.3 15.1 8.5 8.5 0 1 1-6.3-15.1Z" fill="currentColor"></path>
+                </svg>
+              </span>
+              <span class="theme-toggle-icon theme-toggle-icon-light">
+                <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+                  <circle cx="12" cy="12" r="4.5" fill="currentColor"></circle>
+                  <path d="M12 2.5v2.6M12 18.9v2.6M21.5 12h-2.6M5.1 12H2.5M18.7 5.3l-1.8 1.8M7.1 16.9l-1.8 1.8M18.7 18.7l-1.8-1.8M7.1 7.1 5.3 5.3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"></path>
+                </svg>
+              </span>
+              <span class="theme-toggle-thumb"></span>
+            </span>
+          </label>
+        </div>
+      </header>
+
+      <main class="app is-scroll-locked">
+        <!-- Overview: fetch, review, and selectively queue the user's own Sora videos. -->
+        <section id="panel-overview" class="tab-panel is-active" data-panel="overview">
+          <section class="dashboard-grid">
+            <div class="left-rail">
+              <section class="panel controls-panel" data-has-results="false">
+                <form id="run-form" class="source-form">
+                  <label class="search-field" for="search-input">
+                  <span class="label">Search</span>
+                    <input
+                      id="search-input"
+                      class="search-input"
+                      type="search"
+                      inputmode="search"
+                      autocomplete="off"
+                      placeholder="Search descriptions"
+                    />
+                  </label>
+
+                  <label class="source-select-field" for="source-select">
+                    <span class="label">Source</span>
+                    <select id="source-select" name="source" class="source-select">
+                      <option value="profile">Published</option>
+                      <option value="drafts">Drafts</option>
+                      <option value="both" selected>Both</option>
+                    </select>
+                  </label>
+
+                  <div class="picker-toolbar hidden">
+                    <label class="sort-field" for="sort-select">
+                      <span class="label">Sort</span>
+                      <select id="sort-select" class="sort-select" aria-label="Sort videos">
+                        <option value="newest">Newest</option>
+                        <option value="likes">Most Likes</option>
+                        <option value="views">Most Views</option>
+                        <option value="remixes">Most Remixed</option>
+                      </select>
+                    </label>
+                  </div>
+
+                  <div class="primary-actions">
+                    <button id="fetch-button" type="submit" class="primary-cta">
+                      <span class="button-spinner" aria-hidden="true"></span>
+                      <span class="button-label">Fetch Videos</span>
+                    </button>
+                  </div>
+                </form>
+              </section>
+
+              <section class="panel summary-panel hidden">
+                <article class="summary-item">
+                  <span class="summary-label">Total Videos</span>
+                  <strong id="total-count">0</strong>
+                </article>
+                <div class="batch-actions">
+                  <button id="select-all-button" type="button" class="ghost">Select All</button>
+                  <button id="clear-selection-button" type="button" class="ghost">Clear</button>
+                </div>
+                <button id="download-button" type="button" class="secondary accent hidden">
+                  Download Selected
+                </button>
+              </section>
+
+              <section class="messages">
+                <p id="warning-box" class="notice warning hidden"></p>
+                <p id="error-box" class="notice error hidden"></p>
+              </section>
+            </div>
+
+            <section class="panel picker-panel">
+              <div class="picker-header">
+                <div class="picker-copy">
+                  <span class="label">Search Results</span>
+                  <p id="selection-summary" class="picker-summary">No videos loaded.</p>
+                </div>
+              </div>
+
+              <div id="empty-state" class="empty-state" aria-hidden="true">
+                <img
+                  class="empty-state-image"
+                  src="assets/content-guideline.png"
+                  alt="Content guideline"
+                />
+                <p id="empty-state-text" class="empty-state-text hidden"></p>
+              </div>
+              <div id="items-list" class="item-list hidden" aria-live="polite"></div>
+            </section>
+          </section>
+        </section>
+
+        <!-- Settings: local-only defaults persisted with chrome.storage.local. -->
+        <section id="panel-settings" class="tab-panel hidden" data-panel="settings">
+          <section class="panel info-panel settings-panel">
+            <div class="settings-head">
+              <span class="label">Settings</span>
+              <h2>Defaults</h2>
+              <p class="settings-intro">Choose how the downloader opens and fetches.</p>
+            </div>
+
+            <div class="settings-grid">
+              <div class="settings-group">
+                <label class="settings-label" for="max-videos-input">Max videos</label>
+                <input
+                  id="max-videos-input"
+                  class="settings-input"
+                  type="number"
+                  min="1"
+                  step="1"
+                  inputmode="numeric"
+                  placeholder="Unlimited"
+                />
+                <p class="settings-help">Leave blank to fetch everything.</p>
+              </div>
+
+              <div class="settings-group">
+                <label class="settings-label" for="default-source-input">Default source</label>
+                <select id="default-source-input" class="settings-input">
+                  <option value="profile">Published</option>
+                  <option value="drafts">Drafts</option>
+                  <option value="both">Both</option>
+                </select>
+                <p class="settings-help">Used when Overview first opens.</p>
+              </div>
+
+              <div class="settings-group">
+                <label class="settings-label" for="default-sort-input">Default sort</label>
+                <select id="default-sort-input" class="settings-input">
+                  <option value="newest">Newest</option>
+                  <option value="likes">Most Likes</option>
+                  <option value="views">Most Views</option>
+                  <option value="remixes">Most Remixed</option>
+                </select>
+                <p class="settings-help">Applied after new results load.</p>
+              </div>
+
+              <div class="settings-group">
+                <label class="settings-label" for="default-theme-input">Default theme</label>
+                <select id="default-theme-input" class="settings-input">
+                  <option value="dark">Dark</option>
+                  <option value="light">Light</option>
+                </select>
+                <p class="settings-help">Used the next time you open the popup.</p>
+              </div>
+            </div>
+
+            <p id="settings-status" class="settings-status">Saved automatically.</p>
+          </section>
+        </section>
+
+      <!-- About: explain the extension's single purpose and privacy posture in-product. -->
+      <section id="panel-about" class="tab-panel hidden" data-panel="about">
+        <section class="panel info-panel about-panel">
+          <img class="about-icon" src="assets/icon-128.png" alt="" />
+          <div class="about-copy">
+            <span class="label">About</span>
+            <h2>Sora Bulk Downloader</h2>
+            <p>
+              Built for quickly scanning your logged-in Sora session, renaming the videos you care
+              about, and downloading only the final shortlist.
+            </p>
+            <p>
+              Published videos and drafts are fetched directly from Sora’s backend through your
+              existing browser session without storing any auth material in the extension.
+            </p>
+            <p>
+              Safe to use: your videos stay with you. This extension does not send your Sora
+              library to a separate server, and it does not save sensitive account info anywhere
+              outside your browser.
+            </p>
+            <p>
+              Save Sora is also open source, so anyone can inspect how it works on
+              <a
+                class="about-link"
+                href="https://github.com/alpha1337/save-sora"
+                target="_blank"
+                rel="noreferrer"
+              >
+                GitHub
+              </a>.
+            </p>
+          </div>
+        </section>
+      </section>
+
+      <!-- Donate: this tab links to Ko-fi and also embeds a Ko-fi widget. -->
+      <section id="panel-donate" class="tab-panel hidden" data-panel="donate">
+        <section class="panel support-panel">
+          <div class="support-copy">
+            <span class="label">Donate</span>
+            <h2>Tip the project</h2>
+            <p>
+              If Sora Bulk Downloader saves you time, you can support future updates and ongoing
+              maintenance with a quick tip.
+            </p>
+          </div>
+          <a
+            class="kofi-badge-link"
+            href="https://ko-fi.com/C0C11WY1YU"
+            target="_blank"
+            rel="noreferrer"
+            aria-label="Support Sora Bulk Downloader on Ko-fi"
+          >
+            <img
+              class="kofi-badge"
+              src="assets/support_me_on_kofi_badge_dark.webp"
+              alt="Support this project on Ko-fi"
+            />
+          </a>
+          <div class="tip-panel">
+            <span class="label">Tip Panel</span>
+            <iframe
+              id="kofiframe"
+              class="kofi-frame"
+              src="https://ko-fi.com/savesora/?hidefeed=true&widget=true&embed=true&preview=true"
+              title="savesora"
+              loading="lazy"
+            ></iframe>
+          </div>
+        </section>
+      </section>
+      </main>
+
+      <div id="download-overlay" class="download-overlay hidden" aria-hidden="true">
+        <div class="download-overlay-panel">
+          <span class="label">Download Progress</span>
+          <h2 id="download-overlay-title">Preparing downloads...</h2>
+          <p id="download-overlay-status" class="download-overlay-status">
+            Getting everything ready.
+          </p>
+          <div class="download-progress-meta">
+            <span id="download-overlay-count">0 / 0</span>
+            <span id="download-overlay-percent">0%</span>
+          </div>
+          <div class="download-progress-bar" aria-hidden="true">
+            <span id="download-overlay-fill" class="download-progress-fill"></span>
+          </div>
+          <div id="download-overlay-thanks" class="download-overlay-thanks hidden">
+            <p class="download-overlay-thanks-copy">
+              Thanks for using "Save Sora" for FREE! If this plugin saved you time, a small tip helps support
+              future projects and indicates the service is appreciated.
+            </p>
+            <a
+              class="download-overlay-kofi"
+              href="https://ko-fi.com/C0C11WY1YU"
+              target="_blank"
+              rel="noreferrer"
+            >
+              Buy me a coffee?
+            </a>
+          </div>
+          <button id="download-overlay-cancel" type="button" class="secondary danger">
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <button id="back-to-top-button" class="back-to-top hidden" type="button">
+      Back to top
+    </button>
+
+    <script src="popup.js"></script>
+  </body>
+</html>
