@@ -182,6 +182,10 @@ export function syncSelectionControls(totalCount, selectedCount, visibleCount = 
     dom.downloadButton.classList.toggle("hidden", !showDownloadButton);
     dom.downloadButton.disabled = !showDownloadButton;
   }
+  if (dom.exportUrlsButton) {
+    dom.exportUrlsButton.classList.toggle("hidden", !showDownloadButton);
+    dom.exportUrlsButton.disabled = !showDownloadButton;
+  }
   if (dom.selectAllButton) {
     dom.selectAllButton.classList.toggle("hidden", !showBatchActions);
   }

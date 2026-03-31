@@ -7,6 +7,11 @@ import {
   saveSelection,
 } from "../runtime.js";
 import { popupState } from "../state.js";
+import {
+  buildSelectedUrlsCsv,
+  buildSelectedUrlsFilename,
+  downloadCsvText,
+} from "../utils/export.js";
 import { hideNotice, setControlsDisabled, showNotice } from "../ui/layout.js";
 import { updateDownloadOverlay } from "../ui/overlay.js";
 import { getItemCheckboxesWithOptions, getSelectedKeysFromDom } from "../ui/selection.js";
@@ -51,6 +56,7 @@ export async function handleRunFormSubmit(event) {
  */
 export async function handleDownloadButtonClick() {
   setControlsDisabled(true);
+  hideNotice(dom.warningBox);
   hideNotice(dom.errorBox);
   popupState.pendingDownloadStart = true;
   popupState.downloadOverlaySessionActive = true;
@@ -73,6 +79,39 @@ export async function handleDownloadButtonClick() {
     showNotice(dom.errorBox, error instanceof Error ? error.message : String(error));
   } finally {
     await refreshStatus();
+  }
+}
+
+/**
+ * Exports a CSV containing the Sora URLs for the current selection.
+ */
+export async function handleExportUrlsButtonClick() {
+  hideNotice(dom.warningBox);
+  hideNotice(dom.errorBox);
+
+  const selectedKeys = getSelectedKeysFromDom();
+  const { csvText, exportedCount, skippedCount } = buildSelectedUrlsCsv(
+    popupState.latestRenderState.items,
+    selectedKeys,
+  );
+
+  if (!csvText || exportedCount === 0) {
+    showNotice(dom.errorBox, "The current selection does not include any exportable Sora URLs.");
+    return;
+  }
+
+  try {
+    await downloadCsvText(csvText, buildSelectedUrlsFilename());
+  } catch (error) {
+    showNotice(dom.errorBox, error instanceof Error ? error.message : String(error));
+    return;
+  }
+
+  if (skippedCount > 0) {
+    showNotice(
+      dom.warningBox,
+      `Downloaded a CSV with ${exportedCount} URL(s). ${skippedCount} selected item(s) were skipped because a Sora page URL was not available.`,
+    );
   }
 }
 

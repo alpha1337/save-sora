@@ -27,7 +27,7 @@
           <div class="brand-main">
             <img class="app-icon" src="assets/icon-128.png" alt="" />
             <div class="topbar-copy">
-              <p class="eyebrow">"Save Sora"</p>
+              <p class="eyebrow">"Save Sora" v1.1.4</p>
               <h1>Sora Bulk Downloader</h1>
               <p class="subhead">Fetch your videos, rename what matters, and only download the ones you actually want.</p>
             </div>
@@ -86,6 +86,7 @@
                       <span class="label">Sort</span>
                       <select id="sort-select" class="sort-select" aria-label="Sort videos">
                         <option value="newest">Newest</option>
+                        <option value="oldest">Oldest</option>
                         <option value="likes">Most Likes</option>
                         <option value="views">Most Views</option>
                         <option value="remixes">Most Remixed</option>
@@ -107,12 +108,11 @@
                   <span class="summary-label">Total Videos</span>
                   <strong id="total-count">0</strong>
                 </article>
-                <div class="batch-actions">
-                  <button id="select-all-button" type="button" class="ghost">Select All</button>
-                  <button id="clear-selection-button" type="button" class="ghost">Clear</button>
-                </div>
                 <button id="download-button" type="button" class="secondary accent hidden">
                   Download Selected
+                </button>
+                <button id="export-urls-button" type="button" class="secondary hidden">
+                  Export CSV
                 </button>
               </section>
 
@@ -127,6 +127,14 @@
                 <div class="picker-copy">
                   <span class="label">Search Results</span>
                   <p id="selection-summary" class="picker-summary">Content Violation?</p>
+                </div>
+                <div class="picker-header-actions">
+                  <button id="select-all-button" type="button" class="ghost button-small hidden">
+                    Select All
+                  </button>
+                  <button id="clear-selection-button" type="button" class="ghost button-small hidden">
+                    Clear
+                  </button>
                 </div>
               </div>
 
@@ -181,6 +189,7 @@
                 <label class="settings-label" for="default-sort-input">Default sort</label>
                 <select id="default-sort-input" class="settings-input">
                   <option value="newest">Newest</option>
+                  <option value="oldest">Oldest</option>
                   <option value="likes">Most Likes</option>
                   <option value="views">Most Views</option>
                   <option value="remixes">Most Remixed</option>

@@ -4,6 +4,7 @@ import {
   handleClearSelectionClick,
   handleDownloadButtonClick,
   handleDownloadOverlayCancel,
+  handleExportUrlsButtonClick,
   handleRunFormSubmit,
   handleSelectAllClick,
 } from "./actions.js";
@@ -33,6 +34,7 @@ import {
 export function initializeEventHandlers() {
   dom.runForm?.addEventListener("submit", handleRunFormSubmit);
   dom.downloadButton?.addEventListener("click", handleDownloadButtonClick);
+  dom.exportUrlsButton?.addEventListener("click", handleExportUrlsButtonClick);
   dom.downloadOverlayCancel?.addEventListener("click", handleDownloadOverlayCancel);
   dom.selectAllButton?.addEventListener("click", handleSelectAllClick);
   dom.clearSelectionButton?.addEventListener("click", handleClearSelectionClick);

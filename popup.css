@@ -69,9 +69,9 @@ body {
   width: 720px;
   min-width: 720px;
   max-width: 720px;
-  height: 640px;
-  min-height: 640px;
-  max-height: 640px;
+  height: 770px;
+  min-height: 770px;
+  max-height: 770px;
   background: transparent;
   overflow: clip;
 }
@@ -586,7 +586,8 @@ body[data-theme="light"] .primary-cta.is-danger {
   letter-spacing: -0.04em;
 }
 
-.summary-panel #download-button {
+.summary-panel #download-button,
+.summary-panel #export-urls-button {
   width: 100%;
   min-height: 46px;
   display: inline-flex;
@@ -628,15 +629,25 @@ body[data-theme="light"] .primary-cta.is-danger {
 }
 
 .picker-header {
-  display: grid;
-  gap: 4px;
-  align-items: start;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
 }
 
 .picker-copy {
+  flex: 1 1 auto;
   min-width: 0;
   display: grid;
   gap: 4px;
+}
+
+.picker-header-actions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .picker-summary {
@@ -644,6 +655,13 @@ body[data-theme="light"] .primary-cta.is-danger {
   color: var(--text);
   font-size: 14px;
   font-weight: 600;
+}
+
+.button-small {
+  min-height: 32px;
+  padding: 6px 10px;
+  font-size: 12px;
+  letter-spacing: 0;
 }
 
 .search-field {

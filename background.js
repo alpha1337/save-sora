@@ -2483,6 +2483,7 @@ function injectedFetchSource(config) {
           row && row.output_blocked,
           row && row.output && row.output.output_blocked,
         ]);
+        const detailUrl = getDraftDetailUrl(row, id, generationId);
 
         if (
           !row ||
@@ -2499,7 +2500,7 @@ function injectedFetchSource(config) {
           id,
           sourcePage: "drafts",
           sourceType: "draft",
-          detailUrl: null,
+          detailUrl,
           downloadUrl,
           filename: `${id}.mp4`,
           thumbnailUrl,
@@ -2513,6 +2514,7 @@ function injectedFetchSource(config) {
               : null),
           createdAt,
           postedAt: createdAt,
+          generationId,
           durationSeconds,
           fileSizeBytes,
           width,
@@ -2541,6 +2543,7 @@ function injectedFetchSource(config) {
             { label: "Updated At", value: updatedAt },
             { label: "Has Captions", value: hasCaptions },
             { label: "Output Blocked", value: outputBlocked },
+            { label: "Detail URL", value: detailUrl, type: "link" },
             { label: "Download URL", value: downloadUrl, type: "link" },
             { label: "Thumbnail URL", value: thumbnailUrl, type: "link" },
           ]),
@@ -2562,6 +2565,52 @@ function injectedFetchSource(config) {
           ]) || null,
         partialWarning: "",
       };
+    }
+
+    function getDraftDetailUrl(row, id, generationId) {
+      const directUrl = pickFirstString([
+        row && row.permalink,
+        row && row.detail_url,
+        row && row.detailUrl,
+        row && row.share_url,
+        row && row.shareUrl,
+        row && row.public_url,
+        row && row.publicUrl,
+        row && row.url,
+        row && row.draft && row.draft.permalink,
+        row && row.draft && row.draft.detail_url,
+        row && row.draft && row.draft.detailUrl,
+        row && row.draft && row.draft.share_url,
+        row && row.draft && row.draft.shareUrl,
+        row && row.item && row.item.permalink,
+        row && row.item && row.item.detail_url,
+        row && row.item && row.item.detailUrl,
+        row && row.data && row.data.permalink,
+        row && row.data && row.data.detail_url,
+        row && row.data && row.data.detailUrl,
+      ]);
+
+      if (directUrl) {
+        return directUrl.startsWith("/") ? new URL(directUrl, window.location.origin).toString() : directUrl;
+      }
+
+      if (typeof id === "string" && id.startsWith("s_")) {
+        return `${window.location.origin}/p/${id}`;
+      }
+
+      if (typeof generationId === "string" && generationId.startsWith("s_")) {
+        return `${window.location.origin}/p/${generationId}`;
+      }
+
+      if (typeof generationId === "string" && generationId.startsWith("gen_")) {
+        return `${window.location.origin}/d/${generationId}`;
+      }
+
+      if (typeof id === "string" && id.startsWith("gen_")) {
+        return `${window.location.origin}/d/${id}`;
+      }
+
+      return null;
     }
 
     try {

@@ -11,6 +11,7 @@ export const dom = {
   fetchButton: document.getElementById("fetch-button"),
   fetchButtonLabel: document.querySelector("#fetch-button .button-label"),
   downloadButton: document.getElementById("download-button"),
+  exportUrlsButton: document.getElementById("export-urls-button"),
   selectAllButton: document.getElementById("select-all-button"),
   clearSelectionButton: document.getElementById("clear-selection-button"),
   summaryPanel: document.querySelector(".summary-panel"),

@@ -16,8 +16,10 @@ export function normalizeSourceValue(value) {
  * Normalizes the current sort mode.
  *
  * @param {string|null|undefined} value
- * @returns {"newest"|"likes"|"views"|"remixes"}
+ * @returns {"newest"|"oldest"|"likes"|"views"|"remixes"}
  */
 export function normalizeSortValue(value) {
-  return value === "likes" || value === "views" || value === "remixes" ? value : "newest";
+  return value === "oldest" || value === "likes" || value === "views" || value === "remixes"
+    ? value
+    : "newest";
 }

@@ -43,6 +43,55 @@ export function resolveItemTitle(item, titleOverrides) {
 }
 
 /**
+ * Resolves the best shareable Sora page URL for an item.
+ *
+ * Published videos usually map to `/p/<post-id>`. Drafts can be either public
+ * (`/p/<id>`) or private (`/d/<generation-id>`), so the helper prefers a
+ * normalized `detailUrl` when present and then falls back to the IDs available
+ * in the fetched item payload.
+ *
+ * @param {object} item
+ * @returns {string|null}
+ */
+export function getItemReviewUrl(item) {
+  const detailUrl =
+    item && typeof item.detailUrl === "string" && item.detailUrl.trim() ? item.detailUrl.trim() : "";
+  if (detailUrl) {
+    return detailUrl.startsWith("/")
+      ? `https://sora.chatgpt.com${detailUrl}`
+      : detailUrl;
+  }
+
+  const itemId = item && typeof item.id === "string" ? item.id.trim() : "";
+  const generationId =
+    item && typeof item.generationId === "string" ? item.generationId.trim() : "";
+
+  if (item && item.sourcePage === "profile" && itemId) {
+    return `https://sora.chatgpt.com/p/${itemId}`;
+  }
+
+  if (item && item.sourcePage === "drafts") {
+    if (itemId.startsWith("s_")) {
+      return `https://sora.chatgpt.com/p/${itemId}`;
+    }
+
+    if (generationId.startsWith("s_")) {
+      return `https://sora.chatgpt.com/p/${generationId}`;
+    }
+
+    if (generationId.startsWith("gen_")) {
+      return `https://sora.chatgpt.com/d/${generationId}`;
+    }
+
+    if (itemId.startsWith("gen_")) {
+      return `https://sora.chatgpt.com/d/${itemId}`;
+    }
+  }
+
+  return null;
+}
+
+/**
  * Returns whether an item should still participate in the active selection batch.
  *
  * @param {object} item

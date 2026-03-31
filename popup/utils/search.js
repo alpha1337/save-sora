@@ -128,6 +128,16 @@ export function getItemSortValue(item, sortKey) {
 }
 
 /**
+ * Returns whether the active sort runs from low-to-high instead of high-to-low.
+ *
+ * @param {string} sortKey
+ * @returns {boolean}
+ */
+function isAscendingSort(sortKey) {
+  return sortKey === "oldest";
+}
+
+/**
  * Comparator used by the local results list.
  *
  * Removed and downloaded items always sink to the bottom before the active
@@ -154,13 +164,17 @@ export function compareItems(left, right, sortKey) {
   const primaryLeft = getItemSortValue(left, sortKey);
   const primaryRight = getItemSortValue(right, sortKey);
   if (primaryLeft !== primaryRight) {
-    return primaryRight - primaryLeft;
+    return isAscendingSort(sortKey)
+      ? primaryLeft - primaryRight
+      : primaryRight - primaryLeft;
   }
 
   const fallbackLeft = getItemSortValue(left, "newest");
   const fallbackRight = getItemSortValue(right, "newest");
   if (fallbackLeft !== fallbackRight) {
-    return fallbackRight - fallbackLeft;
+    return isAscendingSort(sortKey)
+      ? fallbackLeft - fallbackRight
+      : fallbackRight - fallbackLeft;
   }
 
   return String((left && left.id) || "").localeCompare(String((right && right.id) || ""));
