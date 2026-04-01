@@ -101,7 +101,7 @@ body::-webkit-scrollbar {
 .app {
   position: relative;
   min-height: 0;
-  padding: 14px;
+  padding: 14px 14px 88px;
   overflow-y: hidden;
   overflow-x: hidden;
   scroll-behavior: smooth;

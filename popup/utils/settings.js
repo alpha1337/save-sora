@@ -6,10 +6,10 @@
  * Normalizes the current source filter.
  *
  * @param {string|null|undefined} value
- * @returns {"profile"|"drafts"|"both"}
+ * @returns {"profile"|"drafts"|"likes"|"both"}
  */
 export function normalizeSourceValue(value) {
-  return value === "profile" || value === "drafts" ? value : "both";
+  return value === "profile" || value === "drafts" || value === "likes" ? value : "both";
 }
 
 /**

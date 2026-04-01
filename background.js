@@ -5,10 +5,12 @@
 const STATE_KEY = "soraBulkDownloaderState";
 const PROFILE_LIMIT = 100;
 const DRAFT_BATCH_LIMIT = 100;
+const LIKES_BATCH_LIMIT = 100;
 const DOWNLOAD_PROGRESS_PERSIST_INTERVAL = 25;
 const SOURCE_ROUTES = {
   profile: "https://sora.chatgpt.com/profile",
   drafts: "https://sora.chatgpt.com/drafts",
+  likes: "https://sora.chatgpt.com/profile",
 };
 
 let currentState = createDefaultState();
@@ -254,6 +256,7 @@ function createDefaultState(overrides = {}) {
     currentSource: null,
     profileIds: [],
     draftIds: [],
+    likesIds: [],
     items: [],
     selectedKeys: [],
     titleOverrides: {},
@@ -340,7 +343,7 @@ function normalizeSources(input) {
 
   const normalized = [];
   for (const value of input) {
-    if (value === "profile" || value === "drafts") {
+    if (value === "profile" || value === "drafts" || value === "likes") {
       normalized.push(value);
     }
   }
@@ -518,6 +521,7 @@ function shouldPersistDownloadProgress(completed, failedCount, pendingCount) {
 function deriveSourceIdsFromItems(items) {
   const profileIds = new Set();
   const draftIds = new Set();
+  const likesIds = new Set();
 
   for (const item of Array.isArray(items) ? items : []) {
     if (!item || typeof item.id !== "string") {
@@ -528,12 +532,15 @@ function deriveSourceIdsFromItems(items) {
       draftIds.add(item.id);
     } else if (item.sourcePage === "profile") {
       profileIds.add(item.id);
+    } else if (item.sourcePage === "likes") {
+      likesIds.add(item.id);
     }
   }
 
   return {
     profileIds: [...profileIds],
     draftIds: [...draftIds],
+    likesIds: [...likesIds],
   };
 }
 
@@ -617,7 +624,7 @@ function normalizeTheme(value) {
 }
 
 function normalizeDefaultSource(value) {
-  return value === "profile" || value === "drafts" ? value : "both";
+  return value === "profile" || value === "drafts" || value === "likes" ? value : "both";
 }
 
 function normalizeDefaultSort(value) {
@@ -682,6 +689,7 @@ async function scanSources(sources, searchQuery = "") {
       currentSource: null,
       profileIds: filteredSourceIds.profileIds,
       draftIds: filteredSourceIds.draftIds,
+      likesIds: filteredSourceIds.likesIds,
       items: filteredItems,
       fetchedCount: filteredItems.length,
       selectedKeys,
@@ -826,6 +834,7 @@ async function setItemRemovedState(itemKey, removed) {
     items: nextItems,
     profileIds: sourceIds.profileIds,
     draftIds: sourceIds.draftIds,
+    likesIds: sourceIds.likesIds,
     fetchedCount: nextItems.length,
     selectedKeys: nextSelectedKeys,
     titleOverrides:
@@ -1376,6 +1385,7 @@ async function collectItems(sources, maxVideos) {
   const itemMap = new Map();
   const profileIds = new Set();
   const draftIds = new Set();
+  const likesIds = new Set();
   let partialWarning = "";
 
   for (const source of sources) {
@@ -1387,7 +1397,12 @@ async function collectItems(sources, maxVideos) {
     await setState({
       phase: "fetching",
       currentSource: source,
-      message: source === "profile" ? "Fetching published videos..." : "Fetching drafts...",
+      message:
+        source === "profile"
+          ? "Fetching published videos..."
+          : source === "drafts"
+            ? "Fetching drafts..."
+            : "Fetching liked videos...",
     });
 
     const sourceResult =
@@ -1402,16 +1417,27 @@ async function collectItems(sources, maxVideos) {
             });
           },
         })
-        : await fetchAllDraftItems({
-          maxItems: maxRemaining,
-          baseCount: itemMap.size,
-          onProgress: async ({ count }) => {
-            await setState({
-              fetchedCount: itemMap.size + count,
-              message: `Fetching drafts... ${itemMap.size + count} found so far.`,
-            });
-          },
-        });
+        : source === "drafts"
+          ? await fetchAllDraftItems({
+            maxItems: maxRemaining,
+            baseCount: itemMap.size,
+            onProgress: async ({ count }) => {
+              await setState({
+                fetchedCount: itemMap.size + count,
+                message: `Fetching drafts... ${itemMap.size + count} found so far.`,
+              });
+            },
+          })
+          : await fetchAllLikesItems({
+            maxItems: maxRemaining,
+            baseCount: itemMap.size,
+            onProgress: async ({ count }) => {
+              await setState({
+                fetchedCount: itemMap.size + count,
+                message: `Fetching liked videos... ${itemMap.size + count} found so far.`,
+              });
+            },
+          });
 
     for (const item of sourceResult.items) {
       const key = getItemKey(item);
@@ -1426,8 +1452,10 @@ async function collectItems(sources, maxVideos) {
     for (const id of sourceResult.ids) {
       if (source === "profile") {
         profileIds.add(id);
-      } else {
+      } else if (source === "drafts") {
         draftIds.add(id);
+      } else {
+        likesIds.add(id);
       }
     }
 
@@ -1440,6 +1468,7 @@ async function collectItems(sources, maxVideos) {
     items: [...itemMap.values()],
     profileIds: [...profileIds],
     draftIds: [...draftIds],
+    likesIds: [...likesIds],
     partialWarning,
   };
 }
@@ -1577,6 +1606,55 @@ async function fetchAllDraftItems(options = {}) {
   };
 }
 
+async function fetchAllLikesItems(options = {}) {
+  const ids = new Set();
+  const items = [];
+  const maxItems = getMaxVideosSetting({ maxVideos: options.maxItems });
+  let cursor = null;
+  let previousCursor = null;
+
+  for (let pageNumber = 0; pageNumber < 250; pageNumber += 1) {
+    const page = await fetchSourceDataFromTab("likes", {
+      limit: LIKES_BATCH_LIMIT,
+      cursor,
+    });
+
+    for (const id of page.ids) {
+      ids.add(id);
+    }
+    items.push(...page.items);
+
+    if (maxItems && items.length > maxItems) {
+      items.length = maxItems;
+    }
+
+    if (typeof options.onProgress === "function") {
+      await options.onProgress({
+        count: items.length,
+        pageNumber: pageNumber + 1,
+      });
+    }
+
+    if (
+      page.rowCount === 0 ||
+      !page.nextCursor ||
+      page.nextCursor === previousCursor ||
+      (maxItems && items.length >= maxItems)
+    ) {
+      break;
+    }
+
+    previousCursor = cursor;
+    cursor = page.nextCursor;
+  }
+
+  return {
+    ids: [...ids],
+    items,
+    partialWarning: "",
+  };
+}
+
 async function fetchSourceDataFromTab(source, options) {
   const tabId = await ensureHiddenTab(SOURCE_ROUTES[source]);
 
@@ -1602,7 +1680,8 @@ async function fetchSourceDataFromTab(source, options) {
 
     return payload;
   } catch (error) {
-    const sourceLabel = source === "profile" ? "published" : source;
+    const sourceLabel =
+      source === "profile" ? "published" : source === "drafts" ? "drafts" : "liked";
     throw new Error(`Failed to fetch ${sourceLabel} data: ${getErrorMessage(error)}`);
   }
 }
@@ -1739,6 +1818,23 @@ async function refreshDownloadUrl(item) {
     if (!match) {
       throw new Error(`Could not refresh ${item.id} from your published feed.`);
     }
+    return {
+      ...item,
+      downloadUrl: match.downloadUrl,
+    };
+  }
+
+  if (item.sourcePage === "likes") {
+    const refreshed = await fetchAllLikesItems();
+    const match = refreshed.items.find(
+      (candidate) =>
+        candidate.id === item.id && candidate.attachmentIndex === item.attachmentIndex,
+    );
+
+    if (!match) {
+      throw new Error(`Could not refresh liked post ${item.id}.`);
+    }
+
     return {
       ...item,
       downloadUrl: match.downloadUrl,
@@ -2047,6 +2143,71 @@ function injectedFetchSource(config) {
       return null;
     }
 
+    function decodeJwtPayload(token) {
+      if (typeof token !== "string") {
+        return null;
+      }
+
+      const parts = token.split(".");
+      if (parts.length < 2 || !parts[1]) {
+        return null;
+      }
+
+      try {
+        const normalized = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+        const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
+        return JSON.parse(atob(padded));
+      } catch (_error) {
+        return null;
+      }
+    }
+
+    function findViewerUserIdFromPayload(payload, depth = 0, keyName = "") {
+      if (depth > 5 || payload == null) {
+        return null;
+      }
+
+      if (typeof payload === "string") {
+        if ((/user_?id/i.test(keyName) || /chatgpt_?user_?id/i.test(keyName)) && /^user-[A-Za-z0-9_-]+$/.test(payload)) {
+          return payload;
+        }
+        return null;
+      }
+
+      if (Array.isArray(payload)) {
+        for (const value of payload) {
+          const match = findViewerUserIdFromPayload(value, depth + 1, keyName);
+          if (match) {
+            return match;
+          }
+        }
+        return null;
+      }
+
+      if (typeof payload !== "object") {
+        return null;
+      }
+
+      const priorityKeys = ["user_id", "userId", "chatgpt_user_id", "chatgptUserId"];
+      for (const candidateKey of priorityKeys) {
+        if (candidateKey in payload) {
+          const match = findViewerUserIdFromPayload(payload[candidateKey], depth + 1, candidateKey);
+          if (match) {
+            return match;
+          }
+        }
+      }
+
+      for (const [entryKey, entryValue] of Object.entries(payload)) {
+        const match = findViewerUserIdFromPayload(entryValue, depth + 1, entryKey);
+        if (match) {
+          return match;
+        }
+      }
+
+      return null;
+    }
+
     async function deriveAuthContext() {
       // Save Sora does not ask the user for credentials or ship tokens anywhere else.
       // Instead, the injected code derives the auth context already present in the user's
@@ -2100,6 +2261,34 @@ function injectedFetchSource(config) {
         deviceId,
         language,
       };
+    }
+
+    function deriveViewerUserId(authContext) {
+      const tokenPayload = decodeJwtPayload(authContext && authContext.token);
+      const authClaims =
+        tokenPayload &&
+        tokenPayload["https://api.openai.com/auth"] &&
+        typeof tokenPayload["https://api.openai.com/auth"] === "object"
+          ? tokenPayload["https://api.openai.com/auth"]
+          : null;
+
+      const tokenUserId = pickFirstString([
+        authClaims && authClaims.user_id,
+        authClaims && authClaims.chatgpt_user_id,
+        tokenPayload && tokenPayload.user_id,
+        tokenPayload && tokenPayload.chatgpt_user_id,
+      ]);
+
+      if (typeof tokenUserId === "string" && /^user-[A-Za-z0-9_-]+$/.test(tokenUserId)) {
+        return tokenUserId;
+      }
+
+      const nextDataUserId = findViewerUserIdFromPayload(globalThis.__NEXT_DATA__, 0, "__NEXT_DATA__");
+      if (nextDataUserId) {
+        return nextDataUserId;
+      }
+
+      throw new Error("Could not derive your Sora user id from the signed-in browser session.");
     }
 
     async function fetchJson(relativeUrl) {
@@ -2368,19 +2557,22 @@ function injectedFetchSource(config) {
       ]);
     }
 
-    function normalizeProfileResponse(payload) {
+    function normalizePostListingResponse(payload, config = {}) {
       const rows = Array.isArray(payload && payload.items) ? payload.items : [];
       const ids = [];
       const items = [];
+      const sourcePage = config && config.sourcePage === "likes" ? "likes" : "profile";
+      const sourceLabel = sourcePage === "likes" ? "Liked" : "Published";
+      const requireOwner = Boolean(config && config.requireOwner);
 
       for (const row of rows) {
         const post = row && row.post ? row.post : null;
-        if (!post || !post.is_owner || typeof post.id !== "string") {
+        if (!post || typeof post.id !== "string" || (requireOwner && !post.is_owner)) {
           continue;
         }
 
         const attachments = Array.isArray(post.attachments)
-          ? post.attachments.filter((attachment) => attachment && attachment.downloadable_url)
+          ? post.attachments.filter((attachment) => attachment && getDownloadUrl(attachment))
           : [];
 
         if (!attachments.length) {
@@ -2392,15 +2584,16 @@ function injectedFetchSource(config) {
         attachments.forEach((attachment, attachmentIndex) => {
           const durationSeconds = getDurationSeconds(attachment) || null;
           const fileSizeBytes = getFileSizeBytes(attachment) || null;
+          const downloadUrl = getDownloadUrl(attachment);
           items.push({
             id: post.id,
-            sourcePage: "profile",
+            sourcePage,
             sourceType: "post",
             detailUrl:
               typeof post.permalink === "string" && post.permalink
                 ? post.permalink
                 : `https://sora.chatgpt.com/p/${post.id}`,
-            downloadUrl: attachment.downloadable_url,
+            downloadUrl,
             filename: buildFilename(post.id, attachmentIndex, attachments.length),
             thumbnailUrl:
               getThumbnailUrl(attachment) ||
@@ -2423,7 +2616,7 @@ function injectedFetchSource(config) {
             remixCount: post.remix_count ?? null,
             attachmentIndex,
             metadataEntries: compactMetadataEntries([
-              { label: "Source", value: "Published" },
+              { label: "Source", value: sourceLabel },
               { label: "Source Type", value: "post" },
               { label: "Post ID", value: post.id },
               { label: "Attachment ID", value: attachment.id },
@@ -2458,7 +2651,7 @@ function injectedFetchSource(config) {
                   : null,
               },
               { label: "Detail URL", value: post.permalink, type: "link" },
-              { label: "Download URL", value: attachment.downloadable_url, type: "link" },
+              { label: "Download URL", value: downloadUrl, type: "link" },
               { label: "Thumbnail URL", value: getThumbnailUrl(attachment) || getThumbnailUrl(post), type: "link" },
               { label: "SRT URL", value: post.srt_url, type: "link" },
               { label: "VTT URL", value: post.vtt_url, type: "link" },
@@ -2474,6 +2667,20 @@ function injectedFetchSource(config) {
         nextCursor: typeof payload.cursor === "string" && payload.cursor ? payload.cursor : null,
         partialWarning: "",
       };
+    }
+
+    function normalizeProfileResponse(payload) {
+      return normalizePostListingResponse(payload, {
+        sourcePage: "profile",
+        requireOwner: true,
+      });
+    }
+
+    function normalizeLikesResponse(payload) {
+      return normalizePostListingResponse(payload, {
+        sourcePage: "likes",
+        requireOwner: false,
+      });
     }
 
     function normalizeDraftResponse(payload, limit) {
@@ -2723,6 +2930,22 @@ function injectedFetchSource(config) {
         }
         const payload = await fetchJson(url);
         return normalizeDraftResponse(payload, limit);
+      }
+
+      if (source === "likes") {
+        const authContext = await deriveAuthContext();
+        const userId = deriveViewerUserId(authContext);
+        const limit = Number(options.limit) || 100;
+        const url = new URL(
+          `/backend/project_y/profile/${encodeURIComponent(userId)}/post_listing/likes`,
+          window.location.origin,
+        );
+        url.searchParams.set("limit", String(limit));
+        if (typeof options.cursor === "string" && options.cursor) {
+          url.searchParams.set("cursor", options.cursor);
+        }
+        const payload = await fetchJson(url.toString());
+        return normalizeLikesResponse(payload);
       }
 
       throw new Error(`Unsupported source: ${String(source)}`);

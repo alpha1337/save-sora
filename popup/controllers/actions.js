@@ -195,10 +195,10 @@ function preparePendingFetchUi() {
 /**
  * Returns the selected source value from the fetch form.
  *
- * @returns {"profile"|"drafts"|"both"}
+ * @returns {"profile"|"drafts"|"likes"|"both"}
  */
 function getSelectedSource() {
   const formData = new FormData(dom.runForm);
   const value = formData.get("source");
-  return value === "profile" || value === "drafts" ? value : "both";
+  return value === "profile" || value === "drafts" || value === "likes" ? value : "both";
 }

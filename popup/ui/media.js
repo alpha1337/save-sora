@@ -180,7 +180,8 @@ function activateInlineVideo(media, item, titleOverrides) {
 function createThumbnailFallback(item) {
   const fallback = document.createElement("div");
   fallback.className = "item-thumbnail-fallback";
-  fallback.textContent = item.sourcePage === "drafts" ? "Draft" : "Published";
+  fallback.textContent =
+    item.sourcePage === "drafts" ? "Draft" : item.sourcePage === "likes" ? "Liked" : "Published";
   return fallback;
 }
 
