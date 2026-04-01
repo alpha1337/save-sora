@@ -5,6 +5,7 @@
 const STATE_KEY = "soraBulkDownloaderState";
 const PROFILE_LIMIT = 100;
 const DRAFT_BATCH_LIMIT = 100;
+const DOWNLOAD_PROGRESS_PERSIST_INTERVAL = 25;
 const SOURCE_ROUTES = {
   profile: "https://sora.chatgpt.com/profile",
   drafts: "https://sora.chatgpt.com/drafts",
@@ -302,16 +303,21 @@ async function restoreState() {
   }
 }
 
-async function persistState() {
-  await chrome.storage.local.set({ [STATE_KEY]: currentState });
+async function persistState(state = currentState) {
+  await chrome.storage.local.set({ [STATE_KEY]: state });
 }
 
-async function setState(patch) {
+async function setState(patch, options = {}) {
   currentState = {
     ...currentState,
     ...patch,
   };
-  await persistState();
+
+  if (options.persist === false) {
+    return;
+  }
+
+  await persistState(currentState);
 }
 
 async function resetExtensionState() {
@@ -428,10 +434,85 @@ function applyCurrentTitlesToQueueItems(queueItems, currentItems, titleOverrides
         : {
             ...item,
             key,
-          },
+      },
       titleOverrides,
     );
   });
+}
+
+function createQueueSnapshotItem(item, errorOverride) {
+  const key =
+    item && typeof item.key === "string" && item.key ? item.key : getItemKey(item || {});
+  const attachmentIndex = Number(item && item.attachmentIndex);
+  const snapshot = {
+    key,
+    id: item && typeof item.id === "string" ? item.id : "",
+    sourcePage: item && typeof item.sourcePage === "string" ? item.sourcePage : null,
+    attachmentIndex: Number.isFinite(attachmentIndex) ? attachmentIndex : 0,
+    filename:
+      item && typeof item.filename === "string" && item.filename
+        ? item.filename
+        : `${(item && item.id) || "video"}.mp4`,
+  };
+  const error =
+    typeof errorOverride === "string" && errorOverride
+      ? errorOverride
+      : item && typeof item.error === "string" && item.error
+        ? item.error
+        : "";
+
+  if (error) {
+    snapshot.error = error;
+  }
+
+  return snapshot;
+}
+
+function createQueueSnapshots(items) {
+  return (Array.isArray(items) ? items : []).map((item) => createQueueSnapshotItem(item));
+}
+
+function rehydrateQueueItems(queueItems, currentItems, titleOverrides) {
+  const currentItemsByKey = new Map(
+    (Array.isArray(currentItems) ? currentItems : []).map((item) => [item.key || getItemKey(item), item]),
+  );
+
+  return (Array.isArray(queueItems) ? queueItems : []).map((queueItem) => {
+    const key =
+      queueItem && typeof queueItem.key === "string" && queueItem.key
+        ? queueItem.key
+        : getItemKey(queueItem || {});
+    const currentItem = currentItemsByKey.get(key);
+    const hydrated = applyTitleOverride(
+      currentItem
+        ? {
+            ...queueItem,
+            ...currentItem,
+            key,
+          }
+        : {
+            ...queueItem,
+            key,
+          },
+      titleOverrides,
+    );
+
+    return queueItem && typeof queueItem.error === "string" && queueItem.error
+      ? {
+          ...hydrated,
+          error: queueItem.error,
+        }
+      : hydrated;
+  });
+}
+
+function shouldPersistDownloadProgress(completed, failedCount, pendingCount) {
+  if (pendingCount <= 0) {
+    return true;
+  }
+
+  const processed = Math.max(0, Number(completed) || 0) + Math.max(0, Number(failedCount) || 0);
+  return processed <= 1 || processed % DOWNLOAD_PROGRESS_PERSIST_INTERVAL === 0;
 }
 
 function deriveSourceIdsFromItems(items) {
@@ -933,7 +1014,7 @@ async function beginSelectedDownload() {
     completed: 0,
     failed: 0,
     failedItems: [],
-    pendingItems: [...selectedItems],
+    pendingItems: createQueueSnapshots(selectedItems),
     runMode: "selected",
     runTotal: selectedItems.length,
     lastError: "",
@@ -972,9 +1053,11 @@ async function resumeDownloads() {
     throw new Error("A fetch or download run is already in progress.");
   }
 
-  const pendingItems = Array.isArray(currentState.pendingItems)
-    ? currentState.pendingItems.map(stripFailureError)
-    : [];
+  const pendingItems = rehydrateQueueItems(
+    Array.isArray(currentState.pendingItems) ? currentState.pendingItems.map(stripFailureError) : [],
+    currentState.items,
+    currentState.titleOverrides,
+  );
   if (!pendingItems.length) {
     throw new Error("There is no paused download queue to resume.");
   }
@@ -1035,7 +1118,7 @@ async function retryFailed() {
     throw new Error("A fetch or download run is already in progress.");
   }
 
-  const retryItems = applyCurrentTitlesToQueueItems(
+  const retryItems = rehydrateQueueItems(
     (currentState.failedItems || []).map(stripFailureError),
     currentState.items,
     currentState.titleOverrides,
@@ -1083,7 +1166,7 @@ async function requestRunControl(action) {
       action === "pause"
         ? "Pausing the active download..."
         : "Aborting the active download...",
-  });
+  }, { persist: false });
 
   if (typeof activeDownloadId === "number") {
     try {
@@ -1132,7 +1215,7 @@ async function performDownloadRun(downloadItems, options) {
       completed,
       failed: failedItems.length,
       failedItems: [...failedItems],
-      pendingItems: [...pendingItems],
+      pendingItems: createQueueSnapshots(pendingItems),
       runMode: (options && options.mode) || null,
       runTotal: total,
       lastError: "",
@@ -1152,7 +1235,7 @@ async function performDownloadRun(downloadItems, options) {
         completed,
         failed: failedItems.length,
         failedItems: [...failedItems],
-        pendingItems: [...pendingItems],
+        pendingItems: createQueueSnapshots(pendingItems),
         runMode: (options && options.mode) || null,
         runTotal: total,
         message: `Paused with ${pendingItems.length} item(s) remaining.`,
@@ -1184,7 +1267,7 @@ async function performDownloadRun(downloadItems, options) {
     await setState({
       message: `Downloading ${item.filename}`,
       currentSource: item.sourcePage,
-    });
+    }, { persist: false });
 
     try {
       await downloadItemWithRetry(item);
@@ -1201,11 +1284,13 @@ async function performDownloadRun(downloadItems, options) {
         selectedKeys: nextSelectedKeys,
         completed,
         queued: pendingItems.length,
-        pendingItems: [...pendingItems],
+        pendingItems: createQueueSnapshots(pendingItems),
         message:
           (options && typeof options.progressMessage === "function"
             ? options.progressMessage(completed, total, item)
             : `Downloaded ${completed} of ${total}`),
+      }, {
+        persist: shouldPersistDownloadProgress(completed, failedItems.length, pendingItems.length),
       });
     } catch (error) {
       if (isControlError(error, "pause")) {
@@ -1217,7 +1302,7 @@ async function performDownloadRun(downloadItems, options) {
           completed,
           failed: failedItems.length,
           failedItems: [...failedItems],
-          pendingItems: [...pendingItems],
+          pendingItems: createQueueSnapshots(pendingItems),
           runMode: (options && options.mode) || null,
           runTotal: total,
           message: `Paused with ${pendingItems.length} item(s) remaining.`,
@@ -1246,21 +1331,20 @@ async function performDownloadRun(downloadItems, options) {
       }
 
       const message = getErrorMessage(error);
-      failedItems.push({
-        ...item,
-        error: message,
-      });
+      failedItems.push(createQueueSnapshotItem(item, message));
       pendingItems.shift();
       await setState({
         failed: failedItems.length,
         failedItems: [...failedItems],
         queued: pendingItems.length,
-        pendingItems: [...pendingItems],
+        pendingItems: createQueueSnapshots(pendingItems),
         lastError: message,
         message:
           (options && typeof options.failureMessage === "function"
             ? options.failureMessage(item, message)
             : `Failed to download ${item.filename}`),
+      }, {
+        persist: shouldPersistDownloadProgress(completed, failedItems.length, pendingItems.length),
       });
     }
   }
@@ -1628,7 +1712,7 @@ async function downloadItemWithRetry(item) {
         await setState({
           message: `Refreshing ${item.id} after a failed download...`,
           currentSource: item.sourcePage,
-        });
+        }, { persist: false });
         candidate = await refreshDownloadUrl(item);
       }
 
