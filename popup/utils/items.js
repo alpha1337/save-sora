@@ -21,6 +21,18 @@ export function getItemKey(item) {
  * @returns {string}
  */
 export function getDefaultItemTitle(item) {
+  const discoveryPhrase =
+    item && typeof item.discoveryPhrase === "string" ? item.discoveryPhrase.trim() : "";
+  if (discoveryPhrase) {
+    const attachmentIndex =
+      item && Number.isInteger(item.attachmentIndex) ? Number(item.attachmentIndex) : 0;
+    const attachmentCount =
+      item && Number.isInteger(item.attachmentCount) ? Number(item.attachmentCount) : 1;
+    return attachmentCount > 1
+      ? `${discoveryPhrase}-${attachmentIndex + 1}`
+      : discoveryPhrase;
+  }
+
   if (item && typeof item.filename === "string" && item.filename) {
     return item.filename.replace(/\.mp4$/i, "");
   }

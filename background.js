@@ -387,6 +387,18 @@ function sanitizeFilenamePart(value) {
 }
 
 function getDefaultItemTitle(item) {
+  const discoveryPhrase =
+    item && typeof item.discoveryPhrase === "string" ? item.discoveryPhrase.trim() : "";
+  if (discoveryPhrase) {
+    const attachmentIndex =
+      item && Number.isInteger(item.attachmentIndex) ? Number(item.attachmentIndex) : 0;
+    const attachmentCount =
+      item && Number.isInteger(item.attachmentCount) ? Number(item.attachmentCount) : 1;
+    return attachmentCount > 1
+      ? `${discoveryPhrase}-${attachmentIndex + 1}`
+      : discoveryPhrase;
+  }
+
   if (item && typeof item.filename === "string" && item.filename) {
     return item.filename.replace(/\.mp4$/i, "");
   }
@@ -2603,6 +2615,10 @@ function injectedFetchSource(config) {
               (typeof post.text === "string" && post.text) ||
               (typeof attachment.prompt === "string" && attachment.prompt) ||
               null,
+            discoveryPhrase:
+              typeof post.discovery_phrase === "string" && post.discovery_phrase
+                ? post.discovery_phrase
+                : null,
             createdAt: post.posted_at ?? post.updated_at ?? null,
             postedAt: post.posted_at ?? null,
             durationSeconds,
@@ -2615,6 +2631,7 @@ function injectedFetchSource(config) {
             repostCount: post.repost_count ?? null,
             remixCount: post.remix_count ?? null,
             attachmentIndex,
+            attachmentCount: attachments.length,
             metadataEntries: compactMetadataEntries([
               { label: "Source", value: sourceLabel },
               { label: "Source Type", value: "post" },

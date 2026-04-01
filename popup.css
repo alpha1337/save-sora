@@ -578,6 +578,7 @@ body[data-theme="light"] .primary-cta.is-danger {
 .summary-panel {
   display: grid;
   gap: 12px;
+  min-height: 204px;
   background: linear-gradient(180deg, rgba(60, 56, 54, 0.98) 0%, rgba(50, 48, 47, 0.98) 100%);
   text-align: center;
 }
@@ -700,7 +701,6 @@ body[data-theme="light"] .primary-cta.is-danger {
 .empty-state {
   display: grid;
   place-items: center;
-  min-height: 100%;
   padding: 0;
   border: 1px solid var(--border);
   background: var(--surface-tint);

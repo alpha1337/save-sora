@@ -176,7 +176,7 @@ export function syncSelectionControls(totalCount, selectedCount, visibleCount = 
     hasLoadedResults && selectedCount > 0 && !popupState.latestBusy && !popupState.latestPaused && !isFetching;
   const showBatchActions = hasLoadedResults && visibleCount > 0 && !isFetching;
   const showBrowseTools = hasLoadedResults;
-  const showSummaryPanel = visibleCount > 0 || isFetching;
+  const showSummaryPanel = hasLoadedResults && !isFetching;
 
   if (dom.downloadButton) {
     dom.downloadButton.classList.toggle("hidden", !showDownloadButton);
