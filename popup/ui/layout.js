@@ -31,19 +31,18 @@ export function setActiveTab(nextTab) {
  * Locks overview scrolling while the popup is still in its empty pre-fetch state.
  */
 export function updateAppScrollLock() {
-  if (!(dom.appShell instanceof HTMLElement)) {
+  if (!(dom.appShell instanceof HTMLElement) || !(dom.pickerScrollRegion instanceof HTMLElement)) {
     return;
   }
 
-  const shouldLock =
-    popupState.activeTab === "overview" &&
-    popupState.latestRenderState.items.length === 0 &&
-    popupState.latestRenderState.phase !== "fetching" &&
-    popupState.latestRenderState.phase !== "downloading" &&
-    popupState.latestRenderState.phase !== "paused";
+  const isOverview = popupState.activeTab === "overview";
+  const shouldLockApp = isOverview;
+  const shouldEnablePickerScroll = isOverview;
 
-  dom.appShell.classList.toggle("is-scroll-locked", shouldLock);
-  dom.appShell.classList.toggle("is-scrollable", !shouldLock);
+  dom.appShell.classList.toggle("is-scroll-locked", shouldLockApp);
+  dom.appShell.classList.toggle("is-scrollable", !shouldLockApp);
+  dom.pickerScrollRegion.classList.toggle("is-scroll-locked", !shouldEnablePickerScroll);
+  dom.pickerScrollRegion.classList.toggle("is-scrollable", shouldEnablePickerScroll);
 }
 
 /**
@@ -59,11 +58,15 @@ export function applyTheme(theme) {
  * Toggles the floating "back to top" button.
  */
 export function updateBackToTopVisibility() {
-  if (!(dom.backToTopButton instanceof HTMLButtonElement) || !(dom.appShell instanceof HTMLElement)) {
+  if (
+    !(dom.backToTopButton instanceof HTMLButtonElement) ||
+    !(dom.pickerScrollRegion instanceof HTMLElement)
+  ) {
     return;
   }
 
-  const shouldShow = popupState.activeTab === "overview" && dom.appShell.scrollTop > 240;
+  const shouldShow =
+    popupState.activeTab === "overview" && dom.pickerScrollRegion.scrollTop > 240;
   dom.backToTopButton.classList.toggle("hidden", !shouldShow);
 }
 

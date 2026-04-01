@@ -20,6 +20,8 @@ export const dom = {
   emptyStateImage: document.querySelector(".empty-state-image"),
   emptyStateText: document.getElementById("empty-state-text"),
   itemsList: document.getElementById("items-list"),
+  pickerScrollRegion: document.getElementById("picker-scroll-region"),
+  pickerPanel: document.querySelector(".picker-panel"),
   pickerToolbar: document.querySelector(".picker-toolbar"),
   controlsPanel: document.querySelector(".controls-panel"),
   searchInput: document.getElementById("search-input"),

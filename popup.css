@@ -100,8 +100,11 @@ body::-webkit-scrollbar {
 
 .app {
   position: relative;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+  height: 100%;
   min-height: 0;
-  padding: 14px 14px 88px;
+  padding: 14px;
   overflow-y: hidden;
   overflow-x: hidden;
   scroll-behavior: smooth;
@@ -312,16 +315,27 @@ body[data-theme="light"] .tab-button.is-active {
 }
 
 .tab-panel {
-  min-height: 0;
+  height: 446px;
+  min-height: 446px;
+  max-height: 446px;
+  overflow: hidden;
+}
+
+.tab-panel.is-active {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
 }
 
 /* Two-column app shell: controls on the left, review/download list on the right. */
 .dashboard-grid {
   display: grid;
   grid-template-columns: 220px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   gap: 14px;
+  height: 100%;
   min-height: 0;
-  align-items: start;
+  align-items: stretch;
+  overflow: hidden;
 }
 
 .left-rail {
@@ -621,11 +635,26 @@ body[data-theme="light"] .primary-cta.is-danger {
 }
 
 .picker-panel {
-  display: grid;
-  align-content: start;
+  display: flex;
+  flex-direction: column;
   gap: 14px;
   min-width: 0;
+  height: 100%;
+  max-height: 100%;
   min-height: 0;
+  overflow: hidden;
+}
+
+.picker-scroll-region {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.picker-scroll-region.is-scrollable {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scroll-padding-bottom: 88px;
 }
 
 .picker-header {
@@ -671,7 +700,7 @@ body[data-theme="light"] .primary-cta.is-danger {
 .empty-state {
   display: grid;
   place-items: center;
-  min-height: 300px;
+  min-height: 100%;
   padding: 0;
   border: 1px solid var(--border);
   background: var(--surface-tint);
@@ -710,6 +739,8 @@ body[data-theme="light"] .primary-cta.is-danger {
   display: grid;
   gap: 10px;
   min-width: 0;
+  min-height: 0;
+  align-self: start;
   overflow: visible;
 }
 

@@ -27,7 +27,7 @@
           <div class="brand-main">
             <img class="app-icon" src="assets/icon-128.png" alt="" />
             <div class="topbar-copy">
-              <p class="eyebrow">"Save Sora" v1.2.0</p>
+              <p class="eyebrow">"Save Sora" v1.2.5</p>
               <h1>Sora Bulk Downloader</h1>
               <p class="subhead">Fetch your videos, rename what matters, and only download the ones you actually want.</p>
             </div>
@@ -139,15 +139,17 @@
                 </div>
               </div>
 
-              <div id="empty-state" class="empty-state" aria-hidden="true">
-                <img
-                  class="empty-state-image"
-                  src="assets/content-guideline.png"
-                  alt="Content guideline"
-                />
-                <p id="empty-state-text" class="empty-state-text hidden"></p>
+              <div id="picker-scroll-region" class="picker-scroll-region">
+                <div id="empty-state" class="empty-state" aria-hidden="true">
+                  <img
+                    class="empty-state-image"
+                    src="assets/content-guideline.png"
+                    alt="Content guideline"
+                  />
+                  <p id="empty-state-text" class="empty-state-text hidden"></p>
+                </div>
+                <div id="items-list" class="item-list hidden" aria-live="polite"></div>
               </div>
-              <div id="items-list" class="item-list hidden" aria-live="polite"></div>
             </section>
           </section>
         </section>

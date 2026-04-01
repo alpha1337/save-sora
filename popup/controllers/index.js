@@ -59,7 +59,7 @@ export function initializeEventHandlers() {
   }
 
   document.addEventListener("visibilitychange", handleVisibilityChange);
-  dom.appShell?.addEventListener("scroll", updateBackToTopVisibility);
+  dom.pickerScrollRegion?.addEventListener("scroll", updateBackToTopVisibility);
   dom.backToTopButton?.addEventListener("click", handleBackToTopClick);
 }
 
@@ -79,9 +79,9 @@ function handleVisibilityChange() {
  * Smoothly returns the popup shell to the top of the list.
  */
 function handleBackToTopClick() {
-  if (!(dom.appShell instanceof HTMLElement)) {
+  if (!(dom.pickerScrollRegion instanceof HTMLElement)) {
     return;
   }
 
-  dom.appShell.scrollTo({ top: 0, behavior: "smooth" });
+  dom.pickerScrollRegion.scrollTo({ top: 0, behavior: "smooth" });
 }
