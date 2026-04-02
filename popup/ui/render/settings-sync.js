@@ -1,11 +1,16 @@
 import { dom } from "../../dom.js";
 import { popupState } from "../../state.js";
+import {
+  formatSourceSelectionLabel,
+  serializeSourceValues,
+  setSelectedSourceValues,
+} from "../../utils/settings.js";
 
 /**
  * Synchronizes the settings UI without overwriting a currently focused input.
  *
  * @param {object} settings
- * @param {{theme: string, defaultSource: string, defaultSort: string}} defaults
+ * @param {{theme: string, defaultSource: string[], defaultSort: string}} defaults
  */
 export function syncSettingsInputs(settings, { theme, defaultSource, defaultSort }) {
   if (dom.maxVideosInput && !isFocusedElement(dom.maxVideosInput)) {
@@ -15,12 +20,17 @@ export function syncSettingsInputs(settings, { theme, defaultSource, defaultSort
         : "";
   }
 
+  const sourceSignature = serializeSourceValues(defaultSource);
   const defaultsChanged =
-    popupState.appliedSettingsDefaults.source !== defaultSource ||
+    popupState.appliedSettingsDefaults.source !== sourceSignature ||
     popupState.appliedSettingsDefaults.sort !== defaultSort;
 
-  if (dom.defaultSourceInput && !isFocusedElement(dom.defaultSourceInput)) {
-    dom.defaultSourceInput.value = defaultSource;
+  if (
+    dom.defaultSourceLabel instanceof HTMLElement &&
+    !isFocusedSourceGroup(dom.defaultSourceButton, dom.defaultSourceInputs)
+  ) {
+    setSelectedSourceValues(dom.defaultSourceInputs, defaultSource);
+    dom.defaultSourceLabel.textContent = formatSourceSelectionLabel(defaultSource);
   }
 
   if (dom.defaultSortInput && !isFocusedElement(dom.defaultSortInput)) {
@@ -31,8 +41,13 @@ export function syncSettingsInputs(settings, { theme, defaultSource, defaultSort
     dom.defaultThemeInput.value = theme;
   }
 
-  if (dom.sourceSelect && defaultsChanged && !isFocusedElement(dom.sourceSelect)) {
-    dom.sourceSelect.value = defaultSource;
+  if (
+    dom.sourceSelectLabel instanceof HTMLElement &&
+    defaultsChanged &&
+    !isFocusedSourceGroup(dom.sourceSelectButton, dom.sourceSelectInputs)
+  ) {
+    setSelectedSourceValues(dom.sourceSelectInputs, defaultSource);
+    dom.sourceSelectLabel.textContent = formatSourceSelectionLabel(defaultSource);
   }
 
   if (dom.sortSelect && (defaultsChanged || !dom.sortSelect.value) && !isFocusedElement(dom.sortSelect)) {
@@ -41,7 +56,7 @@ export function syncSettingsInputs(settings, { theme, defaultSource, defaultSort
   }
 
   popupState.appliedSettingsDefaults = {
-    source: defaultSource,
+    source: sourceSignature,
     sort: defaultSort,
   };
 
@@ -58,4 +73,19 @@ export function syncSettingsInputs(settings, { theme, defaultSource, defaultSort
  */
 function isFocusedElement(element) {
   return element instanceof Element && document.activeElement === element;
+}
+
+/**
+ * Returns whether the user is actively interacting with a source multi-select.
+ *
+ * @param {HTMLElement|null|undefined} button
+ * @param {Element[]|null|undefined} inputs
+ * @returns {boolean}
+ */
+function isFocusedSourceGroup(button, inputs) {
+  if (isFocusedElement(button)) {
+    return true;
+  }
+
+  return Array.from(inputs || []).some((input) => isFocusedElement(input));
 }

@@ -2,14 +2,127 @@
  * Normalization helpers for popup settings and filter form values.
  */
 
+export const AVAILABLE_SOURCE_VALUES = ["profile", "drafts", "likes"];
+const DEFAULT_SOURCE_VALUES = ["profile", "drafts"];
+
 /**
- * Normalizes the current source filter.
+ * Normalizes one or more selected sources, including legacy saved values.
  *
- * @param {string|null|undefined} value
- * @returns {"profile"|"drafts"|"likes"|"both"}
+ * @param {string|string[]|null|undefined} value
+ * @returns {("profile"|"drafts"|"likes")[]}
  */
-export function normalizeSourceValue(value) {
-  return value === "profile" || value === "drafts" || value === "likes" ? value : "both";
+export function normalizeSourceValues(value) {
+  const requested = Array.isArray(value) ? value : value == null ? [] : [value];
+  const selected = new Set();
+
+  for (const entry of requested) {
+    if (entry === "both") {
+      selected.add("profile");
+      selected.add("drafts");
+      continue;
+    }
+
+    if (entry === "profile" || entry === "drafts" || entry === "likes") {
+      selected.add(entry);
+    }
+  }
+
+  const ordered = AVAILABLE_SOURCE_VALUES.filter((entry) => selected.has(entry));
+  return ordered.length ? ordered : [...DEFAULT_SOURCE_VALUES];
+}
+
+/**
+ * Reads the checked source values from a checkbox group without applying a fallback.
+ *
+ * @param {Iterable<Element>|ArrayLike<Element>|null|undefined} inputs
+ * @returns {("profile"|"drafts"|"likes")[]}
+ */
+export function readCheckedSourceValues(inputs) {
+  const selected = new Set();
+
+  for (const input of Array.from(inputs || [])) {
+    if (!(input instanceof HTMLInputElement) || !input.checked) {
+      continue;
+    }
+
+    if (input.value === "profile" || input.value === "drafts" || input.value === "likes") {
+      selected.add(input.value);
+    }
+  }
+
+  return AVAILABLE_SOURCE_VALUES.filter((entry) => selected.has(entry));
+}
+
+/**
+ * Reads a checkbox group and guarantees at least the default source selection.
+ *
+ * @param {Iterable<Element>|ArrayLike<Element>|null|undefined} inputs
+ * @returns {("profile"|"drafts"|"likes")[]}
+ */
+export function getSelectedSourceValues(inputs) {
+  return normalizeSourceValues(readCheckedSourceValues(inputs));
+}
+
+/**
+ * Applies a normalized selection to a checkbox group.
+ *
+ * @param {Iterable<Element>|ArrayLike<Element>|null|undefined} inputs
+ * @param {string|string[]|null|undefined} values
+ */
+export function setSelectedSourceValues(inputs, values) {
+  const selected = new Set(normalizeSourceValues(values));
+
+  for (const input of Array.from(inputs || [])) {
+    if (!(input instanceof HTMLInputElement)) {
+      continue;
+    }
+
+    input.checked = selected.has(input.value);
+  }
+}
+
+/**
+ * Serializes source values for cheap equality checks.
+ *
+ * @param {string|string[]|null|undefined} values
+ * @returns {string}
+ */
+export function serializeSourceValues(values) {
+  return normalizeSourceValues(values).join("|");
+}
+
+/**
+ * Returns the display label for a single source value.
+ *
+ * @param {"profile"|"drafts"|"likes"} value
+ * @returns {string}
+ */
+export function getSourceOptionLabel(value) {
+  if (value === "profile") {
+    return "Published";
+  }
+
+  if (value === "drafts") {
+    return "Drafts";
+  }
+
+  return "Likes";
+}
+
+/**
+ * Builds the compact trigger label for the source multi-select.
+ *
+ * @param {string|string[]|null|undefined} values
+ * @returns {string}
+ */
+export function formatSourceSelectionLabel(values) {
+  const normalized = normalizeSourceValues(values);
+
+  if (normalized.length === AVAILABLE_SOURCE_VALUES.length) {
+    return "All content types";
+  }
+
+  return normalized.map((value) => getSourceOptionLabel(value)).join(" + ");
 }
 
 /**

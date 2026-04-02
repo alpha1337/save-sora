@@ -1,8 +1,14 @@
 import { SETTINGS_SAVE_DEBOUNCE_MS } from "../config.js";
 import { dom } from "../dom.js";
-import { saveRuntimeSettings } from "../runtime.js";
+import { requestClearLocalStorage, saveRuntimeSettings } from "../runtime.js";
 import { popupState } from "../state.js";
-import { normalizeSortValue, normalizeSourceValue } from "../utils/settings.js";
+import {
+  formatSourceSelectionLabel,
+  getSelectedSourceValues,
+  normalizeSortValue,
+  serializeSourceValues,
+  setSelectedSourceValues,
+} from "../utils/settings.js";
 import { applyTheme, showNotice, updateBackToTopVisibility } from "../ui/layout.js";
 import { renderCurrentItems } from "../ui/render.js";
 import { applyCurrentSelectionUi } from "../ui/selection.js";
@@ -88,6 +94,35 @@ export function handleSettingsChange() {
 }
 
 /**
+ * Clears the extension's saved local storage after user confirmation.
+ *
+ * @returns {Promise<void>}
+ */
+export async function handleClearStorageClick() {
+  if (!(dom.settingsStatus instanceof HTMLElement)) {
+    return;
+  }
+
+  const confirmed = window.confirm(
+    "Clear all saved Save Sora local data? This removes saved settings, renamed titles, selection state, and the current working set.",
+  );
+  if (!confirmed) {
+    return;
+  }
+
+  dom.settingsStatus.textContent = "Clearing local storage...";
+
+  try {
+    await requestClearLocalStorage();
+    dom.settingsStatus.textContent = "Local storage cleared.";
+    await refreshStatus();
+  } catch (error) {
+    dom.settingsStatus.textContent = "Could not clear local storage.";
+    showNotice(dom.errorBox, error instanceof Error ? error.message : String(error));
+  }
+}
+
+/**
  * Re-renders the list after a local browse-state change.
  */
 function rerenderBrowseResults() {
@@ -104,9 +139,9 @@ function rerenderBrowseResults() {
 async function saveSettingsFromForm() {
   if (
     !(dom.maxVideosInput instanceof HTMLInputElement) ||
-    !(dom.defaultSourceInput instanceof HTMLSelectElement) ||
     !(dom.defaultSortInput instanceof HTMLSelectElement) ||
     !(dom.defaultThemeInput instanceof HTMLSelectElement) ||
+    !(dom.defaultSourceLabel instanceof HTMLElement) ||
     !(dom.settingsStatus instanceof HTMLElement)
   ) {
     return;
@@ -116,7 +151,7 @@ async function saveSettingsFromForm() {
   const normalizedValue = rawValue ? Number(rawValue) : null;
   const maxVideos =
     Number.isFinite(normalizedValue) && normalizedValue > 0 ? Math.floor(normalizedValue) : null;
-  const defaultSource = normalizeSourceValue(dom.defaultSourceInput.value);
+  const defaultSource = getSelectedSourceValues(dom.defaultSourceInputs);
   const defaultSort = normalizeSortValue(dom.defaultSortInput.value);
   const theme = dom.defaultThemeInput.value === "light" ? "light" : "dark";
 
@@ -133,12 +168,17 @@ async function saveSettingsFromForm() {
   }
 
   popupState.appliedSettingsDefaults = {
-    source: defaultSource,
+    source: serializeSourceValues(defaultSource),
     sort: defaultSort,
   };
 
-  if (dom.sourceSelect) {
-    dom.sourceSelect.value = defaultSource;
+  if (dom.sourceSelectLabel instanceof HTMLElement) {
+    setSelectedSourceValues(dom.sourceSelectInputs, defaultSource);
+    dom.sourceSelectLabel.textContent = formatSourceSelectionLabel(defaultSource);
+  }
+
+  if (dom.defaultSourceLabel instanceof HTMLElement) {
+    dom.defaultSourceLabel.textContent = formatSourceSelectionLabel(defaultSource);
   }
 
   if (dom.sortSelect) {

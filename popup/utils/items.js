@@ -33,6 +33,12 @@ export function getDefaultItemTitle(item) {
       : discoveryPhrase;
   }
 
+  const prompt =
+    item && typeof item.prompt === "string" ? item.prompt.trim().replace(/\s+/g, " ") : "";
+  if (prompt) {
+    return prompt;
+  }
+
   if (item && typeof item.filename === "string" && item.filename) {
     return item.filename.replace(/\.mp4$/i, "");
   }

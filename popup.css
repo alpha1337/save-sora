@@ -404,7 +404,6 @@ body[data-theme="light"] .item-card {
 }
 
 .search-input,
-.source-select,
 .sort-select,
 .settings-input {
   width: 100%;
@@ -430,17 +429,103 @@ body[data-theme="light"] .item-card {
 }
 
 .search-input:focus,
-.source-select:focus,
 .sort-select:focus,
 .settings-input:focus {
   border-color: var(--blue-deep);
 }
 
 body[data-theme="light"] .search-input,
-body[data-theme="light"] .source-select,
 body[data-theme="light"] .sort-select,
 body[data-theme="light"] .settings-input {
   background: rgba(255, 248, 226, 0.96);
+}
+
+.multi-select {
+  position: relative;
+  min-width: 0;
+}
+
+.multi-select-trigger {
+  width: 100%;
+  min-height: 40px;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  background: rgba(40, 40, 40, 0.92);
+  color: var(--text);
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.2;
+  text-align: left;
+}
+
+.multi-select-trigger:hover:not(:disabled) {
+  background: rgba(60, 56, 54, 0.96);
+  border-color: var(--border-strong);
+}
+
+.multi-select-trigger:focus,
+.multi-select.is-open .multi-select-trigger {
+  border-color: var(--blue-deep);
+}
+
+.multi-select-caret {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1;
+}
+
+.multi-select-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  z-index: 30;
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--border-strong);
+  background: linear-gradient(180deg, rgba(50, 48, 47, 0.98) 0%, rgba(40, 40, 40, 0.98) 100%);
+  box-shadow: var(--shadow);
+}
+
+.multi-select-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  background: rgba(29, 32, 33, 0.28);
+  color: var(--text);
+  cursor: pointer;
+  transition:
+    background 140ms ease,
+    border-color 140ms ease,
+    color 140ms ease;
+}
+
+.multi-select-option:hover {
+  border-color: rgba(250, 189, 47, 0.28);
+  background: rgba(250, 189, 47, 0.08);
+}
+
+.multi-select-option input {
+  margin: 0;
+  accent-color: var(--blue);
+}
+
+body[data-theme="light"] .multi-select-trigger,
+body[data-theme="light"] .multi-select-menu {
+  background: rgba(255, 248, 226, 0.96);
+}
+
+body[data-theme="light"] .multi-select-option {
+  background: rgba(240, 226, 184, 0.42);
 }
 
 .primary-actions {
@@ -1337,6 +1422,10 @@ body[data-theme="light"] .back-to-top {
   display: grid;
   align-content: start;
   gap: 6px;
+}
+
+.settings-group-wide {
+  grid-column: 1 / -1;
 }
 
 .settings-label {

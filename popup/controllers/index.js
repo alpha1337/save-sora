@@ -17,6 +17,7 @@ import {
 } from "./item-events.js";
 import { startPolling, stopPolling } from "./polling.js";
 import {
+  handleClearStorageClick,
   handleMaxVideosInput,
   handleSearchInput,
   handleSettingsBlur,
@@ -24,6 +25,15 @@ import {
   handleSortChange,
   handleThemeToggleChange,
 } from "./settings.js";
+import {
+  handleOverviewSourceMenuChange,
+  handleOverviewSourceTriggerClick,
+  handleSettingsSourceMenuChange,
+  handleSettingsSourceTriggerClick,
+  handleSourceMenuDocumentClick,
+  handleSourceMenuDocumentKeydown,
+  syncSourceMenuLabels,
+} from "./source-menus.js";
 
 /**
  * Attaches every popup event listener.
@@ -46,11 +56,15 @@ export function initializeEventHandlers() {
   dom.searchInput?.addEventListener("input", handleSearchInput);
   dom.sortSelect?.addEventListener("change", handleSortChange);
   dom.themeToggle?.addEventListener("change", handleThemeToggleChange);
+  dom.sourceSelectButton?.addEventListener("click", handleOverviewSourceTriggerClick);
+  dom.sourceSelectMenu?.addEventListener("change", handleOverviewSourceMenuChange);
   dom.maxVideosInput?.addEventListener("input", handleMaxVideosInput);
   dom.maxVideosInput?.addEventListener("blur", handleSettingsBlur);
-  dom.defaultSourceInput?.addEventListener("change", handleSettingsChange);
+  dom.defaultSourceButton?.addEventListener("click", handleSettingsSourceTriggerClick);
+  dom.defaultSourceMenu?.addEventListener("change", handleSettingsSourceMenuChange);
   dom.defaultSortInput?.addEventListener("change", handleSettingsChange);
   dom.defaultThemeInput?.addEventListener("change", handleSettingsChange);
+  dom.clearStorageButton?.addEventListener("click", handleClearStorageClick);
 
   for (const button of dom.tabButtons) {
     button.addEventListener("click", () => {
@@ -59,8 +73,12 @@ export function initializeEventHandlers() {
   }
 
   document.addEventListener("visibilitychange", handleVisibilityChange);
+  document.addEventListener("click", handleSourceMenuDocumentClick);
+  document.addEventListener("keydown", handleSourceMenuDocumentKeydown);
   dom.pickerScrollRegion?.addEventListener("scroll", updateBackToTopVisibility);
   dom.backToTopButton?.addEventListener("click", handleBackToTopClick);
+
+  syncSourceMenuLabels();
 }
 
 /**

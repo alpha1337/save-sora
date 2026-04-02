@@ -27,7 +27,7 @@
           <div class="brand-main">
             <img class="app-icon" src="assets/icon-128.png" alt="" />
             <div class="topbar-copy">
-              <p class="eyebrow">"Save Sora" v1.2.8</p>
+              <p class="eyebrow">"Save Sora" v1.3.2</p>
               <h1>Sora Bulk Downloader</h1>
               <p class="subhead">Fetch your videos, rename what matters, and only download the ones you actually want.</p>
             </div>
@@ -72,15 +72,36 @@
                     />
                   </label>
 
-                  <label class="source-select-field" for="source-select">
-                    <span class="label">Source</span>
-                    <select id="source-select" name="source" class="source-select">
-                      <option value="profile">Published</option>
-                      <option value="drafts">Drafts</option>
-                      <option value="likes">Likes</option>
-                      <option value="both" selected>Both</option>
-                    </select>
-                  </label>
+                  <div class="source-select-field">
+                    <span class="label">Sources</span>
+                    <div id="source-select-control" class="multi-select">
+                      <button
+                        id="source-select-button"
+                        class="multi-select-trigger"
+                        type="button"
+                        aria-haspopup="true"
+                        aria-expanded="false"
+                        aria-controls="source-select-menu"
+                      >
+                        <span id="source-select-label">Published + Drafts</span>
+                        <span class="multi-select-caret" aria-hidden="true">▾</span>
+                      </button>
+                      <div id="source-select-menu" class="multi-select-menu hidden" role="group" aria-label="Sources">
+                        <label class="multi-select-option">
+                          <input type="checkbox" value="profile" data-source-group="overview" checked />
+                          <span>Published</span>
+                        </label>
+                        <label class="multi-select-option">
+                          <input type="checkbox" value="drafts" data-source-group="overview" checked />
+                          <span>Drafts</span>
+                        </label>
+                        <label class="multi-select-option">
+                          <input type="checkbox" value="likes" data-source-group="overview" />
+                          <span>Likes</span>
+                        </label>
+                      </div>
+                    </div>
+                  </div>
 
                   <div class="picker-toolbar hidden">
                     <label class="sort-field" for="sort-select">
@@ -179,13 +200,39 @@
               </div>
 
               <div class="settings-group">
-                <label class="settings-label" for="default-source-input">Default source</label>
-                <select id="default-source-input" class="settings-input">
-                  <option value="profile">Published</option>
-                  <option value="drafts">Drafts</option>
-                  <option value="likes">Likes</option>
-                  <option value="both">Both</option>
-                </select>
+                <span class="settings-label">Default sources</span>
+                <div id="default-source-control" class="multi-select">
+                  <button
+                    id="default-source-button"
+                    class="multi-select-trigger"
+                    type="button"
+                    aria-haspopup="true"
+                    aria-expanded="false"
+                    aria-controls="default-source-menu"
+                  >
+                    <span id="default-source-label">Published + Drafts</span>
+                    <span class="multi-select-caret" aria-hidden="true">▾</span>
+                  </button>
+                  <div
+                    id="default-source-menu"
+                    class="multi-select-menu hidden"
+                    role="group"
+                    aria-label="Default sources"
+                  >
+                    <label class="multi-select-option">
+                      <input type="checkbox" value="profile" data-source-group="settings" checked />
+                      <span>Published</span>
+                    </label>
+                    <label class="multi-select-option">
+                      <input type="checkbox" value="drafts" data-source-group="settings" checked />
+                      <span>Drafts</span>
+                    </label>
+                    <label class="multi-select-option">
+                      <input type="checkbox" value="likes" data-source-group="settings" />
+                      <span>Likes</span>
+                    </label>
+                  </div>
+                </div>
                 <p class="settings-help">Used when Overview first opens.</p>
               </div>
 
@@ -208,6 +255,16 @@
                   <option value="light">Light</option>
                 </select>
                 <p class="settings-help">Used the next time you open the popup.</p>
+              </div>
+
+              <div class="settings-group settings-group-wide">
+                <span class="settings-label">Plugin storage</span>
+                <button id="clear-storage-button" type="button" class="secondary danger">
+                  Clear local storage
+                </button>
+                <p class="settings-help">
+                  Wipes this extension's saved settings, renamed titles, selection state, and current working set.
+                </p>
               </div>
             </div>
 

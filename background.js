@@ -7,6 +7,8 @@ const PROFILE_LIMIT = 100;
 const DRAFT_BATCH_LIMIT = 100;
 const LIKES_BATCH_LIMIT = 100;
 const DOWNLOAD_PROGRESS_PERSIST_INTERVAL = 25;
+const AVAILABLE_SOURCE_VALUES = ["profile", "drafts", "likes"];
+const DEFAULT_SOURCE_VALUES = ["profile", "drafts"];
 const SOURCE_ROUTES = {
   profile: "https://sora.chatgpt.com/profile",
   drafts: "https://sora.chatgpt.com/drafts",
@@ -61,6 +63,23 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       })
       .catch((error) => {
         console.error("Failed to reset the Sora downloader state.", error);
+        sendResponse({ ok: false, error: getErrorMessage(error) });
+    });
+    return true;
+  }
+
+  if (message.type === "CLEAR_LOCAL_STORAGE") {
+    if (activeRun) {
+      sendResponse({ ok: false, error: "Wait until the current fetch or download run finishes." });
+      return false;
+    }
+
+    void clearLocalStorageState()
+      .then(() => {
+        sendResponse({ ok: true, state: currentState });
+      })
+      .catch((error) => {
+        console.error("Failed to clear the Sora downloader local storage.", error);
         sendResponse({ ok: false, error: getErrorMessage(error) });
       });
     return true;
@@ -266,7 +285,7 @@ function createDefaultState(overrides = {}) {
     failedItems: [],
     settings: {
       maxVideos: null,
-      defaultSource: "both",
+      defaultSource: [...DEFAULT_SOURCE_VALUES],
       defaultSort: "newest",
       theme: "dark",
     },
@@ -300,6 +319,10 @@ async function restoreState() {
         defaultSort: normalizeDefaultSort(currentState.settings.defaultSort),
         theme: normalizeTheme(currentState.settings.theme),
       };
+      currentState.titleOverrides = pruneLegacyTitleOverrides(
+        currentState.items,
+        currentState.titleOverrides,
+      );
     }
   } catch (error) {
     console.warn("Failed to restore extension state.", error);
@@ -336,20 +359,13 @@ async function resetExtensionState() {
   );
 }
 
+async function clearLocalStorageState() {
+  await chrome.storage.local.clear();
+  currentState = createDefaultState();
+}
+
 function normalizeSources(input) {
-  if (!Array.isArray(input) || input.length === 0) {
-    return ["profile", "drafts"];
-  }
-
-  const normalized = [];
-  for (const value of input) {
-    if (value === "profile" || value === "drafts" || value === "likes") {
-      normalized.push(value);
-    }
-  }
-
-  const unique = [...new Set(normalized)];
-  return unique.length ? unique : ["profile", "drafts"];
+  return normalizeSourceSelection(input);
 }
 
 function getItemKey(item) {
@@ -386,6 +402,20 @@ function sanitizeFilenamePart(value) {
     .slice(0, 120);
 }
 
+function getLegacyDefaultItemTitle(item) {
+  const attachmentIndex =
+    item && Number.isInteger(item.attachmentIndex) ? Number(item.attachmentIndex) : 0;
+  const attachmentCount =
+    item && Number.isInteger(item.attachmentCount) ? Number(item.attachmentCount) : 1;
+  const itemId = item && typeof item.id === "string" ? item.id : "";
+
+  if (!itemId) {
+    return "video";
+  }
+
+  return attachmentCount > 1 ? `${itemId}-${attachmentIndex + 1}` : itemId;
+}
+
 function getDefaultItemTitle(item) {
   const discoveryPhrase =
     item && typeof item.discoveryPhrase === "string" ? item.discoveryPhrase.trim() : "";
@@ -399,11 +429,55 @@ function getDefaultItemTitle(item) {
       : discoveryPhrase;
   }
 
+  const prompt = item && typeof item.prompt === "string" ? sanitizeFilenamePart(item.prompt) : "";
+  if (prompt) {
+    return prompt;
+  }
+
   if (item && typeof item.filename === "string" && item.filename) {
     return item.filename.replace(/\.mp4$/i, "");
   }
 
   return item && typeof item.id === "string" ? item.id : "video";
+}
+
+function pruneLegacyTitleOverrides(items, titleOverrides) {
+  if (!titleOverrides || typeof titleOverrides !== "object") {
+    return {};
+  }
+
+  const itemsByKey = new Map(
+    (Array.isArray(items) ? items : []).map((item) => [item.key || getItemKey(item), item]),
+  );
+  const nextOverrides = {};
+
+  for (const [itemKey, overrideValue] of Object.entries(titleOverrides)) {
+    if (typeof overrideValue !== "string") {
+      continue;
+    }
+
+    const item = itemsByKey.get(itemKey);
+    const sanitizedOverride = sanitizeFilenamePart(overrideValue);
+    if (!item || !sanitizedOverride) {
+      continue;
+    }
+
+    const defaultTitle = sanitizeFilenamePart(getDefaultItemTitle(item));
+    if (sanitizedOverride === defaultTitle) {
+      continue;
+    }
+
+    const hasDiscoveryPhrase =
+      typeof item.discoveryPhrase === "string" && item.discoveryPhrase.trim().length > 0;
+    const legacyDefaultTitle = sanitizeFilenamePart(getLegacyDefaultItemTitle(item));
+    if (hasDiscoveryPhrase && sanitizedOverride === legacyDefaultTitle) {
+      continue;
+    }
+
+    nextOverrides[itemKey] = sanitizedOverride;
+  }
+
+  return nextOverrides;
 }
 
 function applyTitleOverride(item, titleOverrides) {
@@ -636,7 +710,27 @@ function normalizeTheme(value) {
 }
 
 function normalizeDefaultSource(value) {
-  return value === "profile" || value === "drafts" || value === "likes" ? value : "both";
+  return normalizeSourceSelection(value);
+}
+
+function normalizeSourceSelection(input, fallback = DEFAULT_SOURCE_VALUES) {
+  const requested = Array.isArray(input) ? input : input == null ? [] : [input];
+  const selected = new Set();
+
+  for (const value of requested) {
+    if (value === "both") {
+      selected.add("profile");
+      selected.add("drafts");
+      continue;
+    }
+
+    if (value === "profile" || value === "drafts" || value === "likes") {
+      selected.add(value);
+    }
+  }
+
+  const ordered = AVAILABLE_SOURCE_VALUES.filter((value) => selected.has(value));
+  return ordered.length ? ordered : [...fallback];
 }
 
 function normalizeDefaultSort(value) {
@@ -2022,8 +2116,23 @@ function injectedFetchSource(config) {
     const source = config && config.source;
     const options = (config && config.options) || {};
 
-    function buildFilename(id, attachmentIndex, attachmentCount) {
-      return attachmentCount > 1 ? `${id}-${attachmentIndex + 1}.mp4` : `${id}.mp4`;
+    function sanitizeFilenamePart(value) {
+      if (typeof value !== "string") {
+        return "";
+      }
+
+      return value
+        .replace(/[<>:"/\\|?*\u0000-\u001f]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 120);
+    }
+
+    function buildFilename(baseName, attachmentIndex, attachmentCount) {
+      const safeBaseName = sanitizeFilenamePart(baseName) || "video";
+      return attachmentCount > 1
+        ? `${safeBaseName}-${attachmentIndex + 1}.mp4`
+        : `${safeBaseName}.mp4`;
     }
 
     function getCookieValue(name) {
@@ -2569,6 +2678,23 @@ function injectedFetchSource(config) {
       ]);
     }
 
+    function getDraftDiscoveryPhrase(row) {
+      return pickFirstString([
+        row && row.discovery_phrase,
+        row && row.discoveryPhrase,
+        row && row.draft && row.draft.discovery_phrase,
+        row && row.draft && row.draft.discoveryPhrase,
+        row && row.item && row.item.discovery_phrase,
+        row && row.item && row.item.discoveryPhrase,
+        row && row.data && row.data.discovery_phrase,
+        row && row.data && row.data.discoveryPhrase,
+        row && row.output && row.output.discovery_phrase,
+        row && row.output && row.output.discoveryPhrase,
+        row && row.creation_config && row.creation_config.discovery_phrase,
+        row && row.creation_config && row.creation_config.discoveryPhrase,
+      ]);
+    }
+
     function normalizePostListingResponse(payload, config = {}) {
       const rows = Array.isArray(payload && payload.items) ? payload.items : [];
       const ids = [];
@@ -2597,6 +2723,16 @@ function injectedFetchSource(config) {
           const durationSeconds = getDurationSeconds(attachment) || null;
           const fileSizeBytes = getFileSizeBytes(attachment) || null;
           const downloadUrl = getDownloadUrl(attachment);
+          const discoveryPhrase = pickFirstString([
+            post.discovery_phrase,
+            post.discoveryPhrase,
+          ]);
+          const preferredTitle = pickFirstString([
+            discoveryPhrase,
+            post.text,
+            attachment.prompt,
+            post.id,
+          ]);
           items.push({
             id: post.id,
             sourcePage,
@@ -2606,7 +2742,7 @@ function injectedFetchSource(config) {
                 ? post.permalink
                 : `https://sora.chatgpt.com/p/${post.id}`,
             downloadUrl,
-            filename: buildFilename(post.id, attachmentIndex, attachments.length),
+            filename: buildFilename(preferredTitle, attachmentIndex, attachments.length),
             thumbnailUrl:
               getThumbnailUrl(attachment) ||
               getThumbnailUrl(post) ||
@@ -2615,10 +2751,7 @@ function injectedFetchSource(config) {
               (typeof post.text === "string" && post.text) ||
               (typeof attachment.prompt === "string" && attachment.prompt) ||
               null,
-            discoveryPhrase:
-              typeof post.discovery_phrase === "string" && post.discovery_phrase
-                ? post.discovery_phrase
-                : null,
+            discoveryPhrase,
             createdAt: post.posted_at ?? post.updated_at ?? null,
             postedAt: post.posted_at ?? null,
             durationSeconds,
@@ -2657,7 +2790,7 @@ function injectedFetchSource(config) {
               { label: "Reposts", value: post.repost_count },
               { label: "Remixes", value: post.remix_count },
               { label: "Emoji", value: post.emoji },
-              { label: "Discovery Phrase", value: post.discovery_phrase },
+              { label: "Discovery Phrase", value: discoveryPhrase },
               { label: "Has Captions", value: pickFirstBoolean([attachment.has_captions]) },
               { label: "Output Blocked", value: pickFirstBoolean([attachment.output_blocked]) },
               { label: "Can Create Character", value: pickFirstBoolean([attachment.can_create_character]) },
@@ -2792,6 +2925,16 @@ function injectedFetchSource(config) {
           row && row.output && row.output.output_blocked,
         ]);
         const detailUrl = getDraftDetailUrl(row, id, generationId);
+        const discoveryPhrase = getDraftDiscoveryPhrase(row);
+        const preferredTitle = pickFirstString([
+          discoveryPhrase,
+          row && row.prompt,
+          row && row.draft && row.draft.prompt,
+          row && row.item && row.item.prompt,
+          row && row.data && row.data.prompt,
+          row && row.creation_config && row.creation_config.prompt,
+          id,
+        ]);
 
         if (
           !row ||
@@ -2810,7 +2953,7 @@ function injectedFetchSource(config) {
           sourceType: "draft",
           detailUrl,
           downloadUrl,
-          filename: `${id}.mp4`,
+          filename: buildFilename(preferredTitle, 0, 1),
           thumbnailUrl,
           prompt:
             (typeof row.prompt === "string" && row.prompt) ||
@@ -2820,6 +2963,7 @@ function injectedFetchSource(config) {
             (row.creation_config && typeof row.creation_config.prompt === "string"
               ? row.creation_config.prompt
               : null),
+          discoveryPhrase,
           createdAt,
           postedAt: createdAt,
           generationId,
@@ -2849,6 +2993,7 @@ function injectedFetchSource(config) {
             { label: "Frames", value: frameCount },
             { label: "Created At", value: createdAt },
             { label: "Updated At", value: updatedAt },
+            { label: "Discovery Phrase", value: discoveryPhrase },
             { label: "Has Captions", value: hasCaptions },
             { label: "Output Blocked", value: outputBlocked },
             { label: "Detail URL", value: detailUrl, type: "link" },

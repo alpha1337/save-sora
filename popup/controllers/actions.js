@@ -15,7 +15,9 @@ import {
 import { hideNotice, setControlsDisabled, showNotice } from "../ui/layout.js";
 import { updateDownloadOverlay } from "../ui/overlay.js";
 import { getItemCheckboxesWithOptions, getSelectedKeysFromDom } from "../ui/selection.js";
+import { getSelectedSourceValues } from "../utils/settings.js";
 import { refreshStatus } from "./polling.js";
+import { closeAllSourceMenus } from "./source-menus.js";
 import { updateSelectionFromDom } from "./selection-sync.js";
 import { flushPendingTitleSaves } from "./title-edits.js";
 
@@ -28,8 +30,9 @@ export async function handleRunFormSubmit(event) {
   event.preventDefault();
 
   const isResetMode = dom.fetchButton?.dataset.mode === "reset";
-  const selectedSource = getSelectedSource();
-  const sources = selectedSource === "both" ? ["profile", "drafts"] : [selectedSource];
+  const sources = getSelectedSourceValues(dom.sourceSelectInputs);
+
+  closeAllSourceMenus();
 
   setControlsDisabled(true);
   hideNotice(dom.errorBox);
@@ -190,15 +193,4 @@ function preparePendingFetchUi() {
   if (dom.selectionSummary instanceof HTMLElement) {
     dom.selectionSummary.textContent = popupState.activeFetchStatusMessage || "Finding videos...";
   }
-}
-
-/**
- * Returns the selected source value from the fetch form.
- *
- * @returns {"profile"|"drafts"|"likes"|"both"}
- */
-function getSelectedSource() {
-  const formData = new FormData(dom.runForm);
-  const value = formData.get("source");
-  return value === "profile" || value === "drafts" || value === "likes" ? value : "both";
 }

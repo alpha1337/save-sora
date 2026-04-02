@@ -1,6 +1,6 @@
 import { dom } from "../dom.js";
 import { popupState } from "../state.js";
-import { normalizeSortValue, normalizeSourceValue } from "../utils/settings.js";
+import { normalizeSortValue, normalizeSourceValues } from "../utils/settings.js";
 import {
   applyTheme,
   hideNotice,
@@ -48,7 +48,7 @@ export function renderState(state) {
   const settings =
     state && state.settings && typeof state.settings === "object" ? state.settings : {};
   const theme = settings && settings.theme === "light" ? "light" : "dark";
-  const defaultSource = normalizeSourceValue(settings.defaultSource);
+  const defaultSource = normalizeSourceValues(settings.defaultSource);
   const defaultSort = normalizeSortValue(settings.defaultSort);
   const totalVideos = phase === "fetching" ? Math.max(items.length, fetchedCount) : items.length;
 

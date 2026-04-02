@@ -88,15 +88,11 @@ export function setControlsDisabled(disabled) {
   if (dom.clearSelectionButton) {
     dom.clearSelectionButton.disabled = disabled;
   }
-  if (dom.sourceSelect) {
-    dom.sourceSelect.disabled = disabled;
-  }
+  setSourceControlDisabled(dom.sourceSelectButton, dom.sourceSelectInputs, disabled);
   if (dom.maxVideosInput) {
     dom.maxVideosInput.disabled = disabled;
   }
-  if (dom.defaultSourceInput) {
-    dom.defaultSourceInput.disabled = disabled;
-  }
+  setSourceControlDisabled(dom.defaultSourceButton, dom.defaultSourceInputs, disabled);
   if (dom.defaultSortInput) {
     dom.defaultSortInput.disabled = disabled;
   }
@@ -132,4 +128,25 @@ export function hideNotice(element) {
 
   element.textContent = "";
   element.classList.add("hidden");
+}
+
+function setSourceControlDisabled(button, inputs, disabled) {
+  if (button instanceof HTMLButtonElement) {
+    button.disabled = disabled;
+
+    if (disabled) {
+      button.setAttribute("aria-expanded", "false");
+      const control = button.closest(".multi-select");
+      control?.classList.remove("is-open");
+      const menuId = button.getAttribute("aria-controls");
+      const menu = menuId ? document.getElementById(menuId) : null;
+      menu?.classList.add("hidden");
+    }
+  }
+
+  for (const input of Array.from(inputs || [])) {
+    if (input instanceof HTMLInputElement) {
+      input.disabled = disabled;
+    }
+  }
 }

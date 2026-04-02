@@ -66,6 +66,18 @@ export async function requestResetState() {
 }
 
 /**
+ * Clears every value stored in the extension's local storage.
+ *
+ * @returns {Promise<object>}
+ */
+export async function requestClearLocalStorage() {
+  return sendPopupMessage(
+    { type: "CLEAR_LOCAL_STORAGE" },
+    "Could not clear the extension's local storage.",
+  );
+}
+
+/**
  * Persists the current selection.
  *
  * @param {string[]} selectedKeys
