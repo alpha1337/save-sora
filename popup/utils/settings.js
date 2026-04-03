@@ -2,14 +2,14 @@
  * Normalization helpers for popup settings and filter form values.
  */
 
-export const AVAILABLE_SOURCE_VALUES = ["profile", "drafts", "likes"];
+export const AVAILABLE_SOURCE_VALUES = ["profile", "drafts", "likes", "characters"];
 const DEFAULT_SOURCE_VALUES = ["profile", "drafts"];
 
 /**
  * Normalizes one or more selected sources, including legacy saved values.
  *
  * @param {string|string[]|null|undefined} value
- * @returns {("profile"|"drafts"|"likes")[]}
+ * @returns {("profile"|"drafts"|"likes"|"characters")[]}
  */
 export function normalizeSourceValues(value) {
   const requested = Array.isArray(value) ? value : value == null ? [] : [value];
@@ -22,7 +22,7 @@ export function normalizeSourceValues(value) {
       continue;
     }
 
-    if (entry === "profile" || entry === "drafts" || entry === "likes") {
+    if (entry === "profile" || entry === "drafts" || entry === "likes" || entry === "characters") {
       selected.add(entry);
     }
   }
@@ -35,7 +35,7 @@ export function normalizeSourceValues(value) {
  * Reads the checked source values from a checkbox group without applying a fallback.
  *
  * @param {Iterable<Element>|ArrayLike<Element>|null|undefined} inputs
- * @returns {("profile"|"drafts"|"likes")[]}
+ * @returns {("profile"|"drafts"|"likes"|"characters")[]}
  */
 export function readCheckedSourceValues(inputs) {
   const selected = new Set();
@@ -45,7 +45,12 @@ export function readCheckedSourceValues(inputs) {
       continue;
     }
 
-    if (input.value === "profile" || input.value === "drafts" || input.value === "likes") {
+    if (
+      input.value === "profile" ||
+      input.value === "drafts" ||
+      input.value === "likes" ||
+      input.value === "characters"
+    ) {
       selected.add(input.value);
     }
   }
@@ -57,7 +62,7 @@ export function readCheckedSourceValues(inputs) {
  * Reads a checkbox group and guarantees at least the default source selection.
  *
  * @param {Iterable<Element>|ArrayLike<Element>|null|undefined} inputs
- * @returns {("profile"|"drafts"|"likes")[]}
+ * @returns {("profile"|"drafts"|"likes"|"characters")[]}
  */
 export function getSelectedSourceValues(inputs) {
   return normalizeSourceValues(readCheckedSourceValues(inputs));
@@ -94,7 +99,7 @@ export function serializeSourceValues(values) {
 /**
  * Returns the display label for a single source value.
  *
- * @param {"profile"|"drafts"|"likes"} value
+ * @param {"profile"|"drafts"|"likes"|"characters"} value
  * @returns {string}
  */
 export function getSourceOptionLabel(value) {
@@ -106,7 +111,11 @@ export function getSourceOptionLabel(value) {
     return "Drafts";
   }
 
-  return "Likes";
+  if (value === "likes") {
+    return "Likes";
+  }
+
+  return "Cameos";
 }
 
 /**

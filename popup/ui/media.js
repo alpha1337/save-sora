@@ -181,7 +181,13 @@ function createThumbnailFallback(item) {
   const fallback = document.createElement("div");
   fallback.className = "item-thumbnail-fallback";
   fallback.textContent =
-    item.sourcePage === "drafts" ? "Draft" : item.sourcePage === "likes" ? "Liked" : "Published";
+    item.sourcePage === "drafts"
+      ? "Draft"
+      : item.sourcePage === "likes"
+        ? "Liked"
+        : item.sourcePage === "characters"
+          ? "Cameo"
+          : "Published";
   return fallback;
 }
 

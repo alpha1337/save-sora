@@ -6,13 +6,16 @@ const STATE_KEY = "soraBulkDownloaderState";
 const PROFILE_LIMIT = 100;
 const DRAFT_BATCH_LIMIT = 100;
 const LIKES_BATCH_LIMIT = 100;
+const CHARACTERS_BATCH_LIMIT = 100;
 const DOWNLOAD_PROGRESS_PERSIST_INTERVAL = 25;
-const AVAILABLE_SOURCE_VALUES = ["profile", "drafts", "likes"];
+const AVAILABLE_SOURCE_VALUES = ["profile", "drafts", "likes", "characters"];
 const DEFAULT_SOURCE_VALUES = ["profile", "drafts"];
 const SOURCE_ROUTES = {
   profile: "https://sora.chatgpt.com/profile",
   drafts: "https://sora.chatgpt.com/drafts",
   likes: "https://sora.chatgpt.com/profile",
+  characters: "https://sora.chatgpt.com/profile",
+  characterDrafts: "https://sora.chatgpt.com/profile",
 };
 
 let currentState = createDefaultState();
@@ -276,6 +279,7 @@ function createDefaultState(overrides = {}) {
     profileIds: [],
     draftIds: [],
     likesIds: [],
+    characterIds: [],
     items: [],
     selectedKeys: [],
     titleOverrides: {},
@@ -608,6 +612,7 @@ function deriveSourceIdsFromItems(items) {
   const profileIds = new Set();
   const draftIds = new Set();
   const likesIds = new Set();
+  const characterIds = new Set();
 
   for (const item of Array.isArray(items) ? items : []) {
     if (!item || typeof item.id !== "string") {
@@ -620,6 +625,8 @@ function deriveSourceIdsFromItems(items) {
       profileIds.add(item.id);
     } else if (item.sourcePage === "likes") {
       likesIds.add(item.id);
+    } else if (item.sourcePage === "characters") {
+      characterIds.add(item.id);
     }
   }
 
@@ -627,6 +634,7 @@ function deriveSourceIdsFromItems(items) {
     profileIds: [...profileIds],
     draftIds: [...draftIds],
     likesIds: [...likesIds],
+    characterIds: [...characterIds],
   };
 }
 
@@ -724,7 +732,7 @@ function normalizeSourceSelection(input, fallback = DEFAULT_SOURCE_VALUES) {
       continue;
     }
 
-    if (value === "profile" || value === "drafts" || value === "likes") {
+    if (value === "profile" || value === "drafts" || value === "likes" || value === "characters") {
       selected.add(value);
     }
   }
@@ -796,6 +804,7 @@ async function scanSources(sources, searchQuery = "") {
       profileIds: filteredSourceIds.profileIds,
       draftIds: filteredSourceIds.draftIds,
       likesIds: filteredSourceIds.likesIds,
+      characterIds: filteredSourceIds.characterIds,
       items: filteredItems,
       fetchedCount: filteredItems.length,
       selectedKeys,
@@ -941,6 +950,7 @@ async function setItemRemovedState(itemKey, removed) {
     profileIds: sourceIds.profileIds,
     draftIds: sourceIds.draftIds,
     likesIds: sourceIds.likesIds,
+    characterIds: sourceIds.characterIds,
     fetchedCount: nextItems.length,
     selectedKeys: nextSelectedKeys,
     titleOverrides:
@@ -1492,6 +1502,7 @@ async function collectItems(sources, maxVideos) {
   const profileIds = new Set();
   const draftIds = new Set();
   const likesIds = new Set();
+  const characterIds = new Set();
   let partialWarning = "";
 
   for (const source of sources) {
@@ -1508,7 +1519,9 @@ async function collectItems(sources, maxVideos) {
           ? "Fetching published videos..."
           : source === "drafts"
             ? "Fetching drafts..."
-            : "Fetching liked videos...",
+            : source === "likes"
+              ? "Fetching liked videos..."
+              : "Fetching cameo videos...",
     });
 
     const sourceResult =
@@ -1534,16 +1547,27 @@ async function collectItems(sources, maxVideos) {
               });
             },
           })
-          : await fetchAllLikesItems({
-            maxItems: maxRemaining,
-            baseCount: itemMap.size,
-            onProgress: async ({ count }) => {
-              await setState({
-                fetchedCount: itemMap.size + count,
-                message: `Fetching liked videos... ${itemMap.size + count} found so far.`,
-              });
-            },
-          });
+          : source === "likes"
+            ? await fetchAllLikesItems({
+              maxItems: maxRemaining,
+              baseCount: itemMap.size,
+              onProgress: async ({ count }) => {
+                await setState({
+                  fetchedCount: itemMap.size + count,
+                  message: `Fetching liked videos... ${itemMap.size + count} found so far.`,
+                });
+              },
+            })
+            : await fetchAllCharacterItems({
+              maxItems: maxRemaining,
+              baseCount: itemMap.size,
+              onProgress: async ({ count }) => {
+                await setState({
+                  fetchedCount: itemMap.size + count,
+                  message: `Fetching cameo videos... ${itemMap.size + count} found so far.`,
+                });
+              },
+            });
 
     for (const item of sourceResult.items) {
       const key = getItemKey(item);
@@ -1560,8 +1584,10 @@ async function collectItems(sources, maxVideos) {
         profileIds.add(id);
       } else if (source === "drafts") {
         draftIds.add(id);
-      } else {
+      } else if (source === "likes") {
         likesIds.add(id);
+      } else {
+        characterIds.add(id);
       }
     }
 
@@ -1575,6 +1601,7 @@ async function collectItems(sources, maxVideos) {
     profileIds: [...profileIds],
     draftIds: [...draftIds],
     likesIds: [...likesIds],
+    characterIds: [...characterIds],
     partialWarning,
   };
 }
@@ -1586,6 +1613,26 @@ function getRemainingFetchCapacity(currentCount, maxVideos) {
   }
 
   return Math.max(0, normalizedMax - currentCount);
+}
+
+function getComparableItemTimestamp(item) {
+  const timestamp = Number(item && (item.createdAt ?? item.postedAt));
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function sortItemsByNewest(items) {
+  return [...(Array.isArray(items) ? items : [])].sort((left, right) => {
+    const timestampDelta = getComparableItemTimestamp(right) - getComparableItemTimestamp(left);
+    if (timestampDelta !== 0) {
+      return timestampDelta;
+    }
+
+    return getItemKey(left).localeCompare(getItemKey(right));
+  });
+}
+
+function joinPartialWarnings(warnings) {
+  return [...new Set((Array.isArray(warnings) ? warnings : []).filter(Boolean))].join(" ");
 }
 
 async function fetchAllProfileItems(options = {}) {
@@ -1761,6 +1808,161 @@ async function fetchAllLikesItems(options = {}) {
   };
 }
 
+async function fetchAllCharacterAppearanceItems(options = {}) {
+  const ids = new Set();
+  const items = [];
+  const maxItems = getMaxVideosSetting({ maxVideos: options.maxItems });
+  let cursor = null;
+  let previousCursor = null;
+
+  for (let pageNumber = 0; pageNumber < 250; pageNumber += 1) {
+    const page = await fetchSourceDataFromTab("characters", {
+      limit: CHARACTERS_BATCH_LIMIT,
+      cursor,
+    });
+
+    for (const id of page.ids) {
+      ids.add(id);
+    }
+    items.push(...page.items);
+
+    if (maxItems && items.length > maxItems) {
+      items.length = maxItems;
+    }
+
+    if (typeof options.onProgress === "function") {
+      await options.onProgress({
+        count: items.length,
+        pageNumber: pageNumber + 1,
+      });
+    }
+
+    if (
+      page.rowCount === 0 ||
+      !page.nextCursor ||
+      page.nextCursor === previousCursor ||
+      (maxItems && items.length >= maxItems)
+    ) {
+      break;
+    }
+
+    previousCursor = cursor;
+    cursor = page.nextCursor;
+  }
+
+  return {
+    ids: [...ids],
+    items,
+    partialWarning: "",
+  };
+}
+
+async function fetchAllCharacterDraftItems(options = {}) {
+  const ids = new Set();
+  const items = [];
+  const maxItems = getMaxVideosSetting({ maxVideos: options.maxItems });
+  let cursor = null;
+  let previousCursor = null;
+
+  for (let pageNumber = 0; pageNumber < 250; pageNumber += 1) {
+    const page = await fetchSourceDataFromTab("characterDrafts", {
+      limit: CHARACTERS_BATCH_LIMIT,
+      cursor,
+    });
+
+    for (const id of page.ids) {
+      ids.add(id);
+    }
+    items.push(...page.items);
+
+    if (maxItems && items.length > maxItems) {
+      items.length = maxItems;
+    }
+
+    if (typeof options.onProgress === "function") {
+      await options.onProgress({
+        count: items.length,
+        pageNumber: pageNumber + 1,
+      });
+    }
+
+    if (
+      page.rowCount === 0 ||
+      !page.nextCursor ||
+      page.nextCursor === previousCursor ||
+      (maxItems && items.length >= maxItems)
+    ) {
+      break;
+    }
+
+    previousCursor = cursor;
+    cursor = page.nextCursor;
+  }
+
+  return {
+    ids: [...ids],
+    items,
+    partialWarning: "",
+  };
+}
+
+async function fetchAllCharacterItems(options = {}) {
+  const maxItems = getMaxVideosSetting({ maxVideos: options.maxItems });
+  let publishedCount = 0;
+  let draftCount = 0;
+  const reportProgress = async (pageNumber) => {
+    if (typeof options.onProgress !== "function") {
+      return;
+    }
+
+    const combinedCount = maxItems
+      ? Math.min(maxItems, publishedCount + draftCount)
+      : publishedCount + draftCount;
+    await options.onProgress({
+      count: combinedCount,
+      pageNumber,
+    });
+  };
+
+  const publishedResult = await fetchAllCharacterAppearanceItems({
+    maxItems,
+    onProgress: async ({ count, pageNumber }) => {
+      publishedCount = count;
+      await reportProgress(pageNumber);
+    },
+  });
+  const draftResult = await fetchAllCharacterDraftItems({
+    maxItems,
+    onProgress: async ({ count, pageNumber }) => {
+      draftCount = count;
+      await reportProgress(pageNumber + 250);
+    },
+  });
+  const ids = new Set([...publishedResult.ids, ...draftResult.ids]);
+  const itemMap = new Map();
+
+  for (const item of [...publishedResult.items, ...draftResult.items]) {
+    const key = getItemKey(item);
+    if (!itemMap.has(key)) {
+      itemMap.set(key, item);
+    }
+  }
+
+  const items = sortItemsByNewest([...itemMap.values()]);
+  if (maxItems && items.length > maxItems) {
+    items.length = maxItems;
+  }
+
+  return {
+    ids: [...ids],
+    items,
+    partialWarning: joinPartialWarnings([
+      publishedResult.partialWarning,
+      draftResult.partialWarning,
+    ]),
+  };
+}
+
 async function fetchSourceDataFromTab(source, options) {
   const tabId = await ensureHiddenTab(SOURCE_ROUTES[source]);
 
@@ -1787,7 +1989,15 @@ async function fetchSourceDataFromTab(source, options) {
     return payload;
   } catch (error) {
     const sourceLabel =
-      source === "profile" ? "published" : source === "drafts" ? "drafts" : "liked";
+      source === "profile"
+        ? "published"
+        : source === "drafts"
+          ? "drafts"
+          : source === "likes"
+            ? "liked"
+            : source === "characterDrafts"
+              ? "cameo drafts"
+            : "cameo";
     throw new Error(`Failed to fetch ${sourceLabel} data: ${getErrorMessage(error)}`);
   }
 }
@@ -1914,13 +2124,20 @@ async function downloadItemWithRetry(item) {
   throw lastError ?? new Error(`Could not download ${item.filename}.`);
 }
 
+function matchesRefreshTarget(candidate, item) {
+  return Boolean(
+    candidate &&
+      item &&
+      candidate.id === item.id &&
+      candidate.attachmentIndex === item.attachmentIndex &&
+      candidate.sourceType === item.sourceType,
+  );
+}
+
 async function refreshDownloadUrl(item) {
   if (item.sourcePage === "profile") {
     const refreshed = await fetchAllProfileItems();
-    const match = refreshed.items.find(
-      (candidate) =>
-        candidate.id === item.id && candidate.attachmentIndex === item.attachmentIndex,
-    );
+    const match = refreshed.items.find((candidate) => matchesRefreshTarget(candidate, item));
     if (!match) {
       throw new Error(`Could not refresh ${item.id} from your published feed.`);
     }
@@ -1932,10 +2149,7 @@ async function refreshDownloadUrl(item) {
 
   if (item.sourcePage === "likes") {
     const refreshed = await fetchAllLikesItems();
-    const match = refreshed.items.find(
-      (candidate) =>
-        candidate.id === item.id && candidate.attachmentIndex === item.attachmentIndex,
-    );
+    const match = refreshed.items.find((candidate) => matchesRefreshTarget(candidate, item));
 
     if (!match) {
       throw new Error(`Could not refresh liked post ${item.id}.`);
@@ -1947,10 +2161,22 @@ async function refreshDownloadUrl(item) {
     };
   }
 
+  if (item.sourcePage === "characters") {
+    const refreshed = await fetchAllCharacterItems();
+    const match = refreshed.items.find((candidate) => matchesRefreshTarget(candidate, item));
+
+    if (!match) {
+      throw new Error(`Could not refresh cameo video ${item.id}.`);
+    }
+
+    return {
+      ...item,
+      downloadUrl: match.downloadUrl,
+    };
+  }
+
   const refreshed = await fetchAllDraftItems();
-  const match = refreshed.items.find(
-    (candidate) => candidate.id === item.id && candidate.attachmentIndex === item.attachmentIndex,
-  );
+  const match = refreshed.items.find((candidate) => matchesRefreshTarget(candidate, item));
 
   if (!match) {
     throw new Error(`Could not refresh draft ${item.id}.`);
@@ -2640,6 +2866,46 @@ function injectedFetchSource(config) {
       ]);
     }
 
+    function isDirectMediaUrl(value) {
+      return typeof value === "string" && /(?:videos\.openai\.com|\/az\/files\/|\/drvs\/)/i.test(value);
+    }
+
+    function getDirectMediaUrl(value) {
+      if (!value || typeof value !== "object") {
+        return null;
+      }
+
+      const nested = [
+        value.output,
+        value.result,
+        value.generation,
+        value.draft,
+        value.item,
+        value.data,
+        value.asset,
+      ].filter(Boolean);
+      const candidates = [
+        value.url,
+        value.encodings && value.encodings.md && value.encodings.md.path,
+        value.encodings && value.encodings.source && value.encodings.source.path,
+        value.encodings && value.encodings.ld && value.encodings.ld.path,
+        ...nested.flatMap((candidate) => [
+          candidate && candidate.url,
+          candidate && candidate.encodings && candidate.encodings.md && candidate.encodings.md.path,
+          candidate && candidate.encodings && candidate.encodings.source && candidate.encodings.source.path,
+          candidate && candidate.encodings && candidate.encodings.ld && candidate.encodings.ld.path,
+        ]),
+      ];
+
+      for (const candidate of candidates) {
+        if (isDirectMediaUrl(candidate)) {
+          return candidate;
+        }
+      }
+
+      return null;
+    }
+
     function getDraftRows(payload) {
       if (Array.isArray(payload)) {
         return payload;
@@ -2699,8 +2965,14 @@ function injectedFetchSource(config) {
       const rows = Array.isArray(payload && payload.items) ? payload.items : [];
       const ids = [];
       const items = [];
-      const sourcePage = config && config.sourcePage === "likes" ? "likes" : "profile";
-      const sourceLabel = sourcePage === "likes" ? "Liked" : "Published";
+      const sourcePage =
+        pickFirstString([
+          config && config.sourcePage,
+        ]) || "profile";
+      const sourceLabel =
+        pickFirstString([
+          config && config.sourceLabel,
+        ]) || (sourcePage === "likes" ? "Liked" : sourcePage === "characters" ? "Cameo" : "Published");
       const requireOwner = Boolean(config && config.requireOwner);
 
       for (const row of rows) {
@@ -2793,7 +3065,7 @@ function injectedFetchSource(config) {
               { label: "Discovery Phrase", value: discoveryPhrase },
               { label: "Has Captions", value: pickFirstBoolean([attachment.has_captions]) },
               { label: "Output Blocked", value: pickFirstBoolean([attachment.output_blocked]) },
-              { label: "Can Create Character", value: pickFirstBoolean([attachment.can_create_character]) },
+              { label: "Can Create Cameo", value: pickFirstBoolean([attachment.can_create_character]) },
               {
                 label: "Share Setting",
                 value: post.permissions && typeof post.permissions.share_setting === "string"
@@ -2829,19 +3101,37 @@ function injectedFetchSource(config) {
     function normalizeLikesResponse(payload) {
       return normalizePostListingResponse(payload, {
         sourcePage: "likes",
+        sourceLabel: "Liked",
         requireOwner: false,
       });
     }
 
-    function normalizeDraftResponse(payload, limit) {
+    function normalizeCharactersResponse(payload) {
+      return normalizePostListingResponse(payload, {
+        sourcePage: "characters",
+        sourceLabel: "Cameo",
+        requireOwner: false,
+      });
+    }
+
+    function normalizeDraftResponse(payload, config = {}) {
       const rows = getDraftRows(payload);
       const ids = [];
       const items = [];
+      const sourcePage =
+        pickFirstString([
+          config && config.sourcePage,
+        ]) || "drafts";
+      const sourceLabel =
+        pickFirstString([
+          config && config.sourceLabel,
+        ]) || (sourcePage === "characters" ? "Cameo" : "Draft");
+      const allowMediaUrlFallback = Boolean(config && config.allowMediaUrlFallback);
 
       for (const row of rows) {
         const kind = getDraftKind(row);
         const id = getDraftId(row);
-        const downloadUrl = getDownloadUrl(row);
+        const downloadUrl = getDownloadUrl(row) || (allowMediaUrlFallback ? getDirectMediaUrl(row) : null);
         const durationSeconds =
           getDurationSeconds(row) ||
           (row.draft && getDurationSeconds(row.draft)) ||
@@ -2949,7 +3239,7 @@ function injectedFetchSource(config) {
         ids.push(id);
         items.push({
           id,
-          sourcePage: "drafts",
+          sourcePage,
           sourceType: "draft",
           detailUrl,
           downloadUrl,
@@ -2978,7 +3268,7 @@ function injectedFetchSource(config) {
           remixCount: null,
           attachmentIndex: 0,
           metadataEntries: compactMetadataEntries([
-            { label: "Source", value: "Draft" },
+            { label: "Source", value: sourceLabel },
             { label: "Source Type", value: "draft" },
             { label: "Draft ID", value: id },
             { label: "Kind", value: kind || null },
@@ -3000,8 +3290,8 @@ function injectedFetchSource(config) {
             { label: "Download URL", value: downloadUrl, type: "link" },
             { label: "Thumbnail URL", value: thumbnailUrl, type: "link" },
           ]),
-        });
-      }
+      });
+    }
 
       return {
         ids: [...new Set(ids)],
@@ -3091,7 +3381,10 @@ function injectedFetchSource(config) {
           url.searchParams.set("offset", String(Math.floor(Number(options.offset))));
         }
         const payload = await fetchJson(url);
-        return normalizeDraftResponse(payload, limit);
+        return normalizeDraftResponse(payload, {
+          sourcePage: "drafts",
+          sourceLabel: "Draft",
+        });
       }
 
       if (source === "likes") {
@@ -3108,6 +3401,34 @@ function injectedFetchSource(config) {
         }
         const payload = await fetchJson(url.toString());
         return normalizeLikesResponse(payload);
+      }
+
+      if (source === "characters") {
+        const limit = Number(options.limit) || 100;
+        const cut = typeof options.cut === "string" && options.cut ? options.cut : "appearances";
+        const url = new URL("/backend/project_y/profile_feed/me", window.location.origin);
+        url.searchParams.set("limit", String(limit));
+        url.searchParams.set("cut", cut);
+        if (typeof options.cursor === "string" && options.cursor) {
+          url.searchParams.set("cursor", options.cursor);
+        }
+        const payload = await fetchJson(url.toString());
+        return normalizeCharactersResponse(payload);
+      }
+
+      if (source === "characterDrafts") {
+        const limit = Number(options.limit) || 100;
+        const url = new URL("/backend/project_y/profile/drafts/cameos", window.location.origin);
+        url.searchParams.set("limit", String(limit));
+        if (typeof options.cursor === "string" && options.cursor) {
+          url.searchParams.set("cursor", options.cursor);
+        }
+        const payload = await fetchJson(url.toString());
+        return normalizeDraftResponse(payload, {
+          sourcePage: "characters",
+          sourceLabel: "Cameo",
+          allowMediaUrlFallback: true,
+        });
       }
 
       throw new Error(`Unsupported source: ${String(source)}`);

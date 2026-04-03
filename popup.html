@@ -27,7 +27,7 @@
           <div class="brand-main">
             <img class="app-icon" src="assets/icon-128.png" alt="" />
             <div class="topbar-copy">
-              <p class="eyebrow">"Save Sora" v1.3.2</p>
+              <p class="eyebrow">"Save Sora" v1.4.1</p>
               <h1>Sora Bulk Downloader</h1>
               <p class="subhead">Fetch your videos, rename what matters, and only download the ones you actually want.</p>
             </div>
@@ -98,6 +98,10 @@
                         <label class="multi-select-option">
                           <input type="checkbox" value="likes" data-source-group="overview" />
                           <span>Likes</span>
+                        </label>
+                        <label class="multi-select-option">
+                          <input type="checkbox" value="characters" data-source-group="overview" />
+                          <span>Cameos</span>
                         </label>
                       </div>
                     </div>
@@ -231,6 +235,10 @@
                       <input type="checkbox" value="likes" data-source-group="settings" />
                       <span>Likes</span>
                     </label>
+                    <label class="multi-select-option">
+                      <input type="checkbox" value="characters" data-source-group="settings" />
+                      <span>Cameos</span>
+                    </label>
                   </div>
                 </div>
                 <p class="settings-help">Used when Overview first opens.</p>
@@ -284,9 +292,9 @@
               about, and downloading only the final shortlist.
             </p>
             <p>
-              Published videos, drafts, and liked posts are fetched directly from Sora’s backend
-              through your existing browser session without storing any auth material in the
-              extension.
+              Published videos, drafts, liked posts, and cameo appearances are fetched
+              directly from Sora’s backend through your existing browser session without storing
+              any auth material in the extension.
             </p>
             <p>
               Safe to use: your videos stay with you. This extension does not send your Sora

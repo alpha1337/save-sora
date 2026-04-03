@@ -63,7 +63,7 @@ export function resolveItemTitle(item, titleOverrides) {
 /**
  * Resolves the best shareable Sora page URL for an item.
  *
- * Published and liked videos usually map to `/p/<post-id>`. Drafts can be
+ * Published and liked videos usually map to `/p/<post-id>`. Draft-backed items can be
  * either public (`/p/<id>`) or private (`/d/<generation-id>`), so the helper
  * prefers a normalized `detailUrl` when present and then falls back to the IDs
  * available in the fetched item payload.
@@ -84,11 +84,12 @@ export function getItemReviewUrl(item) {
   const generationId =
     item && typeof item.generationId === "string" ? item.generationId.trim() : "";
 
-  if (item && (item.sourcePage === "profile" || item.sourcePage === "likes") && itemId) {
-    return `https://sora.chatgpt.com/p/${itemId}`;
-  }
+  const shouldUseDraftFallback =
+    item &&
+    (item.sourcePage === "drafts" ||
+      (item.sourcePage === "characters" && item.sourceType === "draft"));
 
-  if (item && item.sourcePage === "drafts") {
+  if (shouldUseDraftFallback) {
     if (itemId.startsWith("s_")) {
       return `https://sora.chatgpt.com/p/${itemId}`;
     }
@@ -104,6 +105,14 @@ export function getItemReviewUrl(item) {
     if (itemId.startsWith("gen_")) {
       return `https://sora.chatgpt.com/d/${itemId}`;
     }
+  }
+
+  if (
+    item &&
+    (item.sourcePage === "profile" || item.sourcePage === "likes" || item.sourcePage === "characters") &&
+    itemId
+  ) {
+    return `https://sora.chatgpt.com/p/${itemId}`;
   }
 
   return null;

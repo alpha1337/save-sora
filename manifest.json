@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Save Sora: Sora Bulk Downloader",
-  "version": "1.3.2",
-  "description": "Bulk download your published Sora posts, drafts, and liked videos.",
+  "version": "1.4.1",
+  "description": "Bulk download your published Sora posts, drafts, liked videos, and cameo appearances.",
   "icons": {
     "16": "assets/icon-16.png",
     "32": "assets/icon-32.png",
