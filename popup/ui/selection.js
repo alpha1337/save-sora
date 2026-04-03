@@ -1,7 +1,7 @@
 import { dom } from "../dom.js";
 import { popupState } from "../state.js";
 import { setCharacterSelectionSummary } from "./character-selection.js";
-import { formatFileSize } from "../utils/format.js";
+import { formatFileSize, formatWholeNumber } from "../utils/format.js";
 import { getSelectedSourceValues } from "../utils/settings.js";
 import {
   getActiveSelectableCount,
@@ -147,7 +147,7 @@ export function updateSelectionSummary({
   if (phase === "fetching") {
     const flavor = popupState.activeFetchStatusMessage || "Finding videos...";
     dom.selectionSummary.textContent =
-      totalCount > 0 ? `${flavor} ${totalCount} found so far.` : flavor;
+      totalCount > 0 ? `${flavor} ${formatWholeNumber(totalCount)} found so far.` : flavor;
     return;
   }
 
@@ -165,12 +165,12 @@ export function updateSelectionSummary({
   if (query.trim()) {
     dom.selectionSummary.textContent =
       visibleCount > 0
-        ? `${visibleCount} matches • ${visibleSelectedCount} selected in view • ${selectedCount} selected overall${downloadedCount > 0 ? ` • ${downloadedCount} downloaded` : ""}`
+        ? `${formatWholeNumber(visibleCount)} matches • ${formatWholeNumber(visibleSelectedCount)} selected in view • ${formatWholeNumber(selectedCount)} selected overall${downloadedCount > 0 ? ` • ${formatWholeNumber(downloadedCount)} downloaded` : ""}`
         : `No matches for “${query.trim()}”`;
     return;
   }
 
-  dom.selectionSummary.textContent = `${selectedCount} of ${totalCount} selected${downloadedCount > 0 ? ` • ${downloadedCount} downloaded` : ""}`;
+  dom.selectionSummary.textContent = `${formatWholeNumber(selectedCount)} of ${formatWholeNumber(totalCount)} selected${downloadedCount > 0 ? ` • ${formatWholeNumber(downloadedCount)} downloaded` : ""}`;
 }
 
 /**
@@ -231,5 +231,7 @@ export function updateTotalSummary(items, selectedKeys) {
 
   const { selectedCount, totalBytes } = getSelectedBatchMetrics(items, selectedKeys);
   const formattedSize = formatFileSize(totalBytes);
-  dom.totalCount.textContent = formattedSize ? `${selectedCount} / ${formattedSize}` : String(selectedCount);
+  dom.totalCount.textContent = formattedSize
+    ? `${formatWholeNumber(selectedCount)} / ${formattedSize}`
+    : formatWholeNumber(selectedCount);
 }

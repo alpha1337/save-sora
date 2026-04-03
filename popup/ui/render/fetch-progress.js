@@ -9,10 +9,12 @@ import { dom } from "../../dom.js";
 export function syncFetchProgressPanel(state) {
   if (
     !(dom.fetchProgressPanel instanceof HTMLElement) ||
+    !(dom.fetchProgressActions instanceof HTMLElement) ||
     !(dom.fetchProgressStage instanceof HTMLElement) ||
     !(dom.fetchProgressDetail instanceof HTMLElement) ||
     !(dom.fetchProgressPercent instanceof HTMLElement) ||
     !(dom.fetchProgressFill instanceof HTMLElement) ||
+    !(dom.fetchProgressAction instanceof HTMLButtonElement) ||
     !(dom.fetchProgressSource instanceof HTMLElement) ||
     !(dom.fetchProgressCount instanceof HTMLElement) ||
     !(dom.fetchProgressEta instanceof HTMLElement)
@@ -28,8 +30,11 @@ export function syncFetchProgressPanel(state) {
   const isVisible = phase === "fetching";
 
   dom.fetchProgressPanel.classList.toggle("hidden", !isVisible);
+  dom.fetchProgressActions.classList.toggle("hidden", !isVisible);
   if (!isVisible) {
     dom.fetchProgressFill.style.width = "0%";
+    dom.fetchProgressAction.disabled = false;
+    dom.fetchProgressAction.textContent = "Cancel and Start Over";
     return;
   }
 
@@ -62,6 +67,9 @@ export function syncFetchProgressPanel(state) {
   dom.fetchProgressCount.textContent =
     itemsFound > 0 ? `${formatCompactCount(itemsFound)} found` : "Searching...";
   dom.fetchProgressEta.textContent = getFetchEtaLabel(state, progressRatio);
+  dom.fetchProgressAction.disabled = progress && progress.stage === "aborting";
+  dom.fetchProgressAction.textContent =
+    progress && progress.stage === "aborting" ? "Stopping..." : "Cancel and Start Over";
 }
 
 function clampProgressRatio(value) {

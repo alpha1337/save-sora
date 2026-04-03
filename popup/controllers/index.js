@@ -1,6 +1,7 @@
 import { dom } from "../dom.js";
 import { setActiveTab, updateBackToTopVisibility } from "../ui/layout.js";
 import {
+  handleFetchProgressActionClick,
   handleClearSelectionClick,
   handleDownloadButtonClick,
   handleDownloadOverlayCancel,
@@ -48,6 +49,7 @@ export function initializeEventHandlers() {
   dom.runForm?.addEventListener("submit", handleRunFormSubmit);
   dom.downloadButton?.addEventListener("click", handleDownloadButtonClick);
   dom.exportUrlsButton?.addEventListener("click", handleExportUrlsButtonClick);
+  dom.fetchProgressAction?.addEventListener("click", handleFetchProgressActionClick);
   dom.downloadOverlayCancel?.addEventListener("click", handleDownloadOverlayCancel);
   dom.selectAllButton?.addEventListener("click", handleSelectAllClick);
   dom.clearSelectionButton?.addEventListener("click", handleClearSelectionClick);

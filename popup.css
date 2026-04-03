@@ -687,9 +687,12 @@ body[data-theme="light"] .primary-cta.is-danger {
 
 .summary-item strong {
   display: block;
-  font-size: 32px;
-  line-height: 1;
-  letter-spacing: -0.04em;
+  max-width: 100%;
+  font-size: clamp(24px, 3vw, 30px);
+  line-height: 0.96;
+  letter-spacing: -0.05em;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 .summary-panel #download-button,
@@ -869,6 +872,16 @@ body[data-theme="light"] .primary-cta.is-danger {
     linear-gradient(90deg, rgba(69, 133, 136, 0.9) 0%, rgba(250, 189, 47, 0.92) 100%);
   box-shadow: 0 0 16px rgba(131, 165, 152, 0.18);
   transition: width 220ms ease;
+}
+
+.fetch-progress-actions {
+  display: flex;
+  width: 100%;
+}
+
+.fetch-progress-action {
+  width: 100%;
+  justify-content: center;
 }
 
 .fetch-progress-meta {
@@ -1924,6 +1937,7 @@ body[data-theme="light"] .kofi-badge-link {
 .tip-panel {
   display: grid;
   gap: 10px;
+  overflow: scroll;
   padding-top: 2px;
   border-top: 1px solid var(--border);
 }

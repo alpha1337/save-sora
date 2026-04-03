@@ -1,5 +1,6 @@
 import { dom } from "../dom.js";
 import {
+  requestAbortScan,
   requestAbortDownloads,
   requestDownloadSelected,
   requestResetState,
@@ -146,6 +147,25 @@ export async function handleDownloadOverlayCancel() {
     showNotice(dom.errorBox, error instanceof Error ? error.message : String(error));
   } finally {
     popupState.pendingDownloadStart = false;
+    await refreshStatus();
+  }
+}
+
+/**
+ * Cancels the active fetch and returns the popup to a restartable state.
+ */
+export async function handleFetchProgressActionClick() {
+  hideNotice(dom.errorBox);
+
+  if (dom.fetchProgressAction instanceof HTMLButtonElement) {
+    dom.fetchProgressAction.disabled = true;
+  }
+
+  try {
+    await requestAbortScan();
+  } catch (error) {
+    showNotice(dom.errorBox, error instanceof Error ? error.message : String(error));
+  } finally {
     await refreshStatus();
   }
 }

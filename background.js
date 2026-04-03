@@ -3,12 +3,14 @@
 // hidden Sora tab used for collection, injects packaged code into that tab, and manages
 // the download queue through chrome.downloads.
 const STATE_KEY = "soraBulkDownloaderState";
+const CATALOG_STORAGE_KEY = "soraBulkDownloaderCatalog";
 const PROFILE_LIMIT = 100;
 const DRAFT_BATCH_LIMIT = 100;
 const LIKES_BATCH_LIMIT = 100;
 const CHARACTERS_BATCH_LIMIT = 100;
 const CHARACTER_ACCOUNT_LIMIT = 100;
 const DOWNLOAD_PROGRESS_PERSIST_INTERVAL = 25;
+const CATALOG_FULL_REFRESH_INTERVAL_MS = 1000 * 60 * 60 * 6;
 const FETCH_OPENING_PROGRESS_RATIO = 0.04;
 const FETCH_SOURCE_PROGRESS_RATIO = 0.74;
 const FETCH_PROCESSING_PROGRESS_RATIO = 0.22;
@@ -29,6 +31,7 @@ const SOURCE_ROUTES = {
 };
 
 let currentState = createDefaultState();
+let currentCatalog = createDefaultCatalogState();
 let hiddenTabId = null;
 let activeRun = null;
 let activeDownloadId = null;
@@ -38,6 +41,7 @@ void restoreState();
 
 chrome.runtime.onInstalled.addListener(() => {
   void persistState();
+  void persistCatalogState();
 });
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -62,6 +66,23 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     });
     sendResponse({ ok: true });
     return false;
+  }
+
+  if (message.type === "ABORT_SCAN") {
+    if (currentState.phase !== "fetching") {
+      sendResponse({ ok: false, error: "There is no active fetch to cancel." });
+      return false;
+    }
+
+    void requestScanAbort()
+      .then(() => {
+        sendResponse({ ok: true });
+      })
+      .catch((error) => {
+        console.error("Failed to abort the Sora fetch.", error);
+        sendResponse({ ok: false, error: getErrorMessage(error) });
+      });
+    return true;
   }
 
   if (message.type === "RESET_STATE") {
@@ -352,6 +373,30 @@ function createDefaultState(overrides = {}) {
   };
 }
 
+function createDefaultCatalogSyncEntry(overrides = {}) {
+  return {
+    lastIncrementalSyncAt: null,
+    lastFullSyncAt: null,
+    isExhaustive: false,
+    selectionSignature: "",
+    ...overrides,
+  };
+}
+
+function createDefaultCatalogState(overrides = {}) {
+  return {
+    items: [],
+    sourceSync: {
+      profile: createDefaultCatalogSyncEntry(),
+      drafts: createDefaultCatalogSyncEntry(),
+      likes: createDefaultCatalogSyncEntry(),
+      characters: createDefaultCatalogSyncEntry(),
+      characterAccounts: createDefaultCatalogSyncEntry(),
+    },
+    ...overrides,
+  };
+}
+
 function createDefaultFetchProgress(overrides = {}) {
   return {
     stage: "idle",
@@ -457,11 +502,59 @@ async function yieldForUi() {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+function normalizeCatalogSyncEntry(entry) {
+  const sourceEntry = entry && typeof entry === "object" ? entry : {};
+
+  return createDefaultCatalogSyncEntry({
+    lastIncrementalSyncAt:
+      typeof sourceEntry.lastIncrementalSyncAt === "string" && sourceEntry.lastIncrementalSyncAt
+        ? sourceEntry.lastIncrementalSyncAt
+        : null,
+    lastFullSyncAt:
+      typeof sourceEntry.lastFullSyncAt === "string" && sourceEntry.lastFullSyncAt
+        ? sourceEntry.lastFullSyncAt
+        : null,
+    isExhaustive: sourceEntry.isExhaustive === true,
+    selectionSignature:
+      typeof sourceEntry.selectionSignature === "string" ? sourceEntry.selectionSignature : "",
+  });
+}
+
+function normalizeCatalogSourceSync(sourceSync) {
+  const normalizedSync = sourceSync && typeof sourceSync === "object" ? sourceSync : {};
+
+  return {
+    profile: normalizeCatalogSyncEntry(normalizedSync.profile),
+    drafts: normalizeCatalogSyncEntry(normalizedSync.drafts),
+    likes: normalizeCatalogSyncEntry(normalizedSync.likes),
+    characters: normalizeCatalogSyncEntry(normalizedSync.characters),
+    characterAccounts: normalizeCatalogSyncEntry(normalizedSync.characterAccounts),
+  };
+}
+
+function normalizeCatalogItems(items) {
+  const itemMap = new Map();
+
+  for (const item of Array.isArray(items) ? items : []) {
+    if (!item || typeof item !== "object" || typeof item.id !== "string") {
+      continue;
+    }
+
+    const key = item.key || getItemKey(item);
+    itemMap.set(key, {
+      ...item,
+      key,
+    });
+  }
+
+  return [...itemMap.values()];
+}
+
 async function restoreState() {
   // Restore local-only extension state so the popup can reopen without losing the current
   // queue, previous results, or user preferences.
   try {
-    const stored = await chrome.storage.local.get(STATE_KEY);
+    const stored = await chrome.storage.local.get([STATE_KEY, CATALOG_STORAGE_KEY]);
     if (stored && stored[STATE_KEY]) {
       const savedState = stored[STATE_KEY];
       currentState = {
@@ -486,10 +579,20 @@ async function restoreState() {
         currentState.characterAccounts,
         currentState.selectedCharacterAccountIds,
       );
+      currentState.items = normalizeCatalogItems(currentState.items);
       currentState.titleOverrides = pruneLegacyTitleOverrides(
         currentState.items,
         currentState.titleOverrides,
       );
+    }
+
+    if (stored && stored[CATALOG_STORAGE_KEY]) {
+      const savedCatalog = stored[CATALOG_STORAGE_KEY];
+      currentCatalog = createDefaultCatalogState({
+        ...savedCatalog,
+        items: normalizeCatalogItems(savedCatalog.items),
+        sourceSync: normalizeCatalogSourceSync(savedCatalog.sourceSync),
+      });
     }
   } catch (error) {
     console.warn("Failed to restore extension state.", error);
@@ -498,6 +601,10 @@ async function restoreState() {
 
 async function persistState(state = currentState) {
   await chrome.storage.local.set({ [STATE_KEY]: state });
+}
+
+async function persistCatalogState(catalog = currentCatalog) {
+  await chrome.storage.local.set({ [CATALOG_STORAGE_KEY]: catalog });
 }
 
 async function setState(patch, options = {}) {
@@ -511,6 +618,21 @@ async function setState(patch, options = {}) {
   }
 
   await persistState(currentState);
+}
+
+async function setCatalogState(patch, options = {}) {
+  currentCatalog = {
+    ...currentCatalog,
+    ...patch,
+  };
+  currentCatalog.items = normalizeCatalogItems(currentCatalog.items);
+  currentCatalog.sourceSync = normalizeCatalogSourceSync(currentCatalog.sourceSync);
+
+  if (options.persist === false) {
+    return;
+  }
+
+  await persistCatalogState(currentCatalog);
 }
 
 async function resetExtensionState() {
@@ -529,6 +651,7 @@ async function resetExtensionState() {
 async function clearLocalStorageState() {
   await chrome.storage.local.clear();
   currentState = createDefaultState();
+  currentCatalog = createDefaultCatalogState();
 }
 
 function normalizeSources(input) {
@@ -805,6 +928,263 @@ function deriveSourceIdsFromItems(items) {
   };
 }
 
+function getCatalogSourceForItem(item) {
+  if (!item || typeof item.sourcePage !== "string") {
+    return null;
+  }
+
+  if (item.sourcePage === "profile") {
+    return "profile";
+  }
+
+  if (item.sourcePage === "drafts") {
+    return "drafts";
+  }
+
+  if (item.sourcePage === "likes") {
+    return "likes";
+  }
+
+  if (item.sourcePage === "cameos") {
+    return "characters";
+  }
+
+  if (item.sourcePage === "characters") {
+    return "characterAccounts";
+  }
+
+  return null;
+}
+
+function itemMatchesSourceSelection(item, sources, selectedCharacterAccountIds = []) {
+  const source = getCatalogSourceForItem(item);
+  if (!source || !Array.isArray(sources) || !sources.includes(source)) {
+    return false;
+  }
+
+  if (source !== "characterAccounts") {
+    return true;
+  }
+
+  const selectedIds = new Set(
+    Array.isArray(selectedCharacterAccountIds) ? selectedCharacterAccountIds : [],
+  );
+  if (selectedIds.size === 0) {
+    return true;
+  }
+
+  return (
+    typeof item.characterAccountId !== "string" ||
+    !item.characterAccountId ||
+    selectedIds.has(item.characterAccountId)
+  );
+}
+
+function getCharacterAccountSelectionSignature(selectedCharacterAccountIds = []) {
+  return [...new Set(Array.isArray(selectedCharacterAccountIds) ? selectedCharacterAccountIds : [])]
+    .filter((value) => typeof value === "string" && value)
+    .sort((left, right) => left.localeCompare(right))
+    .join("|");
+}
+
+function buildWorkingItemsFromCatalog(
+  catalogItems,
+  sources,
+  maxVideos,
+  selectedCharacterAccountIds = currentState.selectedCharacterAccountIds,
+) {
+  const matchingItems = normalizeCatalogItems(catalogItems).filter((item) =>
+    itemMatchesSourceSelection(item, sources, selectedCharacterAccountIds),
+  );
+  const sortedItems = sortItemsByNewest(matchingItems);
+  const normalizedMaxVideos = getMaxVideosSetting({ maxVideos });
+  if (normalizedMaxVideos && sortedItems.length > normalizedMaxVideos) {
+    sortedItems.length = normalizedMaxVideos;
+  }
+
+  return sortedItems;
+}
+
+function getKnownItemKeysForSource(
+  source,
+  catalogItems = currentCatalog.items,
+  selectedCharacterAccountIds = currentState.selectedCharacterAccountIds,
+) {
+  const knownKeys = new Set();
+
+  for (const item of normalizeCatalogItems(catalogItems)) {
+    if (!itemMatchesSourceSelection(item, [source], selectedCharacterAccountIds)) {
+      continue;
+    }
+
+    knownKeys.add(item.key || getItemKey(item));
+  }
+
+  return knownKeys;
+}
+
+function getCatalogSyncEntryForSource(source) {
+  const sourceSync = currentCatalog.sourceSync && typeof currentCatalog.sourceSync === "object"
+    ? currentCatalog.sourceSync
+    : createDefaultCatalogState().sourceSync;
+
+  return normalizeCatalogSyncEntry(sourceSync[source]);
+}
+
+function shouldRunFullSourceRefresh(source, options = {}) {
+  const existingKeys = getKnownItemKeysForSource(
+    source,
+    options.catalogItems,
+    options.selectedCharacterAccountIds,
+  );
+  if (existingKeys.size === 0) {
+    return true;
+  }
+
+  const syncEntry = getCatalogSyncEntryForSource(source);
+  const selectionSignature =
+    source === "characterAccounts"
+      ? getCharacterAccountSelectionSignature(options.selectedCharacterAccountIds)
+      : "";
+  if (!syncEntry.lastFullSyncAt) {
+    return true;
+  }
+
+  if (source === "characterAccounts" && syncEntry.selectionSignature !== selectionSignature) {
+    return true;
+  }
+
+  const lastFullSyncTime = new Date(syncEntry.lastFullSyncAt).getTime();
+  if (!Number.isFinite(lastFullSyncTime)) {
+    return true;
+  }
+
+  if (Date.now() - lastFullSyncTime >= CATALOG_FULL_REFRESH_INTERVAL_MS) {
+    return true;
+  }
+
+  const normalizedMaxVideos = getMaxVideosSetting({ maxVideos: options.maxVideos });
+  if (!syncEntry.isExhaustive) {
+    if (!normalizedMaxVideos) {
+      return true;
+    }
+
+    if (normalizedMaxVideos > existingKeys.size) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function shouldReplaceCatalogItemForSource(item, source, selectedCharacterAccountIds = []) {
+  if (!itemMatchesSourceSelection(item, [source], selectedCharacterAccountIds)) {
+    return false;
+  }
+
+  if (source !== "characterAccounts") {
+    return true;
+  }
+
+  const selectedIds = new Set(
+    Array.isArray(selectedCharacterAccountIds) ? selectedCharacterAccountIds : [],
+  );
+  if (selectedIds.size === 0) {
+    return true;
+  }
+
+  return typeof item.characterAccountId === "string" && selectedIds.has(item.characterAccountId);
+}
+
+function mergeCatalogItemsWithSourceResults(
+  existingItems,
+  sourceResults,
+  selectedCharacterAccountIds = currentState.selectedCharacterAccountIds,
+) {
+  const itemMap = new Map(
+    normalizeCatalogItems(existingItems).map((item) => [item.key || getItemKey(item), item]),
+  );
+
+  for (const sourceResult of Array.isArray(sourceResults) ? sourceResults : []) {
+    if (!sourceResult || typeof sourceResult.source !== "string") {
+      continue;
+    }
+
+    if (sourceResult.syncMode === "full") {
+      for (const [key, item] of itemMap.entries()) {
+        if (shouldReplaceCatalogItemForSource(item, sourceResult.source, selectedCharacterAccountIds)) {
+          itemMap.delete(key);
+        }
+      }
+    }
+
+    for (const item of normalizeCatalogItems(sourceResult.items)) {
+      const key = item.key || getItemKey(item);
+      itemMap.set(key, {
+        ...item,
+        key,
+      });
+    }
+  }
+
+  return [...itemMap.values()];
+}
+
+function buildUpdatedCatalogSourceSync(sourceResults) {
+  const nextSourceSync = normalizeCatalogSourceSync(currentCatalog.sourceSync);
+  const syncedAt = new Date().toISOString();
+
+  for (const sourceResult of Array.isArray(sourceResults) ? sourceResults : []) {
+    if (!sourceResult || typeof sourceResult.source !== "string") {
+      continue;
+    }
+
+    nextSourceSync[sourceResult.source] = {
+      ...nextSourceSync[sourceResult.source],
+      lastIncrementalSyncAt: syncedAt,
+      lastFullSyncAt:
+        sourceResult.syncMode === "full"
+          ? syncedAt
+          : nextSourceSync[sourceResult.source].lastFullSyncAt,
+      isExhaustive:
+        sourceResult.syncMode === "full"
+          ? sourceResult.isExhaustive === true
+          : nextSourceSync[sourceResult.source].isExhaustive,
+      selectionSignature:
+        typeof sourceResult.selectionSignature === "string"
+          ? sourceResult.selectionSignature
+          : nextSourceSync[sourceResult.source].selectionSignature,
+    };
+  }
+
+  return nextSourceSync;
+}
+
+function updateCatalogItemsWithMutation(itemKeys, mutation) {
+  const keySet = new Set(Array.isArray(itemKeys) ? itemKeys : []);
+  if (!keySet.size || typeof mutation !== "function") {
+    return currentCatalog.items;
+  }
+
+  return normalizeCatalogItems(currentCatalog.items).map((item) => {
+    const key = item.key || getItemKey(item);
+    if (!keySet.has(key)) {
+      return item;
+    }
+
+    return {
+      ...mutation(item),
+      key,
+    };
+  });
+}
+
+async function applyCatalogItemMutation(itemKeys, mutation, options = {}) {
+  await setCatalogState({
+    items: updateCatalogItemsWithMutation(itemKeys, mutation),
+  }, options);
+}
+
 function normalizeSearchText(value) {
   return String(value || "")
     .normalize("NFKD")
@@ -822,6 +1202,8 @@ function getSearchTokens(value) {
 
 function getItemSearchText(item) {
   return [
+    item && typeof item.id === "string" ? item.id : "",
+    getDefaultItemTitle(item),
     item && item.prompt,
     item && item.description,
     item && item.caption,
@@ -879,6 +1261,7 @@ async function filterItemsBySearchQueryWithProgress(items, searchQuery, options 
 
   const filteredItems = [];
   for (let index = 0; index < sourceItems.length; index += FETCH_PROGRESS_CHUNK_SIZE) {
+    throwIfFetchAbortRequested();
     const sliceEnd = Math.min(sourceItems.length, index + FETCH_PROGRESS_CHUNK_SIZE);
 
     for (let itemIndex = index; itemIndex < sliceEnd; itemIndex += 1) {
@@ -914,6 +1297,7 @@ async function buildScanSelectionState(items, options = {}) {
   const sourceItems = Array.isArray(items) ? items : [];
 
   for (let index = 0; index < sourceItems.length; index += FETCH_PROGRESS_CHUNK_SIZE) {
+    throwIfFetchAbortRequested();
     const sliceEnd = Math.min(sourceItems.length, index + FETCH_PROGRESS_CHUNK_SIZE);
 
     for (let itemIndex = index; itemIndex < sliceEnd; itemIndex += 1) {
@@ -961,7 +1345,7 @@ async function buildScanSelectionState(items, options = {}) {
       cameoIds: [...cameoIds],
       characterIds: [...characterIds],
     },
-    selectedKeys,
+    selectedKeys: normalizeSelectedKeys(sourceItems, selectedKeys),
   };
 }
 
@@ -1039,6 +1423,16 @@ function isControlError(error, code) {
   );
 }
 
+function isFetchAbortRequested() {
+  return currentState.phase === "fetching" && requestedControlAction === "abort";
+}
+
+function throwIfFetchAbortRequested() {
+  if (isFetchAbortRequested()) {
+    throw createControlError("abort", "Fetch aborted.");
+  }
+}
+
 async function startScan(requestedSources, requestedSearchQuery = "") {
   if (activeRun) {
     throw new Error("A fetch or download run is already in progress.");
@@ -1060,51 +1454,124 @@ async function startScan(requestedSources, requestedSearchQuery = "") {
   }
 }
 
+async function requestScanAbort() {
+  if (currentState.phase !== "fetching") {
+    throw new Error("There is no active fetch to cancel.");
+  }
+
+  requestedControlAction = "abort";
+
+  await setState({
+    message: "Stopping the active fetch...",
+    fetchProgress: getNextFetchProgress({
+      stage: "aborting",
+      stageLabel: "Stopping fetch",
+      detail: "Canceling the active fetch and restoring your current results...",
+    }),
+  }, { persist: false });
+
+  await cleanupHiddenTab();
+}
+
 async function scanSources(sources, searchQuery = "") {
-  // A scan always rebuilds the current working set from Sora, then applies the popup's
-  // search query locally so the user can start from a filtered shortlist if desired.
+  // A scan now starts from the local catalog so previously fetched results appear
+  // immediately, then reconciles against Sora and merges any new or changed items.
+  const maxVideos = getMaxVideosSetting(currentState.settings);
+  const selectedCharacterAccountIds = [...currentState.selectedCharacterAccountIds];
+  const cachedWorkingItems = buildWorkingItemsFromCatalog(
+    currentCatalog.items,
+    sources,
+    maxVideos,
+    selectedCharacterAccountIds,
+  );
+  const cachedFilteredItems = filterItemsBySearchQuery(cachedWorkingItems, searchQuery);
+  const cachedSelectedKeys = normalizeSelectedKeys(
+    cachedFilteredItems,
+    cachedFilteredItems.map((item) => item.key || getItemKey(item)),
+  );
+  const cachedSourceIds = deriveSourceIdsFromItems(cachedFilteredItems);
+  const cachedTitleOverrides = pruneLegacyTitleOverrides(
+    cachedFilteredItems,
+    currentState.titleOverrides,
+  );
+
   await setState(
     createDefaultState({
       phase: "fetching",
-      message: "Opening Sora...",
+      message: cachedFilteredItems.length
+        ? `Loaded ${cachedFilteredItems.length} cached item(s). Checking Sora for updates...`
+        : "Opening Sora...",
       settings: currentState.settings,
       currentSource: sources[0] ?? null,
       characterAccounts: currentState.characterAccounts,
-      selectedCharacterAccountIds: currentState.selectedCharacterAccountIds,
+      selectedCharacterAccountIds,
+      profileIds: cachedSourceIds.profileIds,
+      draftIds: cachedSourceIds.draftIds,
+      likesIds: cachedSourceIds.likesIds,
+      cameoIds: cachedSourceIds.cameoIds,
+      characterIds: cachedSourceIds.characterIds,
+      items: cachedFilteredItems,
+      fetchedCount: cachedFilteredItems.length,
+      selectedKeys: cachedSelectedKeys,
+      titleOverrides: cachedTitleOverrides,
+      queued: cachedSelectedKeys.length,
       fetchProgress: createDefaultFetchProgress({
         stage: "opening",
         stageLabel: "Opening Sora",
-        detail: "Preparing a background Sora tab...",
+        detail: cachedFilteredItems.length
+          ? "Showing cached results while preparing a background Sora tab..."
+          : "Preparing a background Sora tab...",
         progressRatio: FETCH_OPENING_PROGRESS_RATIO,
         currentSource: sources[0] ?? null,
         currentSourceLabel: getFetchSourceLabel(sources[0] ?? null),
         currentSourceIndex: sources.length ? 1 : 0,
         totalSources: sources.length,
+        itemsFound: cachedFilteredItems.length,
       }),
       startedAt: new Date().toISOString(),
     }),
   );
 
   try {
-    const collected = await collectItems(sources, getMaxVideosSetting(currentState.settings));
+    throwIfFetchAbortRequested();
+    const collected = await collectItems(sources, maxVideos, {
+      catalogItems: currentCatalog.items,
+      selectedCharacterAccountIds,
+    });
+    const mergedCatalogItems = mergeCatalogItemsWithSourceResults(
+      currentCatalog.items,
+      collected.sourceResults,
+      selectedCharacterAccountIds,
+    );
+    await setCatalogState({
+      items: normalizeCatalogItems(mergedCatalogItems),
+      sourceSync: buildUpdatedCatalogSourceSync(collected.sourceResults),
+    });
+
+    const workingItems = buildWorkingItemsFromCatalog(
+      currentCatalog.items,
+      sources,
+      maxVideos,
+      selectedCharacterAccountIds,
+    );
     await setState({
-      message: `Processing ${collected.items.length} fetched item(s)...`,
-      fetchedCount: collected.items.length,
+      message: `Processing ${workingItems.length} item(s)...`,
+      fetchedCount: workingItems.length,
       fetchProgress: getNextFetchProgress({
         stage: "processing",
         stageLabel: "Processing fetched videos",
         detail: searchQuery
-          ? `Applying your search to ${collected.items.length} item(s)...`
-          : `Preparing ${collected.items.length} item(s) for review...`,
+          ? `Applying your search to ${workingItems.length} item(s)...`
+          : `Preparing ${workingItems.length} item(s) for review...`,
         progressRatio: getFetchProcessingProgressRatio(0, 0),
-        itemsFound: collected.items.length,
+        itemsFound: workingItems.length,
         processedCount: 0,
-        totalCount: collected.items.length,
+        totalCount: workingItems.length,
       }),
     }, { persist: false });
     await yieldForUi();
 
-    const filteredItems = await filterItemsBySearchQueryWithProgress(collected.items, searchQuery, {
+    const filteredItems = await filterItemsBySearchQueryWithProgress(workingItems, searchQuery, {
       onProgress: async ({ processedCount, totalCount, matchedCount }) => {
         await setState({
           fetchedCount: matchedCount,
@@ -1174,7 +1641,7 @@ async function scanSources(sources, searchQuery = "") {
       items: filteredItems,
       fetchedCount: filteredItems.length,
       selectedKeys,
-      titleOverrides: {},
+      titleOverrides: pruneLegacyTitleOverrides(filteredItems, currentState.titleOverrides),
       pendingItems: [],
       runMode: null,
       runTotal: 0,
@@ -1188,6 +1655,7 @@ async function scanSources(sources, searchQuery = "") {
     };
 
     if (!filteredItems.length) {
+      requestedControlAction = null;
       await setState({
         ...baseState,
         phase: "complete",
@@ -1199,6 +1667,7 @@ async function scanSources(sources, searchQuery = "") {
       return;
     }
 
+    requestedControlAction = null;
     await setState({
       ...baseState,
       phase: "ready",
@@ -1206,6 +1675,28 @@ async function scanSources(sources, searchQuery = "") {
       finishedAt: new Date().toISOString(),
     });
   } catch (error) {
+    if (isControlError(error, "abort")) {
+      requestedControlAction = null;
+      const activeItems = Array.isArray(currentState.items) ? currentState.items : [];
+      const nextSelectedKeys = normalizeSelectedKeys(activeItems, currentState.selectedKeys);
+
+      await setState({
+        phase: activeItems.length ? "ready" : "complete",
+        message: activeItems.length
+          ? "Fetch canceled. Showing your current results."
+          : "Fetch canceled. Start another fetch when you're ready.",
+        currentSource: null,
+        fetchedCount: activeItems.length,
+        selectedKeys: nextSelectedKeys,
+        queued: nextSelectedKeys.length,
+        fetchProgress: createDefaultFetchProgress(),
+        lastError: "",
+        finishedAt: new Date().toISOString(),
+      });
+      return;
+    }
+
+    requestedControlAction = null;
     await setState({
       phase: "error",
       message: "The fetch run stopped.",
@@ -1423,6 +1914,10 @@ async function setItemRemovedState(itemKey, removed) {
     patch.message = buildReadyMessage(nextSelectedKeys.length);
   }
 
+  await applyCatalogItemMutation([itemKey], (item) => ({
+    ...item,
+    isRemoved: Boolean(removed),
+  }));
   await setState(patch);
 }
 
@@ -1493,6 +1988,10 @@ async function setItemDownloadedState(itemKey, downloaded) {
     patch.message = buildReadyMessage(nextSelectedKeys.length);
   }
 
+  await applyCatalogItemMutation([itemKey], (item) => ({
+    ...item,
+    isDownloaded: Boolean(downloaded),
+  }));
   await setState(patch);
 }
 
@@ -1860,6 +2359,19 @@ async function performDownloadRun(downloadItems, options) {
         [item.key || getItemKey(item)],
         true,
       );
+      const shouldPersistProgress = shouldPersistDownloadProgress(
+        completed,
+        failedItems.length,
+        pendingItems.length,
+      );
+      await applyCatalogItemMutation(
+        [item.key || getItemKey(item)],
+        (catalogItem) => ({
+          ...catalogItem,
+          isDownloaded: true,
+        }),
+        { persist: shouldPersistProgress },
+      );
       await setState({
         items: nextItems,
         selectedKeys: nextSelectedKeys,
@@ -1871,7 +2383,7 @@ async function performDownloadRun(downloadItems, options) {
             ? options.progressMessage(completed, total, item)
             : `Downloaded ${completed} of ${total}`),
       }, {
-        persist: shouldPersistDownloadProgress(completed, failedItems.length, pendingItems.length),
+        persist: shouldPersistProgress,
       });
     } catch (error) {
       if (isControlError(error, "pause")) {
@@ -1953,16 +2465,22 @@ async function performDownloadRun(downloadItems, options) {
   });
 }
 
-async function collectItems(sources, maxVideos) {
+async function collectItems(sources, maxVideos, options = {}) {
   const itemMap = new Map();
   const profileIds = new Set();
   const draftIds = new Set();
   const likesIds = new Set();
   const cameoIds = new Set();
   const characterIds = new Set();
+  const sourceResults = [];
+  const catalogItems = normalizeCatalogItems(options.catalogItems);
+  const selectedCharacterAccountIds = Array.isArray(options.selectedCharacterAccountIds)
+    ? options.selectedCharacterAccountIds
+    : currentState.selectedCharacterAccountIds;
   let partialWarning = "";
 
   for (let sourceIndex = 0; sourceIndex < sources.length; sourceIndex += 1) {
+    throwIfFetchAbortRequested();
     const source = sources[sourceIndex];
     const maxRemaining = getRemainingFetchCapacity(itemMap.size, maxVideos);
     if (maxRemaining === 0) {
@@ -1970,23 +2488,47 @@ async function collectItems(sources, maxVideos) {
     }
 
     const sourceLabel = getFetchSourceLabel(source);
+    const syncMode = shouldRunFullSourceRefresh(source, {
+      catalogItems,
+      selectedCharacterAccountIds,
+      maxVideos,
+    })
+      ? "full"
+      : "incremental";
+    const knownItemKeys =
+      syncMode === "incremental"
+        ? getKnownItemKeysForSource(source, catalogItems, selectedCharacterAccountIds)
+        : null;
     await setState({
       phase: "fetching",
       currentSource: source,
       message:
-        source === "profile"
-          ? "Fetching published videos..."
-          : source === "drafts"
-            ? "Fetching drafts..."
-            : source === "likes"
-            ? "Fetching liked videos..."
-            : source === "characters"
-              ? "Fetching cameo videos..."
-              : "Fetching character videos...",
+        syncMode === "incremental"
+          ? source === "profile"
+            ? "Checking for new published videos..."
+            : source === "drafts"
+              ? "Checking for new drafts..."
+              : source === "likes"
+                ? "Checking for new liked videos..."
+                : source === "characters"
+                  ? "Checking for new cameo videos..."
+                  : "Checking for new character videos..."
+          : source === "profile"
+            ? "Fetching published videos..."
+            : source === "drafts"
+              ? "Fetching drafts..."
+              : source === "likes"
+                ? "Fetching liked videos..."
+                : source === "characters"
+                  ? "Fetching cameo videos..."
+                  : "Fetching character videos...",
       fetchProgress: getNextFetchProgress({
         stage: "fetching-source",
-        stageLabel: `Loading ${sourceLabel}`,
-        detail: `Source ${sourceIndex + 1} of ${sources.length}`,
+        stageLabel: syncMode === "incremental" ? `Checking ${sourceLabel}` : `Loading ${sourceLabel}`,
+        detail:
+          syncMode === "incremental"
+            ? `Comparing source ${sourceIndex + 1} of ${sources.length} against cached results.`
+            : `Source ${sourceIndex + 1} of ${sources.length}`,
         progressRatio: getFetchSourceProgressRatio(sourceIndex, sources.length, 0),
         currentSource: source,
         currentSourceLabel: sourceLabel,
@@ -2002,6 +2544,7 @@ async function collectItems(sources, maxVideos) {
       source === "profile"
         ? await fetchAllProfileItems({
           maxItems: maxRemaining,
+          knownItemKeys,
           baseCount: itemMap.size,
           onProgress: async ({ count, pageNumber, message }) => {
             await setState({
@@ -2026,6 +2569,7 @@ async function collectItems(sources, maxVideos) {
         : source === "drafts"
           ? await fetchAllDraftItems({
             maxItems: maxRemaining,
+            knownItemKeys,
             baseCount: itemMap.size,
             onProgress: async ({ count, pageNumber, message }) => {
               await setState({
@@ -2050,6 +2594,7 @@ async function collectItems(sources, maxVideos) {
           : source === "likes"
             ? await fetchAllLikesItems({
               maxItems: maxRemaining,
+              knownItemKeys,
               baseCount: itemMap.size,
               onProgress: async ({ count, pageNumber, message }) => {
                 await setState({
@@ -2074,6 +2619,7 @@ async function collectItems(sources, maxVideos) {
             : source === "characters"
               ? await fetchAllCameoItems({
                 maxItems: maxRemaining,
+                knownItemKeys,
                 baseCount: itemMap.size,
                 onProgress: async ({ count, pageNumber, message }) => {
                   await setState({
@@ -2098,7 +2644,8 @@ async function collectItems(sources, maxVideos) {
               : await fetchAllCharacterItems({
                 maxItems: maxRemaining,
                 characterAccounts: currentState.characterAccounts,
-                selectedCharacterAccountIds: currentState.selectedCharacterAccountIds,
+                selectedCharacterAccountIds,
+                knownItemKeys,
                 baseCount: itemMap.size,
                 onProgress: async ({ count, pageNumber, message }) => {
                   await setState({
@@ -2120,6 +2667,19 @@ async function collectItems(sources, maxVideos) {
                   }, { persist: false });
                 },
               });
+
+    throwIfFetchAbortRequested();
+    sourceResults.push({
+      source,
+      ids: sourceResult.ids,
+      items: sourceResult.items,
+      syncMode,
+      isExhaustive: sourceResult.isExhaustive === true,
+      selectionSignature:
+        source === "characterAccounts"
+          ? getCharacterAccountSelectionSignature(selectedCharacterAccountIds)
+          : "",
+    });
 
     for (const item of sourceResult.items) {
       const key = getItemKey(item);
@@ -2176,6 +2736,7 @@ async function collectItems(sources, maxVideos) {
     cameoIds: [...cameoIds],
     characterIds: [...characterIds],
     partialWarning,
+    sourceResults,
   };
 }
 
@@ -2189,7 +2750,21 @@ function getRemainingFetchCapacity(currentCount, maxVideos) {
 }
 
 function getComparableItemTimestamp(item) {
-  const timestamp = Number(item && (item.createdAt ?? item.postedAt));
+  const value = item && (item.createdAt ?? item.postedAt);
+  if (value == null || value === "") {
+    return 0;
+  }
+
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? (value < 1e12 ? value * 1000 : value) : 0;
+  }
+
+  const numericValue = Number(value);
+  if (Number.isFinite(numericValue)) {
+    return numericValue < 1e12 ? numericValue * 1000 : numericValue;
+  }
+
+  const timestamp = new Date(value).getTime();
   return Number.isFinite(timestamp) ? timestamp : 0;
 }
 
@@ -2208,15 +2783,32 @@ function joinPartialWarnings(warnings) {
   return [...new Set((Array.isArray(warnings) ? warnings : []).filter(Boolean))].join(" ");
 }
 
+function didPageContainOnlyKnownItems(items, knownItemKeys) {
+  const knownKeys = knownItemKeys instanceof Set ? knownItemKeys : null;
+  if (!knownKeys || knownKeys.size === 0) {
+    return false;
+  }
+
+  const pageItems = Array.isArray(items) ? items : [];
+  if (pageItems.length === 0) {
+    return false;
+  }
+
+  return pageItems.every((item) => knownKeys.has(item.key || getItemKey(item)));
+}
+
 async function fetchAllProfileItems(options = {}) {
   const ids = new Set();
   const items = [];
   const cut = "nf2";
   const maxItems = getMaxVideosSetting({ maxVideos: options.maxItems });
+  const knownItemKeys = options.knownItemKeys instanceof Set ? options.knownItemKeys : null;
+  let isExhaustive = false;
   let cursor = null;
   let previousCursor = null;
 
   for (let pageNumber = 0; pageNumber < 250; pageNumber += 1) {
+    throwIfFetchAbortRequested();
     const page = await fetchSourceDataFromTab("profile", {
       limit: PROFILE_LIMIT,
       cut,
@@ -2239,12 +2831,18 @@ async function fetchAllProfileItems(options = {}) {
       });
     }
 
-    if (
-      page.rowCount === 0 ||
-      !page.nextCursor ||
-      page.nextCursor === previousCursor ||
-      (maxItems && items.length >= maxItems)
-    ) {
+    throwIfFetchAbortRequested();
+
+    if (didPageContainOnlyKnownItems(page.items, knownItemKeys)) {
+      break;
+    }
+
+    if (page.rowCount === 0 || !page.nextCursor || page.nextCursor === previousCursor) {
+      isExhaustive = !(maxItems && items.length >= maxItems);
+      break;
+    }
+
+    if (maxItems && items.length >= maxItems) {
       break;
     }
 
@@ -2256,6 +2854,7 @@ async function fetchAllProfileItems(options = {}) {
     ids: [...ids],
     items,
     partialWarning: "",
+    isExhaustive,
   };
 }
 
@@ -2263,11 +2862,13 @@ async function fetchAllDraftItems(options = {}) {
   const ids = new Set();
   const itemMap = new Map();
   const maxItems = getMaxVideosSetting({ maxVideos: options.maxItems });
+  const knownItemKeys = options.knownItemKeys instanceof Set ? options.knownItemKeys : null;
   let cursor = null;
   let previousCursor = null;
   let offset = 0;
 
   for (let pageNumber = 0; pageNumber < 250; pageNumber += 1) {
+    throwIfFetchAbortRequested();
     const page = await fetchSourceDataFromTab("drafts", {
       limit: DRAFT_BATCH_LIMIT,
       offset,
@@ -2299,12 +2900,33 @@ async function fetchAllDraftItems(options = {}) {
       });
     }
 
-    const madeProgress = itemMap.size > beforeSize;
-    if (page.rowCount === 0 || (maxItems && items.length >= maxItems)) {
+    throwIfFetchAbortRequested();
+
+    if (didPageContainOnlyKnownItems(page.items, knownItemKeys)) {
       return {
         ids: [...ids],
         items,
         partialWarning: "",
+        isExhaustive: false,
+      };
+    }
+
+    const madeProgress = itemMap.size > beforeSize;
+    if (maxItems && items.length >= maxItems) {
+      return {
+        ids: [...ids],
+        items,
+        partialWarning: "",
+        isExhaustive: false,
+      };
+    }
+
+    if (page.rowCount === 0) {
+      return {
+        ids: [...ids],
+        items,
+        partialWarning: "",
+        isExhaustive: true,
       };
     }
 
@@ -2319,6 +2941,7 @@ async function fetchAllDraftItems(options = {}) {
         ids: [...ids],
         items,
         partialWarning: "",
+        isExhaustive: true,
       };
     }
 
@@ -2329,6 +2952,7 @@ async function fetchAllDraftItems(options = {}) {
     ids: [...ids],
     items: [...itemMap.values()].slice(0, maxItems || undefined),
     partialWarning: "Stopped fetching drafts after many batches to avoid an infinite loop.",
+    isExhaustive: false,
   };
 }
 
@@ -2336,10 +2960,13 @@ async function fetchAllLikesItems(options = {}) {
   const ids = new Set();
   const items = [];
   const maxItems = getMaxVideosSetting({ maxVideos: options.maxItems });
+  const knownItemKeys = options.knownItemKeys instanceof Set ? options.knownItemKeys : null;
+  let isExhaustive = false;
   let cursor = null;
   let previousCursor = null;
 
   for (let pageNumber = 0; pageNumber < 250; pageNumber += 1) {
+    throwIfFetchAbortRequested();
     const page = await fetchSourceDataFromTab("likes", {
       limit: LIKES_BATCH_LIMIT,
       cursor,
@@ -2361,12 +2988,18 @@ async function fetchAllLikesItems(options = {}) {
       });
     }
 
-    if (
-      page.rowCount === 0 ||
-      !page.nextCursor ||
-      page.nextCursor === previousCursor ||
-      (maxItems && items.length >= maxItems)
-    ) {
+    throwIfFetchAbortRequested();
+
+    if (didPageContainOnlyKnownItems(page.items, knownItemKeys)) {
+      break;
+    }
+
+    if (page.rowCount === 0 || !page.nextCursor || page.nextCursor === previousCursor) {
+      isExhaustive = !(maxItems && items.length >= maxItems);
+      break;
+    }
+
+    if (maxItems && items.length >= maxItems) {
       break;
     }
 
@@ -2378,6 +3011,7 @@ async function fetchAllLikesItems(options = {}) {
     ids: [...ids],
     items,
     partialWarning: "",
+    isExhaustive,
   };
 }
 
@@ -2385,10 +3019,13 @@ async function fetchAllCharacterAppearanceItems(options = {}) {
   const ids = new Set();
   const items = [];
   const maxItems = getMaxVideosSetting({ maxVideos: options.maxItems });
+  const knownItemKeys = options.knownItemKeys instanceof Set ? options.knownItemKeys : null;
+  let isExhaustive = false;
   let cursor = null;
   let previousCursor = null;
 
   for (let pageNumber = 0; pageNumber < 250; pageNumber += 1) {
+    throwIfFetchAbortRequested();
     const page = await fetchSourceDataFromTab("characters", {
       limit: CHARACTERS_BATCH_LIMIT,
       cursor,
@@ -2410,12 +3047,18 @@ async function fetchAllCharacterAppearanceItems(options = {}) {
       });
     }
 
-    if (
-      page.rowCount === 0 ||
-      !page.nextCursor ||
-      page.nextCursor === previousCursor ||
-      (maxItems && items.length >= maxItems)
-    ) {
+    throwIfFetchAbortRequested();
+
+    if (didPageContainOnlyKnownItems(page.items, knownItemKeys)) {
+      break;
+    }
+
+    if (page.rowCount === 0 || !page.nextCursor || page.nextCursor === previousCursor) {
+      isExhaustive = !(maxItems && items.length >= maxItems);
+      break;
+    }
+
+    if (maxItems && items.length >= maxItems) {
       break;
     }
 
@@ -2427,6 +3070,7 @@ async function fetchAllCharacterAppearanceItems(options = {}) {
     ids: [...ids],
     items,
     partialWarning: "",
+    isExhaustive,
   };
 }
 
@@ -2434,10 +3078,13 @@ async function fetchAllCharacterDraftItems(options = {}) {
   const ids = new Set();
   const items = [];
   const maxItems = getMaxVideosSetting({ maxVideos: options.maxItems });
+  const knownItemKeys = options.knownItemKeys instanceof Set ? options.knownItemKeys : null;
+  let isExhaustive = false;
   let cursor = null;
   let previousCursor = null;
 
   for (let pageNumber = 0; pageNumber < 250; pageNumber += 1) {
+    throwIfFetchAbortRequested();
     const page = await fetchSourceDataFromTab("characterDrafts", {
       limit: CHARACTERS_BATCH_LIMIT,
       cursor,
@@ -2459,12 +3106,18 @@ async function fetchAllCharacterDraftItems(options = {}) {
       });
     }
 
-    if (
-      page.rowCount === 0 ||
-      !page.nextCursor ||
-      page.nextCursor === previousCursor ||
-      (maxItems && items.length >= maxItems)
-    ) {
+    throwIfFetchAbortRequested();
+
+    if (didPageContainOnlyKnownItems(page.items, knownItemKeys)) {
+      break;
+    }
+
+    if (page.rowCount === 0 || !page.nextCursor || page.nextCursor === previousCursor) {
+      isExhaustive = !(maxItems && items.length >= maxItems);
+      break;
+    }
+
+    if (maxItems && items.length >= maxItems) {
       break;
     }
 
@@ -2476,6 +3129,7 @@ async function fetchAllCharacterDraftItems(options = {}) {
     ids: [...ids],
     items,
     partialWarning: "",
+    isExhaustive,
   };
 }
 
@@ -2559,10 +3213,13 @@ async function fetchAllCharacterAccountPublishedItems(characterAccount, options 
   const ids = new Set();
   const items = [];
   const maxItems = getMaxVideosSetting({ maxVideos: options.maxItems });
+  const knownItemKeys = options.knownItemKeys instanceof Set ? options.knownItemKeys : null;
+  let isExhaustive = false;
   let cursor = null;
   let previousCursor = null;
 
   for (let pageNumber = 0; pageNumber < 250; pageNumber += 1) {
+    throwIfFetchAbortRequested();
     const page = await fetchSourceDataFromTab("characterAccountPosts", {
       characterId: characterAccount.userId,
       limit: CHARACTERS_BATCH_LIMIT,
@@ -2588,12 +3245,18 @@ async function fetchAllCharacterAccountPublishedItems(characterAccount, options 
       });
     }
 
-    if (
-      page.rowCount === 0 ||
-      !page.nextCursor ||
-      page.nextCursor === previousCursor ||
-      (maxItems && items.length >= maxItems)
-    ) {
+    throwIfFetchAbortRequested();
+
+    if (didPageContainOnlyKnownItems(page.items, knownItemKeys)) {
+      break;
+    }
+
+    if (page.rowCount === 0 || !page.nextCursor || page.nextCursor === previousCursor) {
+      isExhaustive = !(maxItems && items.length >= maxItems);
+      break;
+    }
+
+    if (maxItems && items.length >= maxItems) {
       break;
     }
 
@@ -2605,6 +3268,7 @@ async function fetchAllCharacterAccountPublishedItems(characterAccount, options 
     ids: [...ids],
     items,
     partialWarning: "",
+    isExhaustive,
   };
 }
 
@@ -2612,10 +3276,13 @@ async function fetchAllCharacterAccountDraftItems(characterAccount, options = {}
   const ids = new Set();
   const items = [];
   const maxItems = getMaxVideosSetting({ maxVideos: options.maxItems });
+  const knownItemKeys = options.knownItemKeys instanceof Set ? options.knownItemKeys : null;
+  let isExhaustive = false;
   let cursor = null;
   let previousCursor = null;
 
   for (let pageNumber = 0; pageNumber < 250; pageNumber += 1) {
+    throwIfFetchAbortRequested();
     const page = await fetchSourceDataFromTab("characterAccountDrafts", {
       characterId: characterAccount.userId,
       limit: CHARACTERS_BATCH_LIMIT,
@@ -2641,12 +3308,18 @@ async function fetchAllCharacterAccountDraftItems(characterAccount, options = {}
       });
     }
 
-    if (
-      page.rowCount === 0 ||
-      !page.nextCursor ||
-      page.nextCursor === previousCursor ||
-      (maxItems && items.length >= maxItems)
-    ) {
+    throwIfFetchAbortRequested();
+
+    if (didPageContainOnlyKnownItems(page.items, knownItemKeys)) {
+      break;
+    }
+
+    if (page.rowCount === 0 || !page.nextCursor || page.nextCursor === previousCursor) {
+      isExhaustive = !(maxItems && items.length >= maxItems);
+      break;
+    }
+
+    if (maxItems && items.length >= maxItems) {
       break;
     }
 
@@ -2658,11 +3331,13 @@ async function fetchAllCharacterAccountDraftItems(characterAccount, options = {}
     ids: [...ids],
     items,
     partialWarning: "",
+    isExhaustive,
   };
 }
 
 async function fetchAllCharacterItems(options = {}) {
   const maxItems = getMaxVideosSetting({ maxVideos: options.maxItems });
+  const knownItemKeys = options.knownItemKeys instanceof Set ? options.knownItemKeys : null;
   const normalizedCharacterAccounts = normalizeCharacterAccounts(options.characterAccounts);
   const selectedCharacterAccountIds = normalizeSelectedCharacterAccountIds(
     normalizedCharacterAccounts,
@@ -2675,6 +3350,7 @@ async function fetchAllCharacterItems(options = {}) {
   const itemMap = new Map();
   const partialWarnings = [];
   let totalCount = 0;
+  let isExhaustive = true;
 
   const mergeResult = (result) => {
     for (const id of result.ids) {
@@ -2702,8 +3378,10 @@ async function fetchAllCharacterItems(options = {}) {
   };
 
   for (const characterAccount of selectedCharacterAccounts) {
+    throwIfFetchAbortRequested();
     const maxRemaining = getRemainingFetchCapacity(itemMap.size, maxItems);
     if (maxRemaining === 0) {
+      isExhaustive = false;
       break;
     }
 
@@ -2711,6 +3389,7 @@ async function fetchAllCharacterItems(options = {}) {
       characterAccount,
       {
         maxItems: maxRemaining,
+        knownItemKeys,
         onProgress: async ({ count }) => {
           totalCount = maxItems
             ? Math.min(maxItems, itemMap.size + count)
@@ -2720,9 +3399,11 @@ async function fetchAllCharacterItems(options = {}) {
       },
     );
     mergeResult(characterPublishedResult);
+    isExhaustive = isExhaustive && characterPublishedResult.isExhaustive === true;
 
     const nextMaxRemaining = getRemainingFetchCapacity(itemMap.size, maxItems);
     if (nextMaxRemaining === 0) {
+      isExhaustive = false;
       break;
     }
 
@@ -2730,6 +3411,7 @@ async function fetchAllCharacterItems(options = {}) {
       characterAccount,
       {
         maxItems: nextMaxRemaining,
+        knownItemKeys,
         onProgress: async ({ count }) => {
           totalCount = maxItems
             ? Math.min(maxItems, itemMap.size + count)
@@ -2739,6 +3421,7 @@ async function fetchAllCharacterItems(options = {}) {
       },
     );
     mergeResult(characterDraftResult);
+    isExhaustive = isExhaustive && characterDraftResult.isExhaustive === true;
   }
 
   const items = sortItemsByNewest([...itemMap.values()]);
@@ -2752,11 +3435,13 @@ async function fetchAllCharacterItems(options = {}) {
     partialWarning: joinPartialWarnings([
       ...partialWarnings,
     ]),
+    isExhaustive,
   };
 }
 
 async function fetchAllCameoItems(options = {}) {
   const maxItems = getMaxVideosSetting({ maxVideos: options.maxItems });
+  const knownItemKeys = options.knownItemKeys instanceof Set ? options.knownItemKeys : null;
   const ids = new Set();
   const itemMap = new Map();
   let totalCount = 0;
@@ -2788,6 +3473,7 @@ async function fetchAllCameoItems(options = {}) {
 
   const publishedResult = await fetchAllCharacterAppearanceItems({
     maxItems,
+    knownItemKeys,
     onProgress: async ({ count }) => {
       totalCount = maxItems ? Math.min(maxItems, count) : count;
       await reportProgress("Fetching cameo videos...");
@@ -2799,6 +3485,7 @@ async function fetchAllCameoItems(options = {}) {
   if (nextMaxRemaining !== 0) {
     const draftResult = await fetchAllCharacterDraftItems({
       maxItems: nextMaxRemaining,
+      knownItemKeys,
       onProgress: async ({ count }) => {
         totalCount = maxItems
           ? Math.min(maxItems, itemMap.size + count)
@@ -2815,6 +3502,8 @@ async function fetchAllCameoItems(options = {}) {
         publishedResult.partialWarning,
         draftResult.partialWarning,
       ]),
+      isExhaustive:
+        publishedResult.isExhaustive === true && draftResult.isExhaustive === true,
     };
   }
 
@@ -2822,10 +3511,12 @@ async function fetchAllCameoItems(options = {}) {
     ids: [...ids],
     items: sortItemsByNewest([...itemMap.values()]).slice(0, maxItems || undefined),
     partialWarning: joinPartialWarnings([publishedResult.partialWarning]),
+    isExhaustive: publishedResult.isExhaustive === true && nextMaxRemaining !== 0,
   };
 }
 
 async function fetchSourceDataFromTab(source, options) {
+  throwIfFetchAbortRequested();
   const tabId = await ensureHiddenTab(SOURCE_ROUTES[source]);
 
   try {
@@ -2850,6 +3541,10 @@ async function fetchSourceDataFromTab(source, options) {
 
     return payload;
   } catch (error) {
+    if (isFetchAbortRequested()) {
+      throw createControlError("abort", "Fetch aborted.");
+    }
+
     const sourceLabel =
       source === "profile"
         ? "published"

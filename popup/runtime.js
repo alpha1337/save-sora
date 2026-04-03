@@ -70,6 +70,18 @@ export async function requestScan(sources, searchQuery) {
 }
 
 /**
+ * Requests that the active fetch be canceled.
+ *
+ * @returns {Promise<object>}
+ */
+export async function requestAbortScan() {
+  return sendPopupMessage(
+    { type: "ABORT_SCAN" },
+    "Could not cancel the active fetch.",
+  );
+}
+
+/**
  * Resets the current working set in the background worker.
  *
  * @returns {Promise<object>}

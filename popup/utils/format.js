@@ -2,6 +2,15 @@
  * Formatting helpers used throughout the popup UI.
  */
 
+const WHOLE_NUMBER_FORMATTER = new Intl.NumberFormat(undefined, {
+  maximumFractionDigits: 0,
+});
+
+const FILE_SIZE_NUMBER_FORMATTER = new Intl.NumberFormat(undefined, {
+  minimumFractionDigits: 0,
+  maximumFractionDigits: 1,
+});
+
 /**
  * Formats a created-at timestamp for display in the item cards.
  *
@@ -68,6 +77,21 @@ export function formatCompactCount(value) {
 }
 
 /**
+ * Formats a count using locale-aware group separators.
+ *
+ * @param {number|string|null|undefined} value
+ * @returns {string}
+ */
+export function formatWholeNumber(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return "0";
+  }
+
+  return WHOLE_NUMBER_FORMATTER.format(Math.max(0, Math.round(numeric)));
+}
+
+/**
  * Formats a file size in bytes using a human-readable unit.
  *
  * @param {number|string|null|undefined} value
@@ -89,7 +113,7 @@ export function formatFileSize(value) {
   }
 
   const rounded = size >= 100 || unitIndex === 0 ? Math.round(size) : Number(size.toFixed(1));
-  return `${rounded} ${units[unitIndex]}`;
+  return `${FILE_SIZE_NUMBER_FORMATTER.format(rounded)} ${units[unitIndex]}`;
 }
 
 /**
