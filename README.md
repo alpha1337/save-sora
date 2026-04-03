@@ -19,6 +19,7 @@ Review and selectively download your own Sora videos and drafts for backup.
 - Lets the user search, rename, select, remove from the set, and re-download items.
 - Saves only local extension settings and local UI state with `chrome.storage.local`.
 - Downloads only the videos the user explicitly selects with `chrome.downloads`.
+- Streams selected videos directly into a locally built ZIP archive and writes only the final ZIP to disk.
 
 ## What The Extension Does Not Do
 
@@ -34,7 +35,8 @@ The extension has a deliberately small architecture:
 
 - `index.html`: Responsive GitHub Pages landing page for product overview, documentation links, repository links, and support/contact details.
 - `manifest.json`: Declares permissions, host access, the popup, and the background service worker.
-- `background.js`: Owns extension state, opens the inactive Sora tab, injects packaged code into that tab, fetches Sora data through the user's existing session, and manages the download queue.
+- `background.js`: Owns extension state, opens the inactive Sora tab, injects packaged code into that tab, fetches Sora data through the user's existing session, and coordinates ZIP archive downloads.
+- `offscreen.html`, `offscreen.js`: Hidden extension page used only while building a ZIP archive so the extension can create a local Blob URL for the final save.
 - `popup.html`, `popup.css`: Define the popup shell and styles.
 - `popup.js`: Tiny bootstrap entrypoint that loads the modular popup app.
 - `popup/`: Popup modules split by concern so the flow is easy to follow end-to-end:
@@ -53,7 +55,8 @@ At runtime, the flow is:
 4. The injected code reads the user's own available Sora items from the current signed-in session.
 5. The worker stores a local working set in `chrome.storage.local`.
 6. The popup renders the list and lets the user selectively download the items they want.
-7. The background worker saves those selected files with `chrome.downloads`.
+7. A bundled offscreen document streams the selected files into a ZIP archive locally inside the browser.
+8. The background worker saves only the final ZIP file with `chrome.downloads`.
 
 ## Local-Only Data Handling
 
@@ -61,6 +64,7 @@ The current build is designed so that user data stays in the browser:
 
 - The extension uses the user's existing logged-in Sora session already present in Chrome.
 - Sora titles, prompts, thumbnails, metadata, and download URLs are processed locally in the extension.
+- Selected files are streamed into a local ZIP archive in the browser and only the finished ZIP is written to disk.
 - Auth tokens and cookies are not collected by the developer and are not sent to a separate backend.
 - `chrome.storage.local` is used only for extension settings and local state such as theme, default source, sort order, renamed titles, selection state, removed state, and downloaded state.
 - The Donate tab links to and embeds Ko-fi content, which is separate from the extension's core logic.
@@ -88,6 +92,7 @@ Review and selectively download your own Sora videos and drafts for backup.
 | Permission | Why it is needed |
 | --- | --- |
 | `downloads` | Used to save the Sora videos the user selects to their device. |
+| `offscreen` | Used to create a hidden extension document that can assemble the local ZIP archive and create the final Blob URL before the single archive file is saved. |
 | `scripting` | Used to run packaged extension code inside a Sora tab so the extension can read the user's own published videos and drafts from their existing logged-in Sora session. |
 | `storage` | Used to save local-only extension settings and state, such as theme, default source, sort order, renamed titles, selection state, and downloaded state. |
 | `tabs` | Used to open and manage an inactive Sora tab so the extension can load Sora, wait for the page to be ready, and fetch the user's own videos from their logged-in session. |
@@ -225,8 +230,10 @@ The distribution build intentionally includes only the extension runtime files:
 
 - `manifest.json`
 - `background.js`
+- `offscreen.html`, `offscreen.js`
 - `popup.html`, `popup.css`, `popup.js`
 - `popup/` modules
+- `vendor/`
 - Only the asset files referenced by the extension itself
 
 The GitHub Pages landing page, `privacy.html`, screenshots, and other non-runtime

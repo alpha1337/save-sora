@@ -53,19 +53,7 @@ export function handleCharacterMenuChange(event) {
   }
 
   const selectedIds = readCheckedCharacterValues();
-  if (!selectedIds.length) {
-    target.checked = true;
-    updateCharacterMenuLabel();
-    return;
-  }
-
-  popupState.selectedCharacterAccountIds = selectedIds;
-  updateCharacterMenuLabel();
-  popupState.lastRenderedSignature = "";
-  renderCurrentItems();
-  void saveCharacterSelection(selectedIds).catch((error) => {
-    showNotice(dom.errorBox, error instanceof Error ? error.message : String(error));
-  });
+  void applyCharacterSelection(selectedIds);
 }
 
 export function handleCharacterSelectionClick(event) {
@@ -97,22 +85,24 @@ export function handleCharacterSelectionClick(event) {
 
   const selectedSet = new Set(getSelectedCharacterIds());
   if (selectedSet.has(characterId)) {
-    if (selectedSet.size <= 1) {
-      return;
-    }
     selectedSet.delete(characterId);
   } else {
     selectedSet.add(characterId);
   }
 
   const selectedIds = validIds.filter((value) => selectedSet.has(value));
-  popupState.selectedCharacterAccountIds = selectedIds;
-  updateCharacterMenuLabel();
-  popupState.lastRenderedSignature = "";
-  renderCurrentItems();
-  void saveCharacterSelection(selectedIds).catch((error) => {
-    showNotice(dom.errorBox, error instanceof Error ? error.message : String(error));
-  });
+  void applyCharacterSelection(selectedIds);
+}
+
+export async function selectAllCharacterAccounts() {
+  const selectedIds = normalizeCharacterAccounts(popupState.characterAccounts).map(
+    (account) => account.userId,
+  );
+  await applyCharacterSelection(selectedIds);
+}
+
+export async function clearCharacterAccountsSelection() {
+  await applyCharacterSelection([]);
 }
 
 export function handleSourceMenuDocumentClick(event) {
@@ -377,10 +367,13 @@ function renderCharacterMenuOptions(accounts) {
 
 function readCheckedCharacterValues() {
   const domSelected = [];
+  const inputs = dom.characterSelectInputs;
 
-  const selected = [];
+  if (!inputs.length) {
+    return getSelectedCharacterIds();
+  }
 
-  for (const input of dom.characterSelectInputs) {
+  for (const input of inputs) {
     if (!(input instanceof HTMLInputElement) || !input.checked) {
       continue;
     }
@@ -394,16 +387,7 @@ function readCheckedCharacterValues() {
     return domSelected;
   }
 
-  const validIds = new Set(
-    normalizeCharacterAccounts(popupState.characterAccounts).map((account) => account.userId),
-  );
-  for (const value of getSelectedCharacterIds()) {
-    if (validIds.has(value) && !selected.includes(value)) {
-      selected.push(value);
-    }
-  }
-
-  return selected;
+  return [];
 }
 
 function getSelectedCharacterIds() {
@@ -432,7 +416,12 @@ function updateCharacterMenuLabel() {
     return;
   }
 
-  if (!selectedIds.length || selectedIds.length === accounts.length) {
+  if (!selectedIds.length) {
+    dom.characterSelectLabel.textContent = "No characters selected";
+    return;
+  }
+
+  if (selectedIds.length === accounts.length) {
     dom.characterSelectLabel.textContent = "All characters";
     return;
   }
@@ -446,4 +435,27 @@ function updateCharacterMenuLabel() {
   }
 
   dom.characterSelectLabel.textContent = `${selectedIds.length} characters`;
+}
+
+async function applyCharacterSelection(selectedIds) {
+  popupState.selectedCharacterAccountIds = normalizeRequestedCharacterAccountIds(selectedIds);
+  updateCharacterMenuLabel();
+  popupState.lastRenderedSignature = "";
+  renderCurrentItems();
+
+  try {
+    await saveCharacterSelection(popupState.selectedCharacterAccountIds);
+  } catch (error) {
+    showNotice(dom.errorBox, error instanceof Error ? error.message : String(error));
+  }
+}
+
+function normalizeRequestedCharacterAccountIds(selectedIds) {
+  const validIds = normalizeCharacterAccounts(popupState.characterAccounts).map(
+    (account) => account.userId,
+  );
+  const selectedSet = new Set(
+    (Array.isArray(selectedIds) ? selectedIds : []).filter((value) => typeof value === "string" && value),
+  );
+  return validIds.filter((value) => selectedSet.has(value));
 }

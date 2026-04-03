@@ -26,10 +26,13 @@ const zipPath = path.join(distRoot, `${packageSlug}-v${manifest.version}.zip`);
 const requiredRootEntries = [
   "manifest.json",
   "background.js",
+  "offscreen.html",
+  "offscreen.js",
   "popup.html",
   "popup.css",
   "popup.js",
-  "popup"
+  "popup",
+  "vendor",
 ];
 
 main();

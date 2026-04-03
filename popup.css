@@ -2054,7 +2054,7 @@ body[data-theme="light"] .notice.error {
 }
 
 .download-overlay {
-  position: absolute;
+  position: fixed;
   inset: 0;
   z-index: 120;
   display: grid;

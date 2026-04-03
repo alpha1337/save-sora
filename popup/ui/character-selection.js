@@ -41,6 +41,13 @@ export function syncCharacterSelectionScreen(phase, items) {
   return false;
 }
 
+export function isCharacterSelectionScreenVisible() {
+  return (
+    dom.characterSelectionGrid instanceof HTMLElement &&
+    !dom.characterSelectionGrid.classList.contains("hidden")
+  );
+}
+
 export function setCharacterSelectionSummary(accounts = popupState.characterAccounts) {
   if (!(dom.selectionSummary instanceof HTMLElement)) {
     return;
@@ -71,13 +78,18 @@ function renderCharacterSelectionGrid() {
       ? popupState.selectedCharacterAccountIds
       : [],
   );
-  const renderSignature = buildCharacterSelectionSignature(accounts, [...selectedIds]);
+  syncCharacterSelectionActions(accounts, selectedIds);
+  const renderSignature = buildCharacterSelectionSignature(accounts);
 
   if (popupState.lastCharacterSelectionSignature === renderSignature) {
+    syncCharacterSelectionButtonStates(selectedIds);
     return;
   }
 
   popupState.lastCharacterSelectionSignature = renderSignature;
+  const scrollTop = dom.pickerScrollRegion instanceof HTMLElement
+    ? dom.pickerScrollRegion.scrollTop
+    : 0;
 
   if (!accounts.length) {
     dom.characterSelectionGrid.replaceChildren();
@@ -86,6 +98,7 @@ function renderCharacterSelectionGrid() {
         popupState.characterAccountsLoading ? "Loading characters..." : "No characters found.",
       ),
     );
+    restoreCharacterSelectionScroll(scrollTop);
     return;
   }
 
@@ -140,6 +153,8 @@ function renderCharacterSelectionGrid() {
   }
 
   dom.characterSelectionGrid.append(fragment);
+  syncCharacterSelectionButtonStates(selectedIds);
+  restoreCharacterSelectionScroll(scrollTop);
   queueCharacterMarqueeSync();
 }
 
@@ -147,6 +162,7 @@ function hideCharacterSelectionGrid() {
   dom.characterSelectionGrid?.classList.add("hidden");
   dom.characterSelectionGrid?.replaceChildren();
   popupState.lastCharacterSelectionSignature = "";
+  hideCharacterSelectionActions();
 }
 
 function createStatusCard(text) {
@@ -154,6 +170,64 @@ function createStatusCard(text) {
   card.className = "character-option-status";
   card.textContent = text;
   return card;
+}
+
+function syncCharacterSelectionActions(accounts, selectedIds) {
+  const totalCount = Array.isArray(accounts) ? accounts.length : 0;
+  const selectedCount = selectedIds instanceof Set ? selectedIds.size : 0;
+  const shouldShow = totalCount > 0;
+  const isDisabled = popupState.latestBusy || popupState.latestPaused || popupState.characterAccountsLoading;
+
+  if (dom.selectAllButton instanceof HTMLButtonElement) {
+    dom.selectAllButton.classList.toggle("hidden", !shouldShow);
+    dom.selectAllButton.disabled = isDisabled || totalCount === 0 || selectedCount === totalCount;
+    dom.selectAllButton.textContent = "Select All";
+  }
+
+  if (dom.clearSelectionButton instanceof HTMLButtonElement) {
+    dom.clearSelectionButton.classList.toggle("hidden", !shouldShow);
+    dom.clearSelectionButton.disabled = isDisabled || selectedCount === 0;
+    dom.clearSelectionButton.textContent = "Clear";
+  }
+}
+
+function hideCharacterSelectionActions() {
+  if (dom.selectAllButton instanceof HTMLButtonElement) {
+    dom.selectAllButton.classList.add("hidden");
+  }
+
+  if (dom.clearSelectionButton instanceof HTMLButtonElement) {
+    dom.clearSelectionButton.classList.add("hidden");
+  }
+}
+
+function syncCharacterSelectionButtonStates(selectedIds) {
+  if (!(dom.characterSelectionGrid instanceof HTMLElement)) {
+    return;
+  }
+
+  const selectedIdSet = selectedIds instanceof Set ? selectedIds : new Set();
+  const buttons = dom.characterSelectionGrid.querySelectorAll(".character-option-button");
+
+  for (const button of buttons) {
+    if (!(button instanceof HTMLButtonElement)) {
+      continue;
+    }
+
+    const characterId =
+      typeof button.dataset.characterAccountId === "string" ? button.dataset.characterAccountId : "";
+    const selected = selectedIdSet.has(characterId);
+    button.setAttribute("aria-pressed", String(selected));
+    button.classList.toggle("is-selected", selected);
+  }
+}
+
+function restoreCharacterSelectionScroll(scrollTop) {
+  if (!(dom.pickerScrollRegion instanceof HTMLElement)) {
+    return;
+  }
+
+  dom.pickerScrollRegion.scrollTop = scrollTop;
 }
 
 function normalizeCharacterAccounts(accounts) {
@@ -274,10 +348,9 @@ function createMarqueeCopy(text, ariaHidden) {
   return copy;
 }
 
-function buildCharacterSelectionSignature(accounts, selectedIds) {
+function buildCharacterSelectionSignature(accounts) {
   return JSON.stringify({
     loading: Boolean(popupState.characterAccountsLoading),
-    selectedIds,
     accounts,
   });
 }

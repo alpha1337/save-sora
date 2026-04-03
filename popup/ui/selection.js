@@ -1,6 +1,9 @@
 import { dom } from "../dom.js";
 import { popupState } from "../state.js";
-import { setCharacterSelectionSummary } from "./character-selection.js";
+import {
+  isCharacterSelectionScreenVisible,
+  setCharacterSelectionSummary,
+} from "./character-selection.js";
 import { formatFileSize, formatWholeNumber } from "../utils/format.js";
 import { getSelectedSourceValues } from "../utils/settings.js";
 import {
@@ -183,10 +186,16 @@ export function updateSelectionSummary({
 export function syncSelectionControls(totalCount, selectedCount, visibleCount = totalCount) {
   const phase = popupState.latestRenderState.phase || "idle";
   const hasLoadedResults = popupState.latestRenderState.items.length > 0;
+  const hasCharacterSelection =
+    isCharacterSelectionScreenVisible() &&
+    Array.isArray(popupState.characterAccounts) &&
+    popupState.characterAccounts.length > 0;
   const isFetching = phase === "fetching";
   const showDownloadButton =
     hasLoadedResults && selectedCount > 0 && !popupState.latestBusy && !popupState.latestPaused && !isFetching;
-  const showBatchActions = hasLoadedResults && visibleCount > 0 && !isFetching;
+  const showBatchActions =
+    !isFetching &&
+    ((hasLoadedResults && visibleCount > 0) || hasCharacterSelection);
   const showBrowseTools = hasLoadedResults;
   const showSummaryPanel = hasLoadedResults && !isFetching;
 

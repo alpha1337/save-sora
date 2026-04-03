@@ -272,6 +272,7 @@
         <section class="summary" aria-label="Privacy summary">
           <div><strong>Short version:</strong> Save Sora processes your Sora video data locally in your browser so you can review and download your own files.</div>
           <div><strong>No developer backend:</strong> the current build does not send your Sora library, auth tokens, or cookies to a developer-owned server.</div>
+          <div><strong>Single final save:</strong> selected files can be streamed into a local ZIP archive so only the finished archive is written to disk.</div>
           <div><strong>Local state only:</strong> extension storage is used only for settings and local UI state such as renamed titles, selection state, and downloaded state.</div>
         </section>
       </header>
@@ -293,7 +294,7 @@
           <ul>
             <li>Build a review list of the user's own Sora published videos and drafts.</li>
             <li>Let the user search, sort, rename, and selectively choose files for backup.</li>
-            <li>Download only the videos the user explicitly selects.</li>
+            <li>Download only the videos the user explicitly selects, either directly or as one local ZIP archive.</li>
           </ul>
           <p>
             Save Sora uses the user's existing browser session to access Sora. It does not require
@@ -313,6 +314,10 @@
             <li>Removed state and downloaded state.</li>
             <li>Current fetch and download queue state so the popup can recover after being closed.</li>
           </ul>
+          <p>
+            When the ZIP workflow is used, the extension may open a hidden local-only extension
+            document to assemble the archive in the browser before saving the final ZIP.
+          </p>
         </section>
 
         <section id="what-it-does-not-collect" class="section">

@@ -1,9 +1,15 @@
 // Save Sora background service worker.
 // This is the privileged side of the extension: it owns persistent state, opens the
-// hidden Sora tab used for collection, injects packaged code into that tab, and manages
-// the download queue through chrome.downloads.
+// hidden Sora tab used for collection, injects packaged code into that tab, assembles
+// the final ZIP archive through an offscreen document, and saves the completed archive
+// through chrome.downloads.
 const STATE_KEY = "soraBulkDownloaderState";
 const CATALOG_STORAGE_KEY = "soraBulkDownloaderCatalog";
+const OFFSCREEN_DOCUMENT_PATH = "offscreen.html";
+const OFFSCREEN_TARGET = "offscreen";
+const START_ARCHIVE_BUILD = "START_ARCHIVE_BUILD";
+const ABORT_ARCHIVE_BUILD = "ABORT_ARCHIVE_BUILD";
+const RELEASE_ARCHIVE_OBJECT_URL = "RELEASE_ARCHIVE_OBJECT_URL";
 const PROFILE_LIMIT = 100;
 const DRAFT_BATCH_LIMIT = 100;
 const LIKES_BATCH_LIMIT = 100;
@@ -35,6 +41,8 @@ let currentCatalog = createDefaultCatalogState();
 let hiddenTabId = null;
 let activeRun = null;
 let activeDownloadId = null;
+let activeArchiveJob = null;
+let creatingOffscreenDocument = null;
 let requestedControlAction = null;
 
 void restoreState();
@@ -48,6 +56,61 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (!message || typeof message.type !== "string") {
     sendResponse({ ok: false, error: "Unknown message." });
     return false;
+  }
+
+  if (message.type === "OFFSCREEN_ARCHIVE_STAGE") {
+    void handleOffscreenArchiveStage(message)
+      .then(() => {
+        sendResponse({ ok: true });
+      })
+      .catch((error) => {
+        sendResponse({ ok: false, error: getErrorMessage(error) });
+      });
+    return true;
+  }
+
+  if (message.type === "OFFSCREEN_ARCHIVE_ITEM_RESULT") {
+    void handleOffscreenArchiveItemResult(message)
+      .then(() => {
+        sendResponse({ ok: true });
+      })
+      .catch((error) => {
+        sendResponse({ ok: false, error: getErrorMessage(error) });
+      });
+    return true;
+  }
+
+  if (message.type === "OFFSCREEN_ARCHIVE_COMPLETE") {
+    void handleOffscreenArchiveComplete(message)
+      .then(() => {
+        sendResponse({ ok: true });
+      })
+      .catch((error) => {
+        sendResponse({ ok: false, error: getErrorMessage(error) });
+      });
+    return true;
+  }
+
+  if (message.type === "OFFSCREEN_ARCHIVE_ERROR") {
+    void handleOffscreenArchiveError(message)
+      .then(() => {
+        sendResponse({ ok: true });
+      })
+      .catch((error) => {
+        sendResponse({ ok: false, error: getErrorMessage(error) });
+      });
+    return true;
+  }
+
+  if (message.type === "REFRESH_ARCHIVE_ITEM_URL") {
+    void refreshArchiveItemUrl(message.itemKey)
+      .then((item) => {
+        sendResponse({ ok: true, item });
+      })
+      .catch((error) => {
+        sendResponse({ ok: false, error: getErrorMessage(error) });
+      });
+    return true;
   }
 
   if (message.type === "GET_STATUS") {
@@ -353,6 +416,7 @@ function createDefaultState(overrides = {}) {
     characterIds: [],
     characterAccounts: [],
     selectedCharacterAccountIds: [],
+    hasExplicitCharacterAccountSelection: true,
     items: [],
     selectedKeys: [],
     titleOverrides: {},
@@ -575,9 +639,29 @@ async function restoreState() {
         theme: normalizeTheme(currentState.settings.theme),
       };
       currentState.characterAccounts = normalizeCharacterAccounts(currentState.characterAccounts);
+      if (currentState.hasExplicitCharacterAccountSelection !== true) {
+        const savedSelection = Array.isArray(currentState.selectedCharacterAccountIds)
+          ? currentState.selectedCharacterAccountIds.filter((value) => typeof value === "string")
+          : [];
+        const savedCharacterAccountIds = currentState.characterAccounts.map((account) => account.userId);
+        const selectionMatchedEveryCharacterAccount =
+          savedCharacterAccountIds.length > 0 &&
+          savedSelection.length === savedCharacterAccountIds.length &&
+          savedCharacterAccountIds.every((accountId) => savedSelection.includes(accountId));
+
+        currentState = {
+          ...currentState,
+          selectedCharacterAccountIds: selectionMatchedEveryCharacterAccount ? [] : savedSelection,
+          hasExplicitCharacterAccountSelection: true,
+        };
+      }
       currentState.selectedCharacterAccountIds = normalizeSelectedCharacterAccountIds(
         currentState.characterAccounts,
         currentState.selectedCharacterAccountIds,
+        null,
+        {
+          allowEmpty: currentState.hasExplicitCharacterAccountSelection === true,
+        },
       );
       currentState.items = normalizeCatalogItems(currentState.items);
       currentState.titleOverrides = pruneLegacyTitleOverrides(
@@ -892,6 +976,165 @@ function shouldPersistDownloadProgress(completed, failedCount, pendingCount) {
 
   const processed = Math.max(0, Number(completed) || 0) + Math.max(0, Number(failedCount) || 0);
   return processed <= 1 || processed % DOWNLOAD_PROGRESS_PERSIST_INTERVAL === 0;
+}
+
+function createArchiveJobId() {
+  return `archive-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function buildArchiveFilename(mode, now = new Date()) {
+  const isoDate = now.toISOString().slice(0, 10);
+  return mode === "retry" || mode === "archive-retry"
+    ? `save-sora-retry-backup-${isoDate}.zip`
+    : `save-sora-backup-${isoDate}.zip`;
+}
+
+function buildArchiveWorkItems(items) {
+  const usedPaths = new Set();
+
+  return (Array.isArray(items) ? items : []).map((item) => {
+    const archivePath = uniquifyArchivePath(buildArchiveEntryPath(item), usedPaths);
+    return {
+      ...item,
+      archivePath,
+    };
+  });
+}
+
+function buildArchiveEntryPath(item) {
+  return `${getArchiveMediaFolderPath(item)}/${getArchiveFilename(item)}`;
+}
+
+function getArchiveMediaFolderPath(item) {
+  switch (item && item.sourcePage) {
+    case "profile":
+      return "published";
+    case "drafts":
+      return "drafts";
+    case "likes":
+      return "liked";
+    case "cameos":
+      return "cameos";
+    case "characters":
+      return `characters/${getArchiveCharacterFolderName(item)}/${item && item.sourceType === "draft" ? "drafts" : "published"}`;
+    default:
+      return "videos";
+  }
+}
+
+function getArchiveFolderImagePath(item) {
+  if (!item || item.sourcePage !== "characters") {
+    return getArchiveMediaFolderPath(item);
+  }
+
+  return `characters/${getArchiveCharacterFolderName(item)}`;
+}
+
+function getArchiveCharacterFolderName(item) {
+  const preferredName =
+    (item && item.characterAccountDisplayName) ||
+    (item && item.characterAccountUsername) ||
+    (item && item.characterAccountId) ||
+    "character";
+  return sanitizeFilenamePart(preferredName) || "character";
+}
+
+function getArchiveFilename(item) {
+  const rawFilename =
+    item && typeof item.filename === "string" && item.filename
+      ? item.filename
+      : `${(item && item.id) || "video"}.mp4`;
+  const lastSegment = rawFilename.split("/").pop() || rawFilename;
+  const extensionMatch = lastSegment.match(/(\.[A-Za-z0-9]{1,10})$/);
+  const extension = extensionMatch ? extensionMatch[1].toLowerCase() : ".bin";
+  const basename = extensionMatch ? lastSegment.slice(0, -extension.length) : lastSegment;
+  const safeBasename = sanitizeFilenamePart(basename) || "video";
+  return `${safeBasename}${extension}`;
+}
+
+function uniquifyArchivePath(desiredPath, usedPaths) {
+  const normalizedPath = String(desiredPath || "").replace(/^\/+|\/+$/g, "");
+  if (!usedPaths.has(normalizedPath)) {
+    usedPaths.add(normalizedPath);
+    return normalizedPath;
+  }
+
+  const lastSlashIndex = normalizedPath.lastIndexOf("/");
+  const folderPath = lastSlashIndex === -1 ? "" : normalizedPath.slice(0, lastSlashIndex);
+  const filename = lastSlashIndex === -1 ? normalizedPath : normalizedPath.slice(lastSlashIndex + 1);
+  const extensionMatch = filename.match(/(\.[A-Za-z0-9]{1,10})$/);
+  const extension = extensionMatch ? extensionMatch[1] : "";
+  const basename = extensionMatch ? filename.slice(0, -extension.length) : filename;
+
+  for (let suffix = 2; suffix < 10000; suffix += 1) {
+    const candidateFilename = `${basename}-${suffix}${extension}`;
+    const candidatePath = folderPath ? `${folderPath}/${candidateFilename}` : candidateFilename;
+    if (!usedPaths.has(candidatePath)) {
+      usedPaths.add(candidatePath);
+      return candidatePath;
+    }
+  }
+
+  usedPaths.add(normalizedPath);
+  return normalizedPath;
+}
+
+function buildArchiveFolderImages(items) {
+  const folderImages = new Map();
+
+  for (const item of Array.isArray(items) ? items : []) {
+    const candidate = getArchiveFolderImageCandidate(item);
+    if (!candidate || folderImages.has(candidate.folderPath)) {
+      continue;
+    }
+
+    folderImages.set(candidate.folderPath, candidate);
+  }
+
+  return [...folderImages.values()].sort((left, right) => left.folderPath.localeCompare(right.folderPath));
+}
+
+function getArchiveFolderImageCandidate(item) {
+  if (!item) {
+    return null;
+  }
+
+  if (
+    item.sourcePage === "characters" &&
+    typeof item.characterAccountProfilePictureUrl === "string" &&
+    item.characterAccountProfilePictureUrl
+  ) {
+    return {
+      folderPath: getArchiveFolderImagePath(item),
+      imageUrl: item.characterAccountProfilePictureUrl,
+    };
+  }
+
+  if (typeof item.creatorProfilePictureUrl === "string" && item.creatorProfilePictureUrl) {
+    return {
+      folderPath: getArchiveFolderImagePath(item),
+      imageUrl: item.creatorProfilePictureUrl,
+    };
+  }
+
+  return null;
+}
+
+function createArchiveJobContext(downloadItems, options) {
+  const archiveItems = buildArchiveWorkItems(downloadItems);
+  return {
+    jobId: createArchiveJobId(),
+    mode: options && options.mode ? options.mode : "selected",
+    archiveFilename: buildArchiveFilename(options && options.mode ? options.mode : "selected"),
+    total: Number(options && options.totalTarget) || archiveItems.length,
+    itemsByKey: new Map(archiveItems.map((item) => [item.key || getItemKey(item), item])),
+    pendingItems: [...archiveItems],
+    successfulItems: [],
+    failedItems: [],
+    folderImages: buildArchiveFolderImages(archiveItems),
+    resolve: null,
+    reject: null,
+  };
 }
 
 function deriveSourceIdsFromItems(items) {
@@ -1423,6 +1666,304 @@ function isControlError(error, code) {
   );
 }
 
+async function ensureOffscreenDocument() {
+  if (!chrome.offscreen || typeof chrome.offscreen.createDocument !== "function") {
+    throw new Error("This version of Chrome does not support the ZIP archive worker.");
+  }
+
+  const offscreenUrl = chrome.runtime.getURL(OFFSCREEN_DOCUMENT_PATH);
+  if (await hasOffscreenDocument(offscreenUrl)) {
+    return;
+  }
+
+  if (creatingOffscreenDocument) {
+    await creatingOffscreenDocument;
+    return;
+  }
+
+  creatingOffscreenDocument = chrome.offscreen.createDocument({
+    url: OFFSCREEN_DOCUMENT_PATH,
+    reasons: ["BLOBS"],
+    justification: "Build a local ZIP archive and create the final blob URL without opening a visible tab.",
+  });
+
+  try {
+    await creatingOffscreenDocument;
+  } finally {
+    creatingOffscreenDocument = null;
+  }
+}
+
+async function hasOffscreenDocument(offscreenUrl) {
+  if (chrome.runtime && typeof chrome.runtime.getContexts === "function") {
+    const contexts = await chrome.runtime.getContexts({
+      contextTypes: ["OFFSCREEN_DOCUMENT"],
+      documentUrls: [offscreenUrl],
+    });
+    return contexts.length > 0;
+  }
+
+  const matchedClients = await clients.matchAll();
+  return matchedClients.some((client) => client.url === offscreenUrl);
+}
+
+async function closeOffscreenDocumentIfPresent() {
+  if (!chrome.offscreen || typeof chrome.offscreen.closeDocument !== "function") {
+    return;
+  }
+
+  const offscreenUrl = chrome.runtime.getURL(OFFSCREEN_DOCUMENT_PATH);
+  if (!(await hasOffscreenDocument(offscreenUrl))) {
+    return;
+  }
+
+  try {
+    await chrome.offscreen.closeDocument();
+  } catch (_error) {
+    // Ignore close races when the document has already been torn down.
+  }
+}
+
+async function releaseOffscreenArchiveObjectUrl(objectUrl) {
+  if (typeof objectUrl !== "string" || !objectUrl) {
+    return;
+  }
+
+  try {
+    await chrome.runtime.sendMessage({
+      target: OFFSCREEN_TARGET,
+      type: RELEASE_ARCHIVE_OBJECT_URL,
+      objectUrl,
+    });
+  } catch (_error) {
+    // Ignore cleanup failures because the object URL only lives within the extension process.
+  }
+}
+
+async function startOffscreenArchiveBuild(job) {
+  if (!job || typeof job.jobId !== "string") {
+    throw new Error("The archive job could not be initialized.");
+  }
+
+  await ensureOffscreenDocument();
+
+  const completionPromise = new Promise((resolve, reject) => {
+    job.resolve = resolve;
+    job.reject = reject;
+  });
+
+  const response = await chrome.runtime.sendMessage({
+    target: OFFSCREEN_TARGET,
+    type: START_ARCHIVE_BUILD,
+    jobId: job.jobId,
+    items: job.pendingItems.map(serializeArchiveItemForOffscreen),
+    folderImages: job.folderImages,
+  });
+
+  if (!response || !response.ok) {
+    job.resolve = null;
+    job.reject = null;
+    throw new Error((response && response.error) || "Could not start the ZIP archive worker.");
+  }
+
+  return completionPromise;
+}
+
+function serializeArchiveItemForOffscreen(item) {
+  return {
+    key: item && typeof item.key === "string" ? item.key : getItemKey(item || {}),
+    downloadUrl: item && typeof item.downloadUrl === "string" ? item.downloadUrl : "",
+    archivePath: item && typeof item.archivePath === "string" ? item.archivePath : "",
+    createdAt: item && typeof item.createdAt === "string" ? item.createdAt : null,
+    postedAt: item && typeof item.postedAt === "string" ? item.postedAt : null,
+  };
+}
+
+async function requestArchiveAbort(jobId) {
+  if (typeof jobId !== "string" || !jobId) {
+    return;
+  }
+
+  try {
+    await ensureOffscreenDocument();
+    await chrome.runtime.sendMessage({
+      target: OFFSCREEN_TARGET,
+      type: ABORT_ARCHIVE_BUILD,
+      jobId,
+    });
+  } catch (_error) {
+    // Ignore abort transport failures and let the active run settle naturally.
+  }
+}
+
+async function handleOffscreenArchiveStage(message) {
+  if (!activeArchiveJob || activeArchiveJob.jobId !== message.jobId) {
+    return;
+  }
+
+  await setState({
+    message:
+      typeof message.message === "string" && message.message
+        ? message.message
+        : currentState.message,
+  }, { persist: false });
+}
+
+async function handleOffscreenArchiveItemResult(message) {
+  if (!activeArchiveJob || activeArchiveJob.jobId !== message.jobId) {
+    return;
+  }
+
+  const item = takeActiveArchivePendingItem(message.itemKey);
+  if (!item) {
+    return;
+  }
+
+  if (message.success) {
+    activeArchiveJob.successfulItems.push(item);
+  } else {
+    activeArchiveJob.failedItems.push(
+      createQueueSnapshotItem(
+        item,
+        typeof message.error === "string" && message.error
+          ? message.error
+          : "Could not add the item to the ZIP archive.",
+      ),
+    );
+  }
+
+  const completed = activeArchiveJob.successfulItems.length;
+  const failedCount = activeArchiveJob.failedItems.length;
+  const pendingCount = activeArchiveJob.pendingItems.length;
+  const shouldPersistProgress = shouldPersistDownloadProgress(completed, failedCount, pendingCount);
+
+  await setState({
+    completed,
+    failed: failedCount,
+    failedItems: [...activeArchiveJob.failedItems],
+    queued: pendingCount,
+    pendingItems: createQueueSnapshots(activeArchiveJob.pendingItems),
+    currentSource: item.sourcePage,
+    lastError:
+      message.success || !(typeof message.error === "string")
+        ? ""
+        : message.error,
+    message: message.success
+      ? `Packed ${completed + failedCount} of ${activeArchiveJob.total} into the ZIP archive...`
+      : `Skipped ${item.filename}`,
+  }, {
+    persist: shouldPersistProgress,
+  });
+}
+
+async function handleOffscreenArchiveComplete(message) {
+  if (
+    !activeArchiveJob ||
+    activeArchiveJob.jobId !== message.jobId ||
+    typeof activeArchiveJob.resolve !== "function"
+  ) {
+    return;
+  }
+
+  const resolve = activeArchiveJob.resolve;
+  activeArchiveJob.resolve = null;
+  activeArchiveJob.reject = null;
+  resolve({
+    objectUrl:
+      typeof message.objectUrl === "string" && message.objectUrl ? message.objectUrl : null,
+    sizeBytes: Number(message.sizeBytes) || 0,
+  });
+}
+
+async function handleOffscreenArchiveError(message) {
+  if (
+    !activeArchiveJob ||
+    activeArchiveJob.jobId !== message.jobId ||
+    typeof activeArchiveJob.reject !== "function"
+  ) {
+    return;
+  }
+
+  const reject = activeArchiveJob.reject;
+  activeArchiveJob.resolve = null;
+  activeArchiveJob.reject = null;
+  reject(
+    message && message.aborted
+      ? createControlError("abort", (message && message.error) || "The ZIP archive was canceled.")
+      : new Error((message && message.error) || "Could not build the ZIP archive."),
+  );
+}
+
+function takeActiveArchivePendingItem(itemKey) {
+  if (!activeArchiveJob || typeof itemKey !== "string" || !itemKey) {
+    return null;
+  }
+
+  const itemIndex = activeArchiveJob.pendingItems.findIndex(
+    (candidate) => (candidate.key || getItemKey(candidate)) === itemKey,
+  );
+  if (itemIndex === -1) {
+    return null;
+  }
+
+  const [item] = activeArchiveJob.pendingItems.splice(itemIndex, 1);
+  return item;
+}
+
+async function refreshArchiveItemUrl(itemKey) {
+  if (typeof itemKey !== "string" || !itemKey) {
+    throw new Error("A valid archive item key is required.");
+  }
+
+  const activeItem =
+    activeArchiveJob && activeArchiveJob.itemsByKey instanceof Map
+      ? activeArchiveJob.itemsByKey.get(itemKey)
+      : null;
+  const currentItem =
+    activeItem ||
+    normalizeCatalogItems(currentState.items).find((item) => (item.key || getItemKey(item)) === itemKey);
+
+  if (!currentItem) {
+    throw new Error("The archive item could not be found.");
+  }
+
+  const refreshedItem = applyTitleOverride(
+    {
+      ...currentItem,
+      ...(await refreshDownloadUrl(currentItem)),
+      key: itemKey,
+      archivePath: activeItem && typeof activeItem.archivePath === "string" ? activeItem.archivePath : undefined,
+    },
+    currentState.titleOverrides,
+  );
+
+  if (activeArchiveJob && activeArchiveJob.itemsByKey instanceof Map) {
+    const previousItem = activeArchiveJob.itemsByKey.get(itemKey);
+    const nextItem = {
+      ...(previousItem || currentItem),
+      ...refreshedItem,
+      archivePath:
+        previousItem && typeof previousItem.archivePath === "string"
+          ? previousItem.archivePath
+          : refreshedItem.archivePath,
+    };
+    activeArchiveJob.itemsByKey.set(itemKey, nextItem);
+    activeArchiveJob.pendingItems = activeArchiveJob.pendingItems.map((item) =>
+      (item.key || getItemKey(item)) === itemKey
+        ? {
+            ...item,
+            ...nextItem,
+            archivePath: item.archivePath,
+          }
+        : item,
+    );
+  }
+
+  return {
+    downloadUrl: refreshedItem.downloadUrl,
+  };
+}
+
 function isFetchAbortRequested() {
   return currentState.phase === "fetching" && requestedControlAction === "abort";
 }
@@ -1748,11 +2289,17 @@ function normalizeCharacterAccounts(value) {
     }));
 }
 
-function normalizeSelectedCharacterAccountIds(characterAccounts, requestedIds, fallbackIds = null) {
+function normalizeSelectedCharacterAccountIds(
+  characterAccounts,
+  requestedIds,
+  fallbackIds = null,
+  options = {},
+) {
   const validIds = new Set(
     normalizeCharacterAccounts(characterAccounts).map((account) => account.userId),
   );
   const selected = [];
+  const allowEmpty = options && options.allowEmpty === true;
 
   for (const value of Array.isArray(requestedIds) ? requestedIds : []) {
     if (typeof value !== "string" || !validIds.has(value) || selected.includes(value)) {
@@ -1765,8 +2312,12 @@ function normalizeSelectedCharacterAccountIds(characterAccounts, requestedIds, f
     return selected;
   }
 
+  if (allowEmpty && Array.isArray(requestedIds)) {
+    return [];
+  }
+
   if (Array.isArray(fallbackIds) && fallbackIds.length) {
-    return normalizeSelectedCharacterAccountIds(characterAccounts, fallbackIds, []);
+    return normalizeSelectedCharacterAccountIds(characterAccounts, fallbackIds, [], options);
   }
 
   return [...validIds];
@@ -1782,12 +2333,16 @@ async function ensureCharacterAccountsLoaded(force = false) {
   const selectedCharacterAccountIds = normalizeSelectedCharacterAccountIds(
     fetchedAccounts,
     currentState.selectedCharacterAccountIds,
-    fetchedAccounts.map((account) => account.userId),
+    [],
+    {
+      allowEmpty: true,
+    },
   );
 
   await setState({
     characterAccounts: fetchedAccounts,
     selectedCharacterAccountIds,
+    hasExplicitCharacterAccountSelection: true,
   });
 
   return fetchedAccounts;
@@ -1801,12 +2356,16 @@ async function setSelectedCharacterAccountIds(requestedIds) {
   const selectedCharacterAccountIds = normalizeSelectedCharacterAccountIds(
     characterAccounts,
     requestedIds,
-    currentState.selectedCharacterAccountIds,
+    [],
+    {
+      allowEmpty: true,
+    },
   );
 
   await setState({
     characterAccounts,
     selectedCharacterAccountIds,
+    hasExplicitCharacterAccountSelection: true,
   });
 }
 
@@ -2048,18 +2607,16 @@ async function downloadSelected() {
 
   activeRun = (async () => {
     try {
-      await performDownloadRun(selectedItems, {
-        mode: "selected",
+      await performArchiveDownloadRun(selectedItems, {
+        mode: "archive-selected",
         startingCompleted: 0,
         startingFailedItems: [],
         totalTarget: selectedItems.length,
-        introMessage: `Starting ${selectedItems.length} selected download(s)...`,
-        progressMessage: (completed, total) => `Downloaded ${completed} of ${total}`,
-        failureMessage: (item) => `Failed to download ${item.filename}`,
+        introMessage: `Building a ZIP archive for ${selectedItems.length} selected item(s)...`,
         completionMessage: (completed, failed) =>
           failed === 0
-            ? `Finished downloading ${completed} item(s).`
-            : `Finished with ${completed} success(es) and ${failed} failure(s).`,
+            ? `Saved a ZIP archive with ${completed} item(s).`
+            : `Saved a ZIP archive with ${completed} item(s) and ${failed} skipped item(s).`,
       });
     } finally {
       await cleanupHiddenTab();
@@ -2095,28 +2652,26 @@ async function beginSelectedDownload() {
     failed: 0,
     failedItems: [],
     pendingItems: createQueueSnapshots(selectedItems),
-    runMode: "selected",
+    runMode: "archive-selected",
     runTotal: selectedItems.length,
     lastError: "",
     finishedAt: null,
-    message: `Starting ${selectedItems.length} selected download(s)...`,
+    message: `Building a ZIP archive for ${selectedItems.length} selected item(s)...`,
   });
 
   activeRun = (async () => {
     try {
-      await performDownloadRun(selectedItems, {
-        mode: "selected",
+      await performArchiveDownloadRun(selectedItems, {
+        mode: "archive-selected",
         startingCompleted: 0,
         startingFailedItems: [],
         totalTarget: selectedItems.length,
         initialStateApplied: true,
-        introMessage: `Starting ${selectedItems.length} selected download(s)...`,
-        progressMessage: (completed, total) => `Downloaded ${completed} of ${total}`,
-        failureMessage: (item) => `Failed to download ${item.filename}`,
+        introMessage: `Building a ZIP archive for ${selectedItems.length} selected item(s)...`,
         completionMessage: (completed, failed) =>
           failed === 0
-            ? `Finished downloading ${completed} item(s).`
-            : `Finished with ${completed} success(es) and ${failed} failure(s).`,
+            ? `Saved a ZIP archive with ${completed} item(s).`
+            : `Saved a ZIP archive with ${completed} item(s) and ${failed} skipped item(s).`,
       });
     } finally {
       await cleanupHiddenTab();
@@ -2209,18 +2764,16 @@ async function retryFailed() {
 
   activeRun = (async () => {
     try {
-      await performDownloadRun(retryItems, {
-        mode: "retry",
+      await performArchiveDownloadRun(retryItems, {
+        mode: "archive-retry",
         startingCompleted: Number(currentState.completed) || 0,
         startingFailedItems: [],
         totalTarget: retryItems.length,
-        introMessage: `Retrying ${retryItems.length} failed download(s)...`,
-        progressMessage: (_completed, _total, item) => `Recovered ${item.filename}`,
-        failureMessage: (item) => `Retry failed for ${item.filename}`,
+        introMessage: `Rebuilding a ZIP archive for ${retryItems.length} failed item(s)...`,
         completionMessage: (_completed, failed) =>
           failed === 0
-            ? "All failed downloads were recovered."
-            : `Retry finished with ${failed} remaining failure(s).`,
+            ? "Saved a recovery ZIP archive for all failed items."
+            : `Saved a recovery ZIP archive with ${failed} remaining failure(s).`,
       });
     } finally {
       await cleanupHiddenTab();
@@ -2245,8 +2798,14 @@ async function requestRunControl(action) {
     message:
       action === "pause"
         ? "Pausing the active download..."
-        : "Aborting the active download...",
+        : currentState.runMode === "archive-selected" || currentState.runMode === "archive-retry"
+          ? "Stopping the active ZIP archive..."
+          : "Aborting the active download...",
   }, { persist: false });
+
+  if (action === "abort" && activeArchiveJob && typeof activeArchiveJob.jobId === "string") {
+    await requestArchiveAbort(activeArchiveJob.jobId);
+  }
 
   if (typeof activeDownloadId === "number") {
     try {
@@ -2271,6 +2830,145 @@ async function abortPausedDownloads() {
     runTotal: 0,
     finishedAt: new Date().toISOString(),
   });
+}
+
+async function performArchiveDownloadRun(downloadItems, options) {
+  const archiveJob = createArchiveJobContext(downloadItems, options);
+  const total = archiveJob.total;
+
+  requestedControlAction = null;
+
+  if (!(options && options.initialStateApplied)) {
+    await setState({
+      phase: "downloading",
+      currentSource: null,
+      queued: archiveJob.pendingItems.length,
+      completed: 0,
+      failed: 0,
+      failedItems: [],
+      pendingItems: createQueueSnapshots(archiveJob.pendingItems),
+      runMode: (options && options.mode) || "archive-selected",
+      runTotal: total,
+      lastError: "",
+      finishedAt: null,
+      message:
+        (options && options.introMessage) || `Building a ZIP archive for ${total} item(s)...`,
+    });
+  }
+
+  activeArchiveJob = archiveJob;
+
+  try {
+    const archiveResult = await startOffscreenArchiveBuild(archiveJob);
+    if (!archiveResult || typeof archiveResult.objectUrl !== "string" || !archiveResult.objectUrl) {
+      throw new Error("The ZIP archive worker did not return a downloadable file.");
+    }
+
+    await setState({
+      currentSource: null,
+      queued: 0,
+      pendingItems: [],
+      message: `Saving ${archiveJob.archiveFilename}...`,
+    }, { persist: false });
+
+    try {
+      await startDownloadAndWait({
+        downloadUrl: archiveResult.objectUrl,
+        filename: archiveJob.archiveFilename,
+      });
+    } finally {
+      await releaseOffscreenArchiveObjectUrl(archiveResult.objectUrl);
+    }
+
+    const successfulKeys = archiveJob.successfulItems.map((item) => item.key || getItemKey(item));
+    let nextItems = currentState.items;
+    let nextSelectedKeys = currentState.selectedKeys;
+
+    if (successfulKeys.length > 0) {
+      const downloadedState = applyDownloadedState(
+        currentState.items,
+        currentState.selectedKeys,
+        successfulKeys,
+        true,
+      );
+      nextItems = downloadedState.nextItems;
+      nextSelectedKeys = downloadedState.nextSelectedKeys;
+
+      await applyCatalogItemMutation(
+        successfulKeys,
+        (catalogItem) => ({
+          ...catalogItem,
+          isDownloaded: true,
+        }),
+      );
+    }
+
+    const completed = archiveJob.successfulItems.length;
+    const failureCount = archiveJob.failedItems.length;
+    const summary =
+      options && typeof options.completionMessage === "function"
+        ? options.completionMessage(completed, failureCount)
+        : failureCount === 0
+          ? `Saved a ZIP archive with ${completed} item(s).`
+          : `Saved a ZIP archive with ${completed} item(s) and ${failureCount} skipped item(s).`;
+
+    await setState({
+      phase: "complete",
+      items: nextItems,
+      selectedKeys: nextSelectedKeys,
+      message: summary,
+      currentSource: null,
+      queued: 0,
+      completed,
+      failed: failureCount,
+      failedItems: [...archiveJob.failedItems],
+      pendingItems: [],
+      runMode: (options && options.mode) || "archive-selected",
+      runTotal: 0,
+      finishedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    if (isControlError(error, "abort")) {
+      requestedControlAction = null;
+      const selectedCount = normalizeSelectedKeys(currentState.items, currentState.selectedKeys).length;
+      await setState({
+        phase: currentState.items.length ? "ready" : "complete",
+        currentSource: null,
+        queued: selectedCount,
+        completed: 0,
+        failed: archiveJob.failedItems.length,
+        failedItems: [...archiveJob.failedItems],
+        pendingItems: [],
+        runMode: (options && options.mode) || "archive-selected",
+        runTotal: 0,
+        message: "The ZIP archive was aborted.",
+        finishedAt: new Date().toISOString(),
+      });
+      return;
+    }
+
+    const message = getErrorMessage(error);
+    const selectedCount = normalizeSelectedKeys(currentState.items, currentState.selectedKeys).length;
+
+    await setState({
+      phase: currentState.items.length ? "ready" : "error",
+      currentSource: null,
+      queued: selectedCount,
+      completed: 0,
+      failed: archiveJob.failedItems.length,
+      failedItems: [...archiveJob.failedItems],
+      pendingItems: [],
+      runMode: (options && options.mode) || "archive-selected",
+      runTotal: 0,
+      lastError: message,
+      message,
+      finishedAt: new Date().toISOString(),
+    });
+    return;
+  } finally {
+    activeArchiveJob = null;
+    await closeOffscreenDocumentIfPresent();
+  }
 }
 
 async function performDownloadRun(downloadItems, options) {
@@ -3205,6 +3903,8 @@ function appendCharacterAccountContext(item, characterAccount) {
     characterAccountId: characterAccount.userId,
     characterAccountUsername: characterAccount.username,
     characterAccountDisplayName: characterAccount.displayName,
+    characterAccountProfilePictureUrl:
+      typeof characterAccount.profilePictureUrl === "string" ? characterAccount.profilePictureUrl : null,
     metadataEntries,
   };
 }
@@ -3342,6 +4042,10 @@ async function fetchAllCharacterItems(options = {}) {
   const selectedCharacterAccountIds = normalizeSelectedCharacterAccountIds(
     normalizedCharacterAccounts,
     options.selectedCharacterAccountIds,
+    [],
+    {
+      allowEmpty: true,
+    },
   );
   const selectedCharacterAccounts = normalizedCharacterAccounts.filter((account) =>
     selectedCharacterAccountIds.includes(account.userId),
@@ -4270,6 +4974,77 @@ function injectedFetchSource(config) {
       return null;
     }
 
+    let sessionUserProfilePromise = null;
+
+    async function getSessionUserProfile() {
+      if (!sessionUserProfilePromise) {
+        sessionUserProfilePromise = (async () => {
+          const sessionUrls = ["/api/auth/session", "/auth/session"];
+
+          for (const url of sessionUrls) {
+            try {
+              const response = await fetch(url, {
+                credentials: "include",
+                headers: {
+                  accept: "application/json, text/plain, */*",
+                },
+              });
+
+              if (!response.ok) {
+                continue;
+              }
+
+              const payload = await response.json();
+              const user =
+                payload && payload.user && typeof payload.user === "object"
+                  ? payload.user
+                  : payload && typeof payload === "object"
+                    ? payload
+                    : null;
+
+              if (!user) {
+                continue;
+              }
+
+              const profile = {
+                displayName: pickFirstString([
+                  user.display_name,
+                  user.displayName,
+                  user.name,
+                  user.full_name,
+                  user.fullName,
+                ]),
+                username: pickFirstString([
+                  user.username,
+                  user.user_name,
+                  user.userName,
+                  user.handle,
+                ]),
+                profilePictureUrl: pickFirstString([
+                  user.image,
+                  user.picture,
+                  user.profile_picture_url,
+                  user.profilePictureUrl,
+                  user.avatar_url,
+                  user.avatarUrl,
+                ]),
+              };
+
+              if (profile.displayName || profile.username || profile.profilePictureUrl) {
+                return profile;
+              }
+            } catch (_error) {
+              // Ignore transient session endpoint failures and keep looking.
+            }
+          }
+
+          return null;
+        })();
+      }
+
+      return sessionUserProfilePromise;
+    }
+
     function pickFirstArray(candidates) {
       for (const candidate of candidates) {
         if (Array.isArray(candidate) && candidate.length) {
@@ -4302,6 +5077,132 @@ function injectedFetchSource(config) {
           ? value.encodings.thumbnail.path
           : null,
       ]);
+    }
+
+    function getCreatorCandidates(value) {
+      if (!value || typeof value !== "object") {
+        return [];
+      }
+
+      const candidates = [];
+
+      function appendCandidate(candidate) {
+        if (candidate && typeof candidate === "object") {
+          candidates.push(candidate);
+        }
+      }
+
+      function appendNestedCandidates(source) {
+        if (!source || typeof source !== "object") {
+          return;
+        }
+
+        appendCandidate(source.user);
+        appendCandidate(source.owner);
+        appendCandidate(source.author);
+        appendCandidate(source.creator);
+        appendCandidate(source.account);
+        appendCandidate(source.profile);
+        appendCandidate(source.profile_owner);
+        appendCandidate(source.profileOwner);
+        appendCandidate(source.actor);
+      }
+
+      appendNestedCandidates(value);
+      appendNestedCandidates(value.post);
+      appendNestedCandidates(value.draft);
+      appendNestedCandidates(value.item);
+      appendNestedCandidates(value.data);
+      appendNestedCandidates(value.output);
+
+      return candidates;
+    }
+
+    function getProfilePictureUrl(value) {
+      if (!value || typeof value !== "object") {
+        return null;
+      }
+
+      return pickFirstString([
+        value.profile_picture_url,
+        value.profilePictureUrl,
+        value.profile_image_url,
+        value.profileImageUrl,
+        value.avatar_url,
+        value.avatarUrl,
+        value.picture,
+        value.image,
+      ]);
+    }
+
+    function getCreatorDisplayName(value) {
+      for (const candidate of getCreatorCandidates(value)) {
+        const displayName = pickFirstString([
+          candidate.display_name,
+          candidate.displayName,
+          candidate.full_name,
+          candidate.fullName,
+          candidate.name,
+          candidate.username,
+        ]);
+        if (displayName) {
+          return displayName;
+        }
+      }
+
+      return null;
+    }
+
+    function getCreatorUsername(value) {
+      for (const candidate of getCreatorCandidates(value)) {
+        const username = pickFirstString([
+          candidate.username,
+          candidate.user_name,
+          candidate.userName,
+          candidate.handle,
+        ]);
+        if (username) {
+          return username;
+        }
+      }
+
+      return null;
+    }
+
+    function getCreatorProfilePictureUrl(value) {
+      for (const candidate of getCreatorCandidates(value)) {
+        const profilePictureUrl = getProfilePictureUrl(candidate);
+        if (profilePictureUrl) {
+          return profilePictureUrl;
+        }
+      }
+
+      return null;
+    }
+
+    function applySessionProfileFallback(result, sessionProfile) {
+      if (!result || !sessionProfile) {
+        return result;
+      }
+
+      return {
+        ...result,
+        items: (Array.isArray(result.items) ? result.items : []).map((item) => ({
+          ...item,
+          creatorDisplayName:
+            item && typeof item.creatorDisplayName === "string" && item.creatorDisplayName
+              ? item.creatorDisplayName
+              : sessionProfile.displayName || null,
+          creatorUsername:
+            item && typeof item.creatorUsername === "string" && item.creatorUsername
+              ? item.creatorUsername
+              : sessionProfile.username || null,
+          creatorProfilePictureUrl:
+            item && typeof item.creatorProfilePictureUrl === "string" && item.creatorProfilePictureUrl
+              ? item.creatorProfilePictureUrl
+              : sessionProfile.profilePictureUrl || null,
+        })),
+      };
     }
 
     function getDurationSeconds(value) {
@@ -4608,6 +5509,18 @@ function injectedFetchSource(config) {
               getThumbnailUrl(attachment) ||
               getThumbnailUrl(post) ||
               null,
+            creatorDisplayName:
+              getCreatorDisplayName(row) ||
+              getCreatorDisplayName(post) ||
+              null,
+            creatorUsername:
+              getCreatorUsername(row) ||
+              getCreatorUsername(post) ||
+              null,
+            creatorProfilePictureUrl:
+              getCreatorProfilePictureUrl(row) ||
+              getCreatorProfilePictureUrl(post) ||
+              null,
             prompt:
               (typeof post.text === "string" && post.text) ||
               (typeof attachment.prompt === "string" && attachment.prompt) ||
@@ -4656,6 +5569,14 @@ function injectedFetchSource(config) {
               { label: "Output Blocked", value: pickFirstBoolean([attachment.output_blocked]) },
               { label: "Can Create Cameo", value: pickFirstBoolean([attachment.can_create_character]) },
               {
+                label: "Creator",
+                value: getCreatorDisplayName(row) || getCreatorDisplayName(post),
+              },
+              {
+                label: "Creator Username",
+                value: getCreatorUsername(row) || getCreatorUsername(post),
+              },
+              {
                 label: "Share Setting",
                 value: post.permissions && typeof post.permissions.share_setting === "string"
                   ? post.permissions.share_setting
@@ -4664,6 +5585,11 @@ function injectedFetchSource(config) {
               { label: "Detail URL", value: post.permalink, type: "link" },
               { label: "Download URL", value: downloadUrl, type: "link" },
               { label: "Thumbnail URL", value: getThumbnailUrl(attachment) || getThumbnailUrl(post), type: "link" },
+              {
+                label: "Creator Profile Image",
+                value: getCreatorProfilePictureUrl(row) || getCreatorProfilePictureUrl(post),
+                type: "link",
+              },
               { label: "SRT URL", value: post.srt_url, type: "link" },
               { label: "VTT URL", value: post.vtt_url, type: "link" },
             ]),
@@ -4881,6 +5807,9 @@ function injectedFetchSource(config) {
           downloadUrl,
           filename: buildFilename(preferredTitle, 0, 1),
           thumbnailUrl,
+          creatorDisplayName: getCreatorDisplayName(row) || null,
+          creatorUsername: getCreatorUsername(row) || null,
+          creatorProfilePictureUrl: getCreatorProfilePictureUrl(row) || null,
           prompt:
             (typeof row.prompt === "string" && row.prompt) ||
             (row.draft && typeof row.draft.prompt === "string" ? row.draft.prompt : null) ||
@@ -4922,11 +5851,18 @@ function injectedFetchSource(config) {
             { label: "Discovery Phrase", value: discoveryPhrase },
             { label: "Has Captions", value: hasCaptions },
             { label: "Output Blocked", value: outputBlocked },
+            { label: "Creator", value: getCreatorDisplayName(row) },
+            { label: "Creator Username", value: getCreatorUsername(row) },
             { label: "Detail URL", value: detailUrl, type: "link" },
             { label: "Download URL", value: downloadUrl, type: "link" },
             { label: "Thumbnail URL", value: thumbnailUrl, type: "link" },
+            {
+              label: "Creator Profile Image",
+              value: getCreatorProfilePictureUrl(row),
+              type: "link",
+            },
           ]),
-      });
+        });
     }
 
       return {
@@ -5003,7 +5939,10 @@ function injectedFetchSource(config) {
           url.searchParams.set("cursor", options.cursor);
         }
         const payload = await fetchJson(url.toString());
-        return normalizeProfileResponse(payload);
+        return applySessionProfileFallback(
+          normalizeProfileResponse(payload),
+          await getSessionUserProfile(),
+        );
       }
 
       if (source === "drafts") {
@@ -5017,10 +5956,13 @@ function injectedFetchSource(config) {
           url.searchParams.set("offset", String(Math.floor(Number(options.offset))));
         }
         const payload = await fetchJson(url);
-        return normalizeDraftResponse(payload, {
-          sourcePage: "drafts",
-          sourceLabel: "Draft",
-        });
+        return applySessionProfileFallback(
+          normalizeDraftResponse(payload, {
+            sourcePage: "drafts",
+            sourceLabel: "Draft",
+          }),
+          await getSessionUserProfile(),
+        );
       }
 
       if (source === "likes") {

@@ -25,6 +25,8 @@ export function updateDownloadOverlay(state) {
   }
 
   const phase = state && state.phase ? state.phase : "idle";
+  const runMode = state && typeof state.runMode === "string" ? state.runMode : "";
+  const isArchiveRun = runMode.startsWith("archive");
   const runTotal = Math.max(0, Number(state && state.runTotal) || 0);
   const completed = Math.max(0, Number(state && state.completed) || 0);
   const failed = Math.max(0, Number(state && state.failed) || 0);
@@ -52,9 +54,12 @@ export function updateDownloadOverlay(state) {
 
   if (popupState.pendingDownloadStart && phase !== "downloading") {
     dom.downloadOverlayThanks.classList.add("hidden");
-    dom.downloadOverlayTitle.textContent = "Preparing downloads...";
+    dom.downloadOverlayTitle.textContent = isArchiveRun ? "Preparing ZIP archive..." : "Preparing downloads...";
     dom.downloadOverlayStatus.textContent =
-      (state && state.message) || "Saving your latest changes and building the queue.";
+      (state && state.message) ||
+      (isArchiveRun
+        ? "Saving your latest changes and preparing the ZIP archive."
+        : "Saving your latest changes and building the queue.");
     dom.downloadOverlayCount.textContent = runTotal > 0 ? `0 / ${runTotal}` : "Preparing";
     dom.downloadOverlayPercent.textContent = "0%";
     dom.downloadOverlayFill.style.width = "0%";
@@ -67,7 +72,7 @@ export function updateDownloadOverlay(state) {
 
   if (phase === "downloading") {
     dom.downloadOverlayThanks.classList.add("hidden");
-    dom.downloadOverlayTitle.textContent = "Downloading videos";
+    dom.downloadOverlayTitle.textContent = isArchiveRun ? "Building ZIP archive" : "Downloading videos";
     dom.downloadOverlayStatus.textContent =
       (state && state.message) || "Working through your selected videos...";
     dom.downloadOverlayCount.textContent = `${processed} / ${runTotal || processed}`;
@@ -82,13 +87,23 @@ export function updateDownloadOverlay(state) {
 
   const settledPercent = phase === "complete" || phase === "ready" ? 100 : percent;
   const settledProcessed = runTotal || processed;
+  const settledMessage = (state && state.message) || "Your library has been updated.";
+  const wasCanceled = /abort|cancel/i.test(settledMessage);
   dom.downloadOverlayThanks.classList.toggle(
     "hidden",
     !(phase === "complete" || phase === "ready"),
   );
-  dom.downloadOverlayTitle.textContent = phase === "paused" ? "Downloads paused" : "Downloads finished";
-  dom.downloadOverlayStatus.textContent =
-    (state && state.message) || "Your library has been updated.";
+  dom.downloadOverlayTitle.textContent =
+    phase === "paused"
+      ? "Downloads paused"
+      : wasCanceled
+        ? isArchiveRun
+          ? "ZIP archive canceled"
+          : "Downloads canceled"
+      : isArchiveRun
+        ? "ZIP archive finished"
+        : "Downloads finished";
+  dom.downloadOverlayStatus.textContent = settledMessage;
   dom.downloadOverlayCount.textContent = `${settledProcessed} / ${runTotal || settledProcessed}`;
   dom.downloadOverlayPercent.textContent = `${settledPercent}%`;
   dom.downloadOverlayFill.style.width = `${settledPercent}%`;

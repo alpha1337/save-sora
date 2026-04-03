@@ -1,9 +1,11 @@
 import { dom } from "../../dom.js";
+import { popupState } from "../../state.js";
 import {
   applyCurrentSelectionUi,
   getItemCheckboxesWithOptions,
   getSelectedKeysFromDom,
 } from "../selection.js";
+import { isCharacterSelectionScreenVisible } from "../character-selection.js";
 
 /**
  * Updates the primary button states after a render.
@@ -37,16 +39,30 @@ export function syncPrimaryControls({ isBusy, isPaused, isFetching, hasResults }
 
   applyCurrentSelectionUi();
 
+  const isCharacterSelectionVisible = isCharacterSelectionScreenVisible();
+  const characterCount = Array.isArray(popupState.characterAccounts)
+    ? popupState.characterAccounts.length
+    : 0;
+  const selectedCharacterCount = Array.isArray(popupState.selectedCharacterAccountIds)
+    ? popupState.selectedCharacterAccountIds.length
+    : 0;
+
   if (dom.selectAllButton) {
     dom.selectAllButton.disabled =
-      isBusy ||
-      isPaused ||
-      getItemCheckboxesWithOptions({ visibleOnly: true, enabledOnly: true }).length === 0;
+      isBusy || isPaused || (
+        isCharacterSelectionVisible
+          ? characterCount === 0 || selectedCharacterCount === characterCount
+          : getItemCheckboxesWithOptions({ visibleOnly: true, enabledOnly: true }).length === 0
+      );
   }
 
   if (dom.clearSelectionButton) {
     dom.clearSelectionButton.disabled =
-      isBusy || isPaused || getSelectedKeysFromDom({ visibleOnly: true }).length === 0;
+      isBusy || isPaused || (
+        isCharacterSelectionVisible
+          ? selectedCharacterCount === 0
+          : getSelectedKeysFromDom({ visibleOnly: true }).length === 0
+      );
   }
 }
 

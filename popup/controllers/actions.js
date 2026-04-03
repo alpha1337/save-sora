@@ -18,9 +18,14 @@ import { updateDownloadOverlay } from "../ui/overlay.js";
 import { getItemCheckboxesWithOptions, getSelectedKeysFromDom } from "../ui/selection.js";
 import { getSelectedSourceValues } from "../utils/settings.js";
 import { refreshStatus } from "./polling.js";
-import { closeAllSourceMenus } from "./source-menus.js";
+import {
+  clearCharacterAccountsSelection,
+  closeAllSourceMenus,
+  selectAllCharacterAccounts,
+} from "./source-menus.js";
 import { updateSelectionFromDom } from "./selection-sync.js";
 import { flushPendingTitleSaves } from "./title-edits.js";
+import { isCharacterSelectionScreenVisible } from "../ui/character-selection.js";
 
 /**
  * Handles the main fetch/reset form submission.
@@ -68,7 +73,8 @@ export async function handleDownloadButtonClick() {
   const selectedCount = getSelectedKeysFromDom().length;
   updateDownloadOverlay({
     phase: "preparing-download",
-    message: "Saving your latest titles and preparing the download queue...",
+    runMode: "archive-selected",
+    message: "Saving your latest titles and preparing the ZIP archive...",
     runTotal: selectedCount,
     completed: 0,
     failed: 0,
@@ -174,6 +180,11 @@ export async function handleFetchProgressActionClick() {
  * Selects every visible, enabled item.
  */
 export async function handleSelectAllClick() {
+  if (isCharacterSelectionScreenVisible()) {
+    await selectAllCharacterAccounts();
+    return;
+  }
+
   const checkboxes = getItemCheckboxesWithOptions({ visibleOnly: true, enabledOnly: true });
   for (const checkbox of checkboxes) {
     checkbox.checked = true;
@@ -186,6 +197,11 @@ export async function handleSelectAllClick() {
  * Clears every visible selection.
  */
 export async function handleClearSelectionClick() {
+  if (isCharacterSelectionScreenVisible()) {
+    await clearCharacterAccountsSelection();
+    return;
+  }
+
   const checkboxes = getItemCheckboxesWithOptions({ visibleOnly: true });
   for (const checkbox of checkboxes) {
     checkbox.checked = false;
