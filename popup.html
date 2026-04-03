@@ -27,7 +27,7 @@
           <div class="brand-main">
             <img class="app-icon" src="assets/icon-128.png" alt="" />
             <div class="topbar-copy">
-              <p class="eyebrow">"Save Sora" v1.4.1</p>
+              <p id="app-version-label" class="eyebrow">"Save Sora"</p>
               <h1>Sora Bulk Downloader</h1>
               <p class="subhead">Fetch your videos, rename what matters, and only download the ones you actually want.</p>
             </div>
@@ -103,6 +103,10 @@
                           <input type="checkbox" value="characters" data-source-group="overview" />
                           <span>Cameos</span>
                         </label>
+                        <label class="multi-select-option">
+                          <input type="checkbox" value="characterAccounts" data-source-group="overview" />
+                          <span>Characters</span>
+                        </label>
                       </div>
                     </div>
                   </div>
@@ -151,7 +155,7 @@
             <section class="panel picker-panel">
               <div class="picker-header">
                 <div class="picker-copy">
-                  <span class="label">Search Results</span>
+                  <span id="picker-panel-label" class="label">Search Results</span>
                   <p id="selection-summary" class="picker-summary">Content Violation?</p>
                 </div>
                 <div class="picker-header-actions">
@@ -165,6 +169,7 @@
               </div>
 
               <div id="picker-scroll-region" class="picker-scroll-region">
+                <div id="character-selection-grid" class="character-selection-grid hidden" aria-live="polite"></div>
                 <div id="empty-state" class="empty-state" aria-hidden="true">
                   <img
                     class="empty-state-image"
@@ -238,6 +243,10 @@
                     <label class="multi-select-option">
                       <input type="checkbox" value="characters" data-source-group="settings" />
                       <span>Cameos</span>
+                    </label>
+                    <label class="multi-select-option">
+                      <input type="checkbox" value="characterAccounts" data-source-group="settings" />
+                      <span>Characters</span>
                     </label>
                   </div>
                 </div>

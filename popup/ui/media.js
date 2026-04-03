@@ -185,8 +185,10 @@ function createThumbnailFallback(item) {
       ? "Draft"
       : item.sourcePage === "likes"
         ? "Liked"
-        : item.sourcePage === "characters"
+        : item.sourcePage === "cameos"
           ? "Cameo"
+        : item.sourcePage === "characters"
+          ? "Character"
           : "Published";
   return fallback;
 }

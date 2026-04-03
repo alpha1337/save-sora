@@ -13,6 +13,8 @@ import { renderItemsList } from "./list/index.js";
 import { startFetchStatusRotation, stopFetchStatusRotation } from "./render/fetch-status.js";
 import { syncPrimaryControls } from "./render/primary-controls.js";
 import { syncSettingsInputs } from "./render/settings-sync.js";
+import { syncCharacterMenu } from "../controllers/source-menus.js";
+import { syncCharacterSelectionScreen } from "./character-selection.js";
 
 /**
  * Top-level renderer that maps background state onto popup UI.
@@ -22,6 +24,16 @@ import { syncSettingsInputs } from "./render/settings-sync.js";
  * Re-renders the list using the current cached popup state.
  */
 export function renderCurrentItems() {
+  syncCharacterMenu();
+  if (
+    syncCharacterSelectionScreen(
+      popupState.latestRenderState.phase,
+      popupState.latestRenderState.items,
+    )
+  ) {
+    return;
+  }
+
   renderItemsList(
     popupState.latestRenderState.items,
     popupState.latestRenderState.selectedKeys,
@@ -105,6 +117,12 @@ export function renderState(state) {
 
   popupState.latestBusy = isBusy;
   popupState.latestPaused = isPaused;
+  popupState.characterAccounts = Array.isArray(state && state.characterAccounts)
+    ? state.characterAccounts
+    : [];
+  popupState.selectedCharacterAccountIds = Array.isArray(state && state.selectedCharacterAccountIds)
+    ? state.selectedCharacterAccountIds
+    : [];
   popupState.latestRenderState = {
     items,
     selectedKeys,

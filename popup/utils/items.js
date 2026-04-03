@@ -87,7 +87,8 @@ export function getItemReviewUrl(item) {
   const shouldUseDraftFallback =
     item &&
     (item.sourcePage === "drafts" ||
-      (item.sourcePage === "characters" && item.sourceType === "draft"));
+      ((item.sourcePage === "cameos" || item.sourcePage === "characters") &&
+        item.sourceType === "draft"));
 
   if (shouldUseDraftFallback) {
     if (itemId.startsWith("s_")) {
@@ -109,7 +110,10 @@ export function getItemReviewUrl(item) {
 
   if (
     item &&
-    (item.sourcePage === "profile" || item.sourcePage === "likes" || item.sourcePage === "characters") &&
+    (item.sourcePage === "profile" ||
+      item.sourcePage === "likes" ||
+      item.sourcePage === "cameos" ||
+      item.sourcePage === "characters") &&
     itemId
   ) {
     return `https://sora.chatgpt.com/p/${itemId}`;

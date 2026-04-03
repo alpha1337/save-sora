@@ -7,15 +7,20 @@ const PROFILE_LIMIT = 100;
 const DRAFT_BATCH_LIMIT = 100;
 const LIKES_BATCH_LIMIT = 100;
 const CHARACTERS_BATCH_LIMIT = 100;
+const CHARACTER_ACCOUNT_LIMIT = 100;
 const DOWNLOAD_PROGRESS_PERSIST_INTERVAL = 25;
-const AVAILABLE_SOURCE_VALUES = ["profile", "drafts", "likes", "characters"];
+const AVAILABLE_SOURCE_VALUES = ["profile", "drafts", "likes", "characters", "characterAccounts"];
 const DEFAULT_SOURCE_VALUES = ["profile", "drafts"];
 const SOURCE_ROUTES = {
   profile: "https://sora.chatgpt.com/profile",
   drafts: "https://sora.chatgpt.com/drafts",
   likes: "https://sora.chatgpt.com/profile",
   characters: "https://sora.chatgpt.com/profile",
+  characterAccounts: "https://sora.chatgpt.com/profile",
   characterDrafts: "https://sora.chatgpt.com/profile",
+  characterProfiles: "https://sora.chatgpt.com/profile",
+  characterAccountPosts: "https://sora.chatgpt.com/profile",
+  characterAccountDrafts: "https://sora.chatgpt.com/profile",
 };
 
 let currentState = createDefaultState();
@@ -165,6 +170,45 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 
+  if (message.type === "LOAD_CHARACTER_ACCOUNTS") {
+    if (activeRun) {
+      sendResponse({ ok: false, error: "Wait until the current fetch or download run finishes." });
+      return false;
+    }
+
+    void ensureCharacterAccountsLoaded(Boolean(message.force))
+      .then((characterAccounts) => {
+        sendResponse({
+          ok: true,
+          characterAccounts,
+          selectedCharacterAccountIds: [...currentState.selectedCharacterAccountIds],
+          state: currentState,
+        });
+      })
+      .catch((error) => {
+        console.error("Failed to load the Sora character accounts.", error);
+        sendResponse({ ok: false, error: getErrorMessage(error) });
+      });
+    return true;
+  }
+
+  if (message.type === "SET_CHARACTER_SELECTION") {
+    if (!Array.isArray(message.selectedCharacterAccountIds)) {
+      sendResponse({ ok: false, error: "The character selection payload must be an array." });
+      return false;
+    }
+
+    void setSelectedCharacterAccountIds(message.selectedCharacterAccountIds)
+      .then(() => {
+        sendResponse({ ok: true, state: currentState });
+      })
+      .catch((error) => {
+        console.error("Failed to update the character selection.", error);
+        sendResponse({ ok: false, error: getErrorMessage(error) });
+      });
+    return true;
+  }
+
   if (message.type === "DOWNLOAD_SELECTED") {
     if (activeRun) {
       sendResponse({ ok: false, error: "A fetch or download run is already in progress." });
@@ -279,7 +323,10 @@ function createDefaultState(overrides = {}) {
     profileIds: [],
     draftIds: [],
     likesIds: [],
+    cameoIds: [],
     characterIds: [],
+    characterAccounts: [],
+    selectedCharacterAccountIds: [],
     items: [],
     selectedKeys: [],
     titleOverrides: {},
@@ -323,6 +370,11 @@ async function restoreState() {
         defaultSort: normalizeDefaultSort(currentState.settings.defaultSort),
         theme: normalizeTheme(currentState.settings.theme),
       };
+      currentState.characterAccounts = normalizeCharacterAccounts(currentState.characterAccounts);
+      currentState.selectedCharacterAccountIds = normalizeSelectedCharacterAccountIds(
+        currentState.characterAccounts,
+        currentState.selectedCharacterAccountIds,
+      );
       currentState.titleOverrides = pruneLegacyTitleOverrides(
         currentState.items,
         currentState.titleOverrides,
@@ -612,6 +664,7 @@ function deriveSourceIdsFromItems(items) {
   const profileIds = new Set();
   const draftIds = new Set();
   const likesIds = new Set();
+  const cameoIds = new Set();
   const characterIds = new Set();
 
   for (const item of Array.isArray(items) ? items : []) {
@@ -625,6 +678,8 @@ function deriveSourceIdsFromItems(items) {
       profileIds.add(item.id);
     } else if (item.sourcePage === "likes") {
       likesIds.add(item.id);
+    } else if (item.sourcePage === "cameos") {
+      cameoIds.add(item.id);
     } else if (item.sourcePage === "characters") {
       characterIds.add(item.id);
     }
@@ -634,6 +689,7 @@ function deriveSourceIdsFromItems(items) {
     profileIds: [...profileIds],
     draftIds: [...draftIds],
     likesIds: [...likesIds],
+    cameoIds: [...cameoIds],
     characterIds: [...characterIds],
   };
 }
@@ -732,7 +788,13 @@ function normalizeSourceSelection(input, fallback = DEFAULT_SOURCE_VALUES) {
       continue;
     }
 
-    if (value === "profile" || value === "drafts" || value === "likes" || value === "characters") {
+    if (
+      value === "profile" ||
+      value === "drafts" ||
+      value === "likes" ||
+      value === "characters" ||
+      value === "characterAccounts"
+    ) {
       selected.add(value);
     }
   }
@@ -772,6 +834,10 @@ async function startScan(requestedSources, requestedSearchQuery = "") {
   const sources = normalizeSources(requestedSources);
   const searchQuery = normalizeSearchText(requestedSearchQuery);
 
+  if (sources.includes("characterAccounts")) {
+    await ensureCharacterAccountsLoaded();
+  }
+
   activeRun = scanSources(sources, searchQuery);
   try {
     await activeRun;
@@ -790,6 +856,8 @@ async function scanSources(sources, searchQuery = "") {
       message: "Opening Sora...",
       settings: currentState.settings,
       currentSource: sources[0] ?? null,
+      characterAccounts: currentState.characterAccounts,
+      selectedCharacterAccountIds: currentState.selectedCharacterAccountIds,
       startedAt: new Date().toISOString(),
     }),
   );
@@ -804,6 +872,7 @@ async function scanSources(sources, searchQuery = "") {
       profileIds: filteredSourceIds.profileIds,
       draftIds: filteredSourceIds.draftIds,
       likesIds: filteredSourceIds.likesIds,
+      cameoIds: filteredSourceIds.cameoIds,
       characterIds: filteredSourceIds.characterIds,
       items: filteredItems,
       fetchedCount: filteredItems.length,
@@ -862,6 +931,93 @@ async function setSelectedKeys(requestedKeys) {
   }
 
   await setState(patch);
+}
+
+function normalizeCharacterAccounts(value) {
+  return (Array.isArray(value) ? value : [])
+    .filter(
+      (account) =>
+        account &&
+        typeof account.userId === "string" &&
+        account.userId &&
+        account.userId.startsWith("ch_"),
+    )
+    .map((account) => ({
+      userId: account.userId,
+      username: typeof account.username === "string" ? account.username : "",
+      displayName:
+        typeof account.displayName === "string" && account.displayName
+          ? account.displayName
+          : typeof account.username === "string" && account.username
+            ? account.username
+            : account.userId,
+      cameoCount: Number.isFinite(Number(account.cameoCount)) ? Number(account.cameoCount) : 0,
+      permalink: typeof account.permalink === "string" ? account.permalink : null,
+      profilePictureUrl:
+        typeof account.profilePictureUrl === "string" ? account.profilePictureUrl : null,
+    }));
+}
+
+function normalizeSelectedCharacterAccountIds(characterAccounts, requestedIds, fallbackIds = null) {
+  const validIds = new Set(
+    normalizeCharacterAccounts(characterAccounts).map((account) => account.userId),
+  );
+  const selected = [];
+
+  for (const value of Array.isArray(requestedIds) ? requestedIds : []) {
+    if (typeof value !== "string" || !validIds.has(value) || selected.includes(value)) {
+      continue;
+    }
+    selected.push(value);
+  }
+
+  if (selected.length) {
+    return selected;
+  }
+
+  if (Array.isArray(fallbackIds) && fallbackIds.length) {
+    return normalizeSelectedCharacterAccountIds(characterAccounts, fallbackIds, []);
+  }
+
+  return [...validIds];
+}
+
+async function ensureCharacterAccountsLoaded(force = false) {
+  const existingAccounts = normalizeCharacterAccounts(currentState.characterAccounts);
+  if (!force && existingAccounts.length) {
+    return existingAccounts;
+  }
+
+  const fetchedAccounts = await fetchAllCharacterAccounts();
+  const selectedCharacterAccountIds = normalizeSelectedCharacterAccountIds(
+    fetchedAccounts,
+    currentState.selectedCharacterAccountIds,
+    fetchedAccounts.map((account) => account.userId),
+  );
+
+  await setState({
+    characterAccounts: fetchedAccounts,
+    selectedCharacterAccountIds,
+  });
+
+  return fetchedAccounts;
+}
+
+async function setSelectedCharacterAccountIds(requestedIds) {
+  const characterAccounts =
+    currentState.characterAccounts && currentState.characterAccounts.length
+      ? normalizeCharacterAccounts(currentState.characterAccounts)
+      : await ensureCharacterAccountsLoaded();
+  const selectedCharacterAccountIds = normalizeSelectedCharacterAccountIds(
+    characterAccounts,
+    requestedIds,
+    currentState.selectedCharacterAccountIds,
+  );
+
+  await setState({
+    characterAccounts,
+    selectedCharacterAccountIds,
+  });
 }
 
 async function setTitleOverride(itemKey, requestedTitle) {
@@ -950,6 +1106,7 @@ async function setItemRemovedState(itemKey, removed) {
     profileIds: sourceIds.profileIds,
     draftIds: sourceIds.draftIds,
     likesIds: sourceIds.likesIds,
+    cameoIds: sourceIds.cameoIds,
     characterIds: sourceIds.characterIds,
     fetchedCount: nextItems.length,
     selectedKeys: nextSelectedKeys,
@@ -1502,6 +1659,7 @@ async function collectItems(sources, maxVideos) {
   const profileIds = new Set();
   const draftIds = new Set();
   const likesIds = new Set();
+  const cameoIds = new Set();
   const characterIds = new Set();
   let partialWarning = "";
 
@@ -1521,7 +1679,9 @@ async function collectItems(sources, maxVideos) {
             ? "Fetching drafts..."
             : source === "likes"
               ? "Fetching liked videos..."
-              : "Fetching cameo videos...",
+              : source === "characters"
+                ? "Fetching cameo videos..."
+                : "Fetching character videos...",
     });
 
     const sourceResult =
@@ -1558,16 +1718,29 @@ async function collectItems(sources, maxVideos) {
                 });
               },
             })
-            : await fetchAllCharacterItems({
-              maxItems: maxRemaining,
-              baseCount: itemMap.size,
-              onProgress: async ({ count }) => {
-                await setState({
-                  fetchedCount: itemMap.size + count,
-                  message: `Fetching cameo videos... ${itemMap.size + count} found so far.`,
-                });
-              },
-            });
+            : source === "characters"
+              ? await fetchAllCameoItems({
+                maxItems: maxRemaining,
+                baseCount: itemMap.size,
+                onProgress: async ({ count }) => {
+                  await setState({
+                    fetchedCount: itemMap.size + count,
+                    message: `Fetching cameo videos... ${itemMap.size + count} found so far.`,
+                  });
+                },
+              })
+              : await fetchAllCharacterItems({
+                maxItems: maxRemaining,
+                characterAccounts: currentState.characterAccounts,
+                selectedCharacterAccountIds: currentState.selectedCharacterAccountIds,
+                baseCount: itemMap.size,
+                onProgress: async ({ count }) => {
+                  await setState({
+                    fetchedCount: itemMap.size + count,
+                    message: `Fetching character videos... ${itemMap.size + count} found so far.`,
+                  });
+                },
+              });
 
     for (const item of sourceResult.items) {
       const key = getItemKey(item);
@@ -1586,6 +1759,8 @@ async function collectItems(sources, maxVideos) {
         draftIds.add(id);
       } else if (source === "likes") {
         likesIds.add(id);
+      } else if (source === "characters") {
+        cameoIds.add(id);
       } else {
         characterIds.add(id);
       }
@@ -1601,6 +1776,7 @@ async function collectItems(sources, maxVideos) {
     profileIds: [...profileIds],
     draftIds: [...draftIds],
     likesIds: [...likesIds],
+    cameoIds: [...cameoIds],
     characterIds: [...characterIds],
     partialWarning,
   };
@@ -1906,46 +2082,266 @@ async function fetchAllCharacterDraftItems(options = {}) {
   };
 }
 
+async function fetchAllCharacterAccounts() {
+  const accountMap = new Map();
+  let cursor = null;
+  let previousCursor = null;
+
+  for (let pageNumber = 0; pageNumber < 250; pageNumber += 1) {
+    const page = await fetchSourceDataFromTab("characterProfiles", {
+      limit: CHARACTER_ACCOUNT_LIMIT,
+      cursor,
+    });
+
+    for (const account of Array.isArray(page.accounts) ? page.accounts : []) {
+      if (!account || typeof account.userId !== "string" || !account.userId) {
+        continue;
+      }
+
+      accountMap.set(account.userId, account);
+    }
+
+    if (
+      page.rowCount === 0 ||
+      !page.nextCursor ||
+      page.nextCursor === previousCursor
+    ) {
+      break;
+    }
+
+    previousCursor = cursor;
+    cursor = page.nextCursor;
+  }
+
+  return [...accountMap.values()];
+}
+
+function appendCharacterAccountContext(item, characterAccount) {
+  if (!item || !characterAccount) {
+    return item;
+  }
+
+  const metadataEntries = Array.isArray(item.metadataEntries)
+    ? [...item.metadataEntries]
+    : [];
+
+  if (characterAccount.displayName) {
+    metadataEntries.push({
+      label: "Character Account",
+      value: characterAccount.displayName,
+      type: "text",
+    });
+  }
+
+  if (characterAccount.username) {
+    metadataEntries.push({
+      label: "Character Username",
+      value: `@${characterAccount.username}`,
+      type: "text",
+    });
+  }
+
+  if (characterAccount.permalink) {
+    metadataEntries.push({
+      label: "Character Profile",
+      value: characterAccount.permalink,
+      type: "link",
+    });
+  }
+
+  return {
+    ...item,
+    characterAccountId: characterAccount.userId,
+    characterAccountUsername: characterAccount.username,
+    characterAccountDisplayName: characterAccount.displayName,
+    metadataEntries,
+  };
+}
+
+async function fetchAllCharacterAccountPublishedItems(characterAccount, options = {}) {
+  const ids = new Set();
+  const items = [];
+  const maxItems = getMaxVideosSetting({ maxVideos: options.maxItems });
+  let cursor = null;
+  let previousCursor = null;
+
+  for (let pageNumber = 0; pageNumber < 250; pageNumber += 1) {
+    const page = await fetchSourceDataFromTab("characterAccountPosts", {
+      characterId: characterAccount.userId,
+      limit: CHARACTERS_BATCH_LIMIT,
+      cursor,
+    });
+
+    for (const id of page.ids) {
+      ids.add(id);
+    }
+
+    for (const item of page.items) {
+      items.push(appendCharacterAccountContext(item, characterAccount));
+    }
+
+    if (maxItems && items.length > maxItems) {
+      items.length = maxItems;
+    }
+
+    if (typeof options.onProgress === "function") {
+      await options.onProgress({
+        count: items.length,
+        pageNumber: pageNumber + 1,
+      });
+    }
+
+    if (
+      page.rowCount === 0 ||
+      !page.nextCursor ||
+      page.nextCursor === previousCursor ||
+      (maxItems && items.length >= maxItems)
+    ) {
+      break;
+    }
+
+    previousCursor = cursor;
+    cursor = page.nextCursor;
+  }
+
+  return {
+    ids: [...ids],
+    items,
+    partialWarning: "",
+  };
+}
+
+async function fetchAllCharacterAccountDraftItems(characterAccount, options = {}) {
+  const ids = new Set();
+  const items = [];
+  const maxItems = getMaxVideosSetting({ maxVideos: options.maxItems });
+  let cursor = null;
+  let previousCursor = null;
+
+  for (let pageNumber = 0; pageNumber < 250; pageNumber += 1) {
+    const page = await fetchSourceDataFromTab("characterAccountDrafts", {
+      characterId: characterAccount.userId,
+      limit: CHARACTERS_BATCH_LIMIT,
+      cursor,
+    });
+
+    for (const id of page.ids) {
+      ids.add(id);
+    }
+
+    for (const item of page.items) {
+      items.push(appendCharacterAccountContext(item, characterAccount));
+    }
+
+    if (maxItems && items.length > maxItems) {
+      items.length = maxItems;
+    }
+
+    if (typeof options.onProgress === "function") {
+      await options.onProgress({
+        count: items.length,
+        pageNumber: pageNumber + 1,
+      });
+    }
+
+    if (
+      page.rowCount === 0 ||
+      !page.nextCursor ||
+      page.nextCursor === previousCursor ||
+      (maxItems && items.length >= maxItems)
+    ) {
+      break;
+    }
+
+    previousCursor = cursor;
+    cursor = page.nextCursor;
+  }
+
+  return {
+    ids: [...ids],
+    items,
+    partialWarning: "",
+  };
+}
+
 async function fetchAllCharacterItems(options = {}) {
   const maxItems = getMaxVideosSetting({ maxVideos: options.maxItems });
-  let publishedCount = 0;
-  let draftCount = 0;
-  const reportProgress = async (pageNumber) => {
+  const normalizedCharacterAccounts = normalizeCharacterAccounts(options.characterAccounts);
+  const selectedCharacterAccountIds = normalizeSelectedCharacterAccountIds(
+    normalizedCharacterAccounts,
+    options.selectedCharacterAccountIds,
+  );
+  const selectedCharacterAccounts = normalizedCharacterAccounts.filter((account) =>
+    selectedCharacterAccountIds.includes(account.userId),
+  );
+  const ids = new Set();
+  const itemMap = new Map();
+  const partialWarnings = [];
+  let totalCount = 0;
+
+  const mergeResult = (result) => {
+    for (const id of result.ids) {
+      ids.add(id);
+    }
+
+    for (const item of result.items) {
+      const key = getItemKey(item);
+      if (!itemMap.has(key)) {
+        itemMap.set(key, item);
+      }
+    }
+  };
+
+  const reportProgress = async (messagePrefix) => {
     if (typeof options.onProgress !== "function") {
       return;
     }
 
-    const combinedCount = maxItems
-      ? Math.min(maxItems, publishedCount + draftCount)
-      : publishedCount + draftCount;
     await options.onProgress({
-      count: combinedCount,
-      pageNumber,
+      count: totalCount,
+      pageNumber: 1,
+      message: messagePrefix,
     });
   };
 
-  const publishedResult = await fetchAllCharacterAppearanceItems({
-    maxItems,
-    onProgress: async ({ count, pageNumber }) => {
-      publishedCount = count;
-      await reportProgress(pageNumber);
-    },
-  });
-  const draftResult = await fetchAllCharacterDraftItems({
-    maxItems,
-    onProgress: async ({ count, pageNumber }) => {
-      draftCount = count;
-      await reportProgress(pageNumber + 250);
-    },
-  });
-  const ids = new Set([...publishedResult.ids, ...draftResult.ids]);
-  const itemMap = new Map();
-
-  for (const item of [...publishedResult.items, ...draftResult.items]) {
-    const key = getItemKey(item);
-    if (!itemMap.has(key)) {
-      itemMap.set(key, item);
+  for (const characterAccount of selectedCharacterAccounts) {
+    const maxRemaining = getRemainingFetchCapacity(itemMap.size, maxItems);
+    if (maxRemaining === 0) {
+      break;
     }
+
+    const characterPublishedResult = await fetchAllCharacterAccountPublishedItems(
+      characterAccount,
+      {
+        maxItems: maxRemaining,
+        onProgress: async ({ count }) => {
+          totalCount = maxItems
+            ? Math.min(maxItems, itemMap.size + count)
+            : itemMap.size + count;
+          await reportProgress(`Fetching ${characterAccount.displayName} posts...`);
+        },
+      },
+    );
+    mergeResult(characterPublishedResult);
+
+    const nextMaxRemaining = getRemainingFetchCapacity(itemMap.size, maxItems);
+    if (nextMaxRemaining === 0) {
+      break;
+    }
+
+    const characterDraftResult = await fetchAllCharacterAccountDraftItems(
+      characterAccount,
+      {
+        maxItems: nextMaxRemaining,
+        onProgress: async ({ count }) => {
+          totalCount = maxItems
+            ? Math.min(maxItems, itemMap.size + count)
+            : itemMap.size + count;
+          await reportProgress(`Fetching ${characterAccount.displayName} drafts...`);
+        },
+      },
+    );
+    mergeResult(characterDraftResult);
   }
 
   const items = sortItemsByNewest([...itemMap.values()]);
@@ -1957,9 +2353,78 @@ async function fetchAllCharacterItems(options = {}) {
     ids: [...ids],
     items,
     partialWarning: joinPartialWarnings([
-      publishedResult.partialWarning,
-      draftResult.partialWarning,
+      ...partialWarnings,
     ]),
+  };
+}
+
+async function fetchAllCameoItems(options = {}) {
+  const maxItems = getMaxVideosSetting({ maxVideos: options.maxItems });
+  const ids = new Set();
+  const itemMap = new Map();
+  let totalCount = 0;
+
+  const mergeResult = (result) => {
+    for (const id of result.ids) {
+      ids.add(id);
+    }
+
+    for (const item of result.items) {
+      const key = getItemKey(item);
+      if (!itemMap.has(key)) {
+        itemMap.set(key, item);
+      }
+    }
+  };
+
+  const reportProgress = async (messagePrefix) => {
+    if (typeof options.onProgress !== "function") {
+      return;
+    }
+
+    await options.onProgress({
+      count: totalCount,
+      pageNumber: 1,
+      message: messagePrefix,
+    });
+  };
+
+  const publishedResult = await fetchAllCharacterAppearanceItems({
+    maxItems,
+    onProgress: async ({ count }) => {
+      totalCount = maxItems ? Math.min(maxItems, count) : count;
+      await reportProgress("Fetching cameo videos...");
+    },
+  });
+  mergeResult(publishedResult);
+
+  const nextMaxRemaining = getRemainingFetchCapacity(itemMap.size, maxItems);
+  if (nextMaxRemaining !== 0) {
+    const draftResult = await fetchAllCharacterDraftItems({
+      maxItems: nextMaxRemaining,
+      onProgress: async ({ count }) => {
+        totalCount = maxItems
+          ? Math.min(maxItems, itemMap.size + count)
+          : itemMap.size + count;
+        await reportProgress("Fetching cameo videos...");
+      },
+    });
+    mergeResult(draftResult);
+
+    return {
+      ids: [...ids],
+      items: sortItemsByNewest([...itemMap.values()]).slice(0, maxItems || undefined),
+      partialWarning: joinPartialWarnings([
+        publishedResult.partialWarning,
+        draftResult.partialWarning,
+      ]),
+    };
+  }
+
+  return {
+    ids: [...ids],
+    items: sortItemsByNewest([...itemMap.values()]).slice(0, maxItems || undefined),
+    partialWarning: joinPartialWarnings([publishedResult.partialWarning]),
   };
 }
 
@@ -1995,8 +2460,14 @@ async function fetchSourceDataFromTab(source, options) {
           ? "drafts"
           : source === "likes"
             ? "liked"
+            : source === "characterProfiles"
+              ? "character account"
+              : source === "characterAccountPosts"
+                ? "character account post"
             : source === "characterDrafts"
               ? "cameo drafts"
+              : source === "characterAccountDrafts"
+                ? "character account drafts"
             : "cameo";
     throw new Error(`Failed to fetch ${sourceLabel} data: ${getErrorMessage(error)}`);
   }
@@ -2161,12 +2632,31 @@ async function refreshDownloadUrl(item) {
     };
   }
 
-  if (item.sourcePage === "characters") {
-    const refreshed = await fetchAllCharacterItems();
+  if (item.sourcePage === "cameos") {
+    const refreshed = await fetchAllCameoItems();
     const match = refreshed.items.find((candidate) => matchesRefreshTarget(candidate, item));
 
     if (!match) {
       throw new Error(`Could not refresh cameo video ${item.id}.`);
+    }
+
+    return {
+      ...item,
+      downloadUrl: match.downloadUrl,
+    };
+  }
+
+  if (item.sourcePage === "characters") {
+    const refreshed = await fetchAllCharacterItems({
+      characterAccounts: currentState.characterAccounts,
+      selectedCharacterAccountIds: item.characterAccountId
+        ? [item.characterAccountId]
+        : currentState.selectedCharacterAccountIds,
+    });
+    const match = refreshed.items.find((candidate) => matchesRefreshTarget(candidate, item));
+
+    if (!match) {
+      throw new Error(`Could not refresh character video ${item.id}.`);
     }
 
     return {
@@ -2972,7 +3462,14 @@ function injectedFetchSource(config) {
       const sourceLabel =
         pickFirstString([
           config && config.sourceLabel,
-        ]) || (sourcePage === "likes" ? "Liked" : sourcePage === "characters" ? "Cameo" : "Published");
+        ]) ||
+        (sourcePage === "likes"
+          ? "Liked"
+          : sourcePage === "cameos"
+            ? "Cameo"
+            : sourcePage === "characters"
+              ? "Character"
+              : "Published");
       const requireOwner = Boolean(config && config.requireOwner);
 
       for (const row of rows) {
@@ -3108,10 +3605,57 @@ function injectedFetchSource(config) {
 
     function normalizeCharactersResponse(payload) {
       return normalizePostListingResponse(payload, {
-        sourcePage: "characters",
+        sourcePage: "cameos",
         sourceLabel: "Cameo",
         requireOwner: false,
       });
+    }
+
+    function normalizeCharacterAccountsIndexResponse(payload) {
+      const rows = Array.isArray(payload && payload.items) ? payload.items : [];
+      const accounts = rows
+        .filter(
+          (row) =>
+            row &&
+            typeof row.user_id === "string" &&
+            row.user_id &&
+            row.user_id.startsWith("ch_"),
+        )
+        .map((row) => ({
+          userId: row.user_id,
+          username: typeof row.username === "string" ? row.username : "",
+          displayName:
+            typeof row.display_name === "string" && row.display_name
+              ? row.display_name
+              : typeof row.username === "string" && row.username
+                ? row.username
+                : row.user_id,
+          cameoCount: Number.isFinite(Number(row.cameo_count)) ? Number(row.cameo_count) : 0,
+          permalink: typeof row.permalink === "string" ? row.permalink : null,
+          profilePictureUrl:
+            typeof row.profile_picture_url === "string" ? row.profile_picture_url : null,
+        }));
+
+      return {
+        accounts,
+        rowCount: rows.length,
+        nextCursor: typeof payload.cursor === "string" && payload.cursor ? payload.cursor : null,
+        partialWarning: "",
+      };
+    }
+
+    async function fetchFirstSuccessfulJson(urls) {
+      let lastError = null;
+
+      for (const url of urls) {
+        try {
+          return await fetchJson(url);
+        } catch (error) {
+          lastError = error;
+        }
+      }
+
+      throw lastError || new Error("Sora did not return a valid response.");
     }
 
     function normalizeDraftResponse(payload, config = {}) {
@@ -3125,7 +3669,7 @@ function injectedFetchSource(config) {
       const sourceLabel =
         pickFirstString([
           config && config.sourceLabel,
-        ]) || (sourcePage === "characters" ? "Cameo" : "Draft");
+        ]) || (sourcePage === "cameos" ? "Cameo" : sourcePage === "characters" ? "Character" : "Draft");
       const allowMediaUrlFallback = Boolean(config && config.allowMediaUrlFallback);
 
       for (const row of rows) {
@@ -3425,8 +3969,90 @@ function injectedFetchSource(config) {
         }
         const payload = await fetchJson(url.toString());
         return normalizeDraftResponse(payload, {
-          sourcePage: "characters",
+          sourcePage: "cameos",
           sourceLabel: "Cameo",
+          allowMediaUrlFallback: true,
+        });
+      }
+
+      if (source === "characterProfiles") {
+        const authContext = await deriveAuthContext();
+        const viewerUserId = deriveViewerUserId(authContext);
+        const limit = Number(options.limit) || 100;
+        const url = new URL(
+          `/backend/project_y/profile/${encodeURIComponent(viewerUserId)}/characters`,
+          window.location.origin,
+        );
+        url.searchParams.set("limit", String(limit));
+        if (typeof options.cursor === "string" && options.cursor) {
+          url.searchParams.set("cursor", options.cursor);
+        }
+        const payload = await fetchJson(url.toString());
+        return normalizeCharacterAccountsIndexResponse(payload);
+      }
+
+      if (source === "characterAccountPosts") {
+        const characterId =
+          typeof options.characterId === "string" && options.characterId ? options.characterId : "";
+        if (!characterId) {
+          throw new Error("A character account id is required to fetch proxy-account posts.");
+        }
+
+        const limit = Number(options.limit) || 100;
+        const candidateUrls = [];
+        const listingCandidates = ["posts", "profile", "public"];
+
+        for (const listingName of listingCandidates) {
+          const url = new URL(
+            `/backend/project_y/profile/${encodeURIComponent(characterId)}/post_listing/${listingName}`,
+            window.location.origin,
+          );
+          url.searchParams.set("limit", String(limit));
+          if (typeof options.cursor === "string" && options.cursor) {
+            url.searchParams.set("cursor", options.cursor);
+          }
+          candidateUrls.push(url.toString());
+        }
+
+        const feedUrl = new URL(
+          `/backend/project_y/profile_feed/${encodeURIComponent(characterId)}`,
+          window.location.origin,
+        );
+        feedUrl.searchParams.set("limit", String(limit));
+        feedUrl.searchParams.set("cut", "nf2");
+        if (typeof options.cursor === "string" && options.cursor) {
+          feedUrl.searchParams.set("cursor", options.cursor);
+        }
+        candidateUrls.push(feedUrl.toString());
+
+        const payload = await fetchFirstSuccessfulJson(candidateUrls);
+        return normalizePostListingResponse(payload, {
+          sourcePage: "characters",
+          sourceLabel: "Character",
+          requireOwner: false,
+        });
+      }
+
+      if (source === "characterAccountDrafts") {
+        const characterId =
+          typeof options.characterId === "string" && options.characterId ? options.characterId : "";
+        if (!characterId) {
+          throw new Error("A character account id is required to fetch proxy-account drafts.");
+        }
+
+        const limit = Number(options.limit) || 100;
+        const url = new URL(
+          `/backend/project_y/profile/drafts/cameos/character/${encodeURIComponent(characterId)}`,
+          window.location.origin,
+        );
+        url.searchParams.set("limit", String(limit));
+        if (typeof options.cursor === "string" && options.cursor) {
+          url.searchParams.set("cursor", options.cursor);
+        }
+        const payload = await fetchJson(url.toString());
+        return normalizeDraftResponse(payload, {
+          sourcePage: "characters",
+          sourceLabel: "Character",
           allowMediaUrlFallback: true,
         });
       }

@@ -12,8 +12,13 @@ export const popupState = {
   activeTab: "overview",
   activeFetchStatusMessage: "",
   lastRenderedSignature: "",
+  lastCharacterSelectionSignature: "",
   latestBusy: false,
   latestPaused: false,
+  characterAccountsLoading: false,
+  hasAttemptedCharacterAccountLoad: false,
+  characterAccounts: [],
+  selectedCharacterAccountIds: [],
   pendingDownloadStart: false,
   downloadOverlaySessionActive: false,
   appliedSettingsDefaults: {

@@ -1,6 +1,8 @@
 import { dom } from "../dom.js";
 import { popupState } from "../state.js";
+import { setCharacterSelectionSummary } from "./character-selection.js";
 import { formatFileSize } from "../utils/format.js";
+import { getSelectedSourceValues } from "../utils/settings.js";
 import {
   getActiveSelectableCount,
   getDownloadedCount,
@@ -129,6 +131,11 @@ export function updateSelectionSummary({
   }
 
   const downloadedCount = getDownloadedCount(popupState.latestRenderState.items);
+  const selectedSources = getSelectedSourceValues(dom.sourceSelectInputs);
+  const isCharacterSelectionMode =
+    selectedSources.includes("characterAccounts") &&
+    phase !== "fetching" &&
+    totalCount === 0;
   popupState.latestSummaryContext = {
     totalCount,
     selectedCount,
@@ -141,6 +148,11 @@ export function updateSelectionSummary({
     const flavor = popupState.activeFetchStatusMessage || "Finding videos...";
     dom.selectionSummary.textContent =
       totalCount > 0 ? `${flavor} ${totalCount} found so far.` : flavor;
+    return;
+  }
+
+  if (isCharacterSelectionMode) {
+    setCharacterSelectionSummary();
     return;
   }
 

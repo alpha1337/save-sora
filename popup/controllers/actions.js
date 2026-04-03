@@ -179,6 +179,7 @@ export async function handleClearSelectionClick() {
  */
 function preparePendingFetchUi() {
   dom.itemsList?.classList.add("hidden");
+  dom.characterSelectionGrid?.classList.add("hidden");
   dom.emptyState?.classList.add("hidden");
 
   if (dom.emptyStateText instanceof HTMLElement) {

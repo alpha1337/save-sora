@@ -26,6 +26,9 @@ import {
   handleThemeToggleChange,
 } from "./settings.js";
 import {
+  handleCharacterMenuChange,
+  handleCharacterSelectionClick,
+  handleCharacterMenuTriggerClick,
   handleOverviewSourceMenuChange,
   handleOverviewSourceTriggerClick,
   handleSettingsSourceMenuChange,
@@ -58,6 +61,9 @@ export function initializeEventHandlers() {
   dom.themeToggle?.addEventListener("change", handleThemeToggleChange);
   dom.sourceSelectButton?.addEventListener("click", handleOverviewSourceTriggerClick);
   dom.sourceSelectMenu?.addEventListener("change", handleOverviewSourceMenuChange);
+  dom.characterSelectButton?.addEventListener("click", handleCharacterMenuTriggerClick);
+  dom.characterSelectMenu?.addEventListener("change", handleCharacterMenuChange);
+  dom.characterSelectionGrid?.addEventListener("click", handleCharacterSelectionClick);
   dom.maxVideosInput?.addEventListener("input", handleMaxVideosInput);
   dom.maxVideosInput?.addEventListener("blur", handleSettingsBlur);
   dom.defaultSourceButton?.addEventListener("click", handleSettingsSourceTriggerClick);

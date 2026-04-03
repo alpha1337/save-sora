@@ -36,6 +36,22 @@ export async function fetchRuntimeState() {
 }
 
 /**
+ * Loads the available proxy-character accounts for the signed-in user.
+ *
+ * @param {boolean} force
+ * @returns {Promise<object>}
+ */
+export async function requestCharacterAccounts(force = false) {
+  return sendPopupMessage(
+    {
+      type: "LOAD_CHARACTER_ACCOUNTS",
+      force,
+    },
+    "Could not load the available character accounts.",
+  );
+}
+
+/**
  * Starts a new scan of the requested Sora sources.
  *
  * @param {string[]} sources
@@ -90,6 +106,22 @@ export async function saveSelection(selectedKeys) {
       selectedKeys,
     },
     "Could not save the current selection.",
+  );
+}
+
+/**
+ * Persists the selected proxy-character accounts used by the Cameos source.
+ *
+ * @param {string[]} selectedCharacterAccountIds
+ * @returns {Promise<object>}
+ */
+export async function saveCharacterSelection(selectedCharacterAccountIds) {
+  return sendPopupMessage(
+    {
+      type: "SET_CHARACTER_SELECTION",
+      selectedCharacterAccountIds,
+    },
+    "Could not save the character account selection.",
   );
 }
 

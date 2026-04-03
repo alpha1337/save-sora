@@ -89,6 +89,7 @@ export function setControlsDisabled(disabled) {
     dom.clearSelectionButton.disabled = disabled;
   }
   setSourceControlDisabled(dom.sourceSelectButton, dom.sourceSelectInputs, disabled);
+  setSourceControlDisabled(dom.characterSelectButton, dom.characterSelectInputs, disabled);
   if (dom.maxVideosInput) {
     dom.maxVideosInput.disabled = disabled;
   }
