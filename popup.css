@@ -797,6 +797,101 @@ body[data-theme="light"] .primary-cta.is-danger {
   white-space: nowrap;
 }
 
+.fetch-progress-panel {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(131, 165, 152, 0.32);
+  background:
+    linear-gradient(180deg, rgba(44, 58, 57, 0.96) 0%, rgba(34, 43, 45, 0.98) 100%);
+  box-shadow: inset 0 1px 0 rgba(251, 241, 199, 0.04);
+}
+
+.fetch-progress-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.fetch-progress-copy {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.fetch-progress-stage,
+.fetch-progress-detail {
+  margin: 0;
+}
+
+.fetch-progress-stage {
+  color: var(--heading);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.fetch-progress-detail {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.fetch-progress-percent {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  min-height: 26px;
+  padding: 2px 10px;
+  border: 1px solid rgba(131, 165, 152, 0.34);
+  background: rgba(69, 133, 136, 0.12);
+  color: var(--heading);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.fetch-progress-bar {
+  position: relative;
+  width: 100%;
+  height: 10px;
+  overflow: hidden;
+  border: 1px solid rgba(131, 165, 152, 0.22);
+  background: rgba(29, 32, 33, 0.72);
+}
+
+.fetch-progress-fill {
+  display: block;
+  width: 0;
+  height: 100%;
+  background:
+    linear-gradient(90deg, rgba(69, 133, 136, 0.9) 0%, rgba(250, 189, 47, 0.92) 100%);
+  box-shadow: 0 0 16px rgba(131, 165, 152, 0.18);
+  transition: width 220ms ease;
+}
+
+.fetch-progress-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.fetch-progress-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  background: rgba(40, 40, 40, 0.72);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
 .button-small {
   min-height: 32px;
   padding: 6px 10px;
@@ -839,6 +934,33 @@ body[data-theme="light"] .primary-cta.is-danger {
   gap: 12px;
   align-content: start;
   padding: 2px 0;
+}
+
+body[data-theme="light"] .fetch-progress-panel {
+  border-color: rgba(7, 102, 120, 0.24);
+  background:
+    linear-gradient(180deg, rgba(248, 244, 229, 0.98) 0%, rgba(242, 233, 206, 0.98) 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+}
+
+body[data-theme="light"] .fetch-progress-detail {
+  color: #5f564d;
+}
+
+body[data-theme="light"] .fetch-progress-percent {
+  border-color: rgba(7, 102, 120, 0.24);
+  background: rgba(7, 102, 120, 0.1);
+  color: #2d261f;
+}
+
+body[data-theme="light"] .fetch-progress-bar {
+  border-color: rgba(7, 102, 120, 0.16);
+  background: rgba(226, 233, 219, 0.74);
+}
+
+body[data-theme="light"] .fetch-progress-pill {
+  background: rgba(255, 248, 226, 0.94);
+  color: #2d261f;
 }
 
 .character-option-card {

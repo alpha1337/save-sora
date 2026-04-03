@@ -9,6 +9,11 @@ const LIKES_BATCH_LIMIT = 100;
 const CHARACTERS_BATCH_LIMIT = 100;
 const CHARACTER_ACCOUNT_LIMIT = 100;
 const DOWNLOAD_PROGRESS_PERSIST_INTERVAL = 25;
+const FETCH_OPENING_PROGRESS_RATIO = 0.04;
+const FETCH_SOURCE_PROGRESS_RATIO = 0.74;
+const FETCH_PROCESSING_PROGRESS_RATIO = 0.22;
+const FETCH_PROCESSING_STEP_COUNT = 2;
+const FETCH_PROGRESS_CHUNK_SIZE = 250;
 const AVAILABLE_SOURCE_VALUES = ["profile", "drafts", "likes", "characters", "characterAccounts"];
 const DEFAULT_SOURCE_VALUES = ["profile", "drafts"];
 const SOURCE_ROUTES = {
@@ -334,6 +339,7 @@ function createDefaultState(overrides = {}) {
     runMode: null,
     runTotal: 0,
     failedItems: [],
+    fetchProgress: createDefaultFetchProgress(),
     settings: {
       maxVideos: null,
       defaultSource: [...DEFAULT_SOURCE_VALUES],
@@ -344,6 +350,111 @@ function createDefaultState(overrides = {}) {
     finishedAt: null,
     ...overrides,
   };
+}
+
+function createDefaultFetchProgress(overrides = {}) {
+  return {
+    stage: "idle",
+    stageLabel: "",
+    detail: "",
+    progressRatio: 0,
+    currentSource: null,
+    currentSourceLabel: "",
+    currentSourceIndex: 0,
+    totalSources: 0,
+    itemsFound: 0,
+    processedCount: 0,
+    totalCount: 0,
+    ...overrides,
+  };
+}
+
+function getCurrentFetchProgress() {
+  return currentState.fetchProgress && typeof currentState.fetchProgress === "object"
+    ? currentState.fetchProgress
+    : createDefaultFetchProgress();
+}
+
+function getNextFetchProgress(patch = {}) {
+  return createDefaultFetchProgress({
+    ...getCurrentFetchProgress(),
+    ...patch,
+  });
+}
+
+function clampFetchProgressRatio(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return 0;
+  }
+
+  return Math.max(0, Math.min(1, numeric));
+}
+
+function getFetchSourceLabel(source) {
+  if (source === "profile") {
+    return "published videos";
+  }
+
+  if (source === "drafts") {
+    return "drafts";
+  }
+
+  if (source === "likes") {
+    return "liked videos";
+  }
+
+  if (source === "characters") {
+    return "cameo videos";
+  }
+
+  if (source === "characterAccounts") {
+    return "character videos";
+  }
+
+  return "videos";
+}
+
+function getFetchSourceProgressRatio(sourceIndex, totalSources, pageNumber = 0) {
+  const safeTotalSources = Math.max(1, Number(totalSources) || 1);
+  const normalizedSourceIndex = Math.max(0, Number(sourceIndex) || 0);
+  const sourceSlot = FETCH_SOURCE_PROGRESS_RATIO / safeTotalSources;
+  const normalizedPageNumber = Math.max(0, Number(pageNumber) || 0);
+  const sourceProgress = Math.min(0.94, 1 - Math.pow(0.62, normalizedPageNumber));
+
+  return clampFetchProgressRatio(
+    FETCH_OPENING_PROGRESS_RATIO +
+      normalizedSourceIndex * sourceSlot +
+      sourceSlot * sourceProgress,
+  );
+}
+
+function getFetchSourceCompleteRatio(sourceIndex, totalSources) {
+  const safeTotalSources = Math.max(1, Number(totalSources) || 1);
+  const normalizedSourceIndex = Math.max(0, Number(sourceIndex) || 0);
+  const sourceSlot = FETCH_SOURCE_PROGRESS_RATIO / safeTotalSources;
+
+  return clampFetchProgressRatio(
+    FETCH_OPENING_PROGRESS_RATIO + sourceSlot * (normalizedSourceIndex + 1),
+  );
+}
+
+function getFetchProcessingProgressRatio(stepIndex, stepProgress = 0) {
+  const safeStepCount = Math.max(1, FETCH_PROCESSING_STEP_COUNT);
+  const normalizedStepIndex = Math.max(0, Number(stepIndex) || 0);
+  const normalizedStepProgress = clampFetchProgressRatio(stepProgress);
+  const stepSlot = FETCH_PROCESSING_PROGRESS_RATIO / safeStepCount;
+
+  return clampFetchProgressRatio(
+    FETCH_OPENING_PROGRESS_RATIO +
+      FETCH_SOURCE_PROGRESS_RATIO +
+      stepSlot * normalizedStepIndex +
+      stepSlot * normalizedStepProgress,
+  );
+}
+
+async function yieldForUi() {
+  await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 async function restoreState() {
@@ -752,6 +863,108 @@ function filterItemsBySearchQuery(items, searchQuery) {
   );
 }
 
+async function filterItemsBySearchQueryWithProgress(items, searchQuery, options = {}) {
+  const sourceItems = Array.isArray(items) ? items : [];
+  const normalizedQuery = normalizeSearchText(searchQuery);
+  if (!normalizedQuery) {
+    if (typeof options.onProgress === "function") {
+      await options.onProgress({
+        processedCount: sourceItems.length,
+        totalCount: sourceItems.length,
+        matchedCount: sourceItems.length,
+      });
+    }
+    return sourceItems;
+  }
+
+  const filteredItems = [];
+  for (let index = 0; index < sourceItems.length; index += FETCH_PROGRESS_CHUNK_SIZE) {
+    const sliceEnd = Math.min(sourceItems.length, index + FETCH_PROGRESS_CHUNK_SIZE);
+
+    for (let itemIndex = index; itemIndex < sliceEnd; itemIndex += 1) {
+      const item = sourceItems[itemIndex];
+      if (itemMatchesSearchQuery(item, normalizedQuery)) {
+        filteredItems.push(item);
+      }
+    }
+
+    if (typeof options.onProgress === "function") {
+      await options.onProgress({
+        processedCount: sliceEnd,
+        totalCount: sourceItems.length,
+        matchedCount: filteredItems.length,
+      });
+    }
+
+    if (sliceEnd < sourceItems.length) {
+      await yieldForUi();
+    }
+  }
+
+  return filteredItems;
+}
+
+async function buildScanSelectionState(items, options = {}) {
+  const profileIds = new Set();
+  const draftIds = new Set();
+  const likesIds = new Set();
+  const cameoIds = new Set();
+  const characterIds = new Set();
+  const selectedKeys = [];
+  const sourceItems = Array.isArray(items) ? items : [];
+
+  for (let index = 0; index < sourceItems.length; index += FETCH_PROGRESS_CHUNK_SIZE) {
+    const sliceEnd = Math.min(sourceItems.length, index + FETCH_PROGRESS_CHUNK_SIZE);
+
+    for (let itemIndex = index; itemIndex < sliceEnd; itemIndex += 1) {
+      const item = sourceItems[itemIndex];
+      if (!item) {
+        continue;
+      }
+
+      const key = item.key || getItemKey(item);
+      selectedKeys.push(key);
+
+      if (typeof item.id === "string") {
+        if (item.sourcePage === "drafts") {
+          draftIds.add(item.id);
+        } else if (item.sourcePage === "profile") {
+          profileIds.add(item.id);
+        } else if (item.sourcePage === "likes") {
+          likesIds.add(item.id);
+        } else if (item.sourcePage === "cameos") {
+          cameoIds.add(item.id);
+        } else if (item.sourcePage === "characters") {
+          characterIds.add(item.id);
+        }
+      }
+    }
+
+    if (typeof options.onProgress === "function") {
+      await options.onProgress({
+        processedCount: sliceEnd,
+        totalCount: sourceItems.length,
+        selectedCount: selectedKeys.length,
+      });
+    }
+
+    if (sliceEnd < sourceItems.length) {
+      await yieldForUi();
+    }
+  }
+
+  return {
+    filteredSourceIds: {
+      profileIds: [...profileIds],
+      draftIds: [...draftIds],
+      likesIds: [...likesIds],
+      cameoIds: [...cameoIds],
+      characterIds: [...characterIds],
+    },
+    selectedKeys,
+  };
+}
+
 function buildReadyMessage(selectedCount) {
   if (selectedCount === 0) {
     return "Select at least one video to download.";
@@ -858,15 +1071,99 @@ async function scanSources(sources, searchQuery = "") {
       currentSource: sources[0] ?? null,
       characterAccounts: currentState.characterAccounts,
       selectedCharacterAccountIds: currentState.selectedCharacterAccountIds,
+      fetchProgress: createDefaultFetchProgress({
+        stage: "opening",
+        stageLabel: "Opening Sora",
+        detail: "Preparing a background Sora tab...",
+        progressRatio: FETCH_OPENING_PROGRESS_RATIO,
+        currentSource: sources[0] ?? null,
+        currentSourceLabel: getFetchSourceLabel(sources[0] ?? null),
+        currentSourceIndex: sources.length ? 1 : 0,
+        totalSources: sources.length,
+      }),
       startedAt: new Date().toISOString(),
     }),
   );
 
   try {
     const collected = await collectItems(sources, getMaxVideosSetting(currentState.settings));
-    const filteredItems = filterItemsBySearchQuery(collected.items, searchQuery);
-    const filteredSourceIds = deriveSourceIdsFromItems(filteredItems);
-    const selectedKeys = filteredItems.map((item) => item.key || getItemKey(item));
+    await setState({
+      message: `Processing ${collected.items.length} fetched item(s)...`,
+      fetchedCount: collected.items.length,
+      fetchProgress: getNextFetchProgress({
+        stage: "processing",
+        stageLabel: "Processing fetched videos",
+        detail: searchQuery
+          ? `Applying your search to ${collected.items.length} item(s)...`
+          : `Preparing ${collected.items.length} item(s) for review...`,
+        progressRatio: getFetchProcessingProgressRatio(0, 0),
+        itemsFound: collected.items.length,
+        processedCount: 0,
+        totalCount: collected.items.length,
+      }),
+    }, { persist: false });
+    await yieldForUi();
+
+    const filteredItems = await filterItemsBySearchQueryWithProgress(collected.items, searchQuery, {
+      onProgress: async ({ processedCount, totalCount, matchedCount }) => {
+        await setState({
+          fetchedCount: matchedCount,
+          message: searchQuery
+            ? `Filtering results... ${processedCount} of ${totalCount}`
+            : `Processing results... ${processedCount} of ${totalCount}`,
+          fetchProgress: getNextFetchProgress({
+            stage: "processing",
+            stageLabel: searchQuery ? "Filtering results" : "Processing fetched videos",
+            detail: searchQuery
+              ? `Applying your search to ${totalCount} item(s)...`
+              : `Preparing ${totalCount} item(s) for review...`,
+            progressRatio: getFetchProcessingProgressRatio(
+              0,
+              totalCount > 0 ? processedCount / totalCount : 1,
+            ),
+            itemsFound: matchedCount,
+            processedCount,
+            totalCount,
+          }),
+        }, { persist: false });
+      },
+    });
+
+    await setState({
+      message: `Finalizing ${filteredItems.length} item(s)...`,
+      fetchedCount: filteredItems.length,
+      fetchProgress: getNextFetchProgress({
+        stage: "finalizing",
+        stageLabel: "Finalizing results",
+        detail: `Building the review list for ${filteredItems.length} item(s)...`,
+        progressRatio: getFetchProcessingProgressRatio(1, 0),
+        itemsFound: filteredItems.length,
+        processedCount: 0,
+        totalCount: filteredItems.length,
+      }),
+    }, { persist: false });
+    await yieldForUi();
+
+    const { filteredSourceIds, selectedKeys } = await buildScanSelectionState(filteredItems, {
+      onProgress: async ({ processedCount, totalCount, selectedCount }) => {
+        await setState({
+          message: `Finalizing results... ${processedCount} of ${totalCount}`,
+          fetchProgress: getNextFetchProgress({
+            stage: "finalizing",
+            stageLabel: "Finalizing results",
+            detail: `Building the review list for ${totalCount} item(s)...`,
+            progressRatio: getFetchProcessingProgressRatio(
+              1,
+              totalCount > 0 ? processedCount / totalCount : 1,
+            ),
+            itemsFound: selectedCount,
+            processedCount,
+            totalCount,
+          }),
+        }, { persist: false });
+      },
+    });
+
     const baseState = {
       currentSource: null,
       profileIds: filteredSourceIds.profileIds,
@@ -885,6 +1182,7 @@ async function scanSources(sources, searchQuery = "") {
       completed: 0,
       failed: 0,
       failedItems: [],
+      fetchProgress: createDefaultFetchProgress(),
       lastError: "",
       partialWarning: collected.partialWarning,
     };
@@ -912,6 +1210,7 @@ async function scanSources(sources, searchQuery = "") {
       phase: "error",
       message: "The fetch run stopped.",
       currentSource: null,
+      fetchProgress: createDefaultFetchProgress(),
       lastError: getErrorMessage(error),
       finishedAt: new Date().toISOString(),
     });
@@ -1663,12 +1962,14 @@ async function collectItems(sources, maxVideos) {
   const characterIds = new Set();
   let partialWarning = "";
 
-  for (const source of sources) {
+  for (let sourceIndex = 0; sourceIndex < sources.length; sourceIndex += 1) {
+    const source = sources[sourceIndex];
     const maxRemaining = getRemainingFetchCapacity(itemMap.size, maxVideos);
     if (maxRemaining === 0) {
       break;
     }
 
+    const sourceLabel = getFetchSourceLabel(source);
     await setState({
       phase: "fetching",
       currentSource: source,
@@ -1678,55 +1979,120 @@ async function collectItems(sources, maxVideos) {
           : source === "drafts"
             ? "Fetching drafts..."
             : source === "likes"
-              ? "Fetching liked videos..."
-              : source === "characters"
-                ? "Fetching cameo videos..."
-                : "Fetching character videos...",
-    });
+            ? "Fetching liked videos..."
+            : source === "characters"
+              ? "Fetching cameo videos..."
+              : "Fetching character videos...",
+      fetchProgress: getNextFetchProgress({
+        stage: "fetching-source",
+        stageLabel: `Loading ${sourceLabel}`,
+        detail: `Source ${sourceIndex + 1} of ${sources.length}`,
+        progressRatio: getFetchSourceProgressRatio(sourceIndex, sources.length, 0),
+        currentSource: source,
+        currentSourceLabel: sourceLabel,
+        currentSourceIndex: sourceIndex + 1,
+        totalSources: sources.length,
+        itemsFound: itemMap.size,
+        processedCount: 0,
+        totalCount: 0,
+      }),
+    }, { persist: false });
 
     const sourceResult =
       source === "profile"
         ? await fetchAllProfileItems({
           maxItems: maxRemaining,
           baseCount: itemMap.size,
-          onProgress: async ({ count }) => {
+          onProgress: async ({ count, pageNumber, message }) => {
             await setState({
               fetchedCount: itemMap.size + count,
-              message: `Fetching published videos... ${itemMap.size + count} found so far.`,
-            });
+              message: message || `Fetching published videos... ${itemMap.size + count} found so far.`,
+              fetchProgress: getNextFetchProgress({
+                stage: "fetching-source",
+                stageLabel: `Loading ${sourceLabel}`,
+                detail: message || `Fetching ${sourceLabel}...`,
+                progressRatio: getFetchSourceProgressRatio(sourceIndex, sources.length, pageNumber),
+                currentSource: source,
+                currentSourceLabel: sourceLabel,
+                currentSourceIndex: sourceIndex + 1,
+                totalSources: sources.length,
+                itemsFound: itemMap.size + count,
+                processedCount: pageNumber,
+                totalCount: 0,
+              }),
+            }, { persist: false });
           },
         })
         : source === "drafts"
           ? await fetchAllDraftItems({
             maxItems: maxRemaining,
             baseCount: itemMap.size,
-            onProgress: async ({ count }) => {
+            onProgress: async ({ count, pageNumber, message }) => {
               await setState({
                 fetchedCount: itemMap.size + count,
-                message: `Fetching drafts... ${itemMap.size + count} found so far.`,
-              });
+                message: message || `Fetching drafts... ${itemMap.size + count} found so far.`,
+                fetchProgress: getNextFetchProgress({
+                  stage: "fetching-source",
+                  stageLabel: `Loading ${sourceLabel}`,
+                  detail: message || `Fetching ${sourceLabel}...`,
+                  progressRatio: getFetchSourceProgressRatio(sourceIndex, sources.length, pageNumber),
+                  currentSource: source,
+                  currentSourceLabel: sourceLabel,
+                  currentSourceIndex: sourceIndex + 1,
+                  totalSources: sources.length,
+                  itemsFound: itemMap.size + count,
+                  processedCount: pageNumber,
+                  totalCount: 0,
+                }),
+              }, { persist: false });
             },
           })
           : source === "likes"
             ? await fetchAllLikesItems({
               maxItems: maxRemaining,
               baseCount: itemMap.size,
-              onProgress: async ({ count }) => {
+              onProgress: async ({ count, pageNumber, message }) => {
                 await setState({
                   fetchedCount: itemMap.size + count,
-                  message: `Fetching liked videos... ${itemMap.size + count} found so far.`,
-                });
+                  message: message || `Fetching liked videos... ${itemMap.size + count} found so far.`,
+                  fetchProgress: getNextFetchProgress({
+                    stage: "fetching-source",
+                    stageLabel: `Loading ${sourceLabel}`,
+                    detail: message || `Fetching ${sourceLabel}...`,
+                    progressRatio: getFetchSourceProgressRatio(sourceIndex, sources.length, pageNumber),
+                    currentSource: source,
+                    currentSourceLabel: sourceLabel,
+                    currentSourceIndex: sourceIndex + 1,
+                    totalSources: sources.length,
+                    itemsFound: itemMap.size + count,
+                    processedCount: pageNumber,
+                    totalCount: 0,
+                  }),
+                }, { persist: false });
               },
             })
             : source === "characters"
               ? await fetchAllCameoItems({
                 maxItems: maxRemaining,
                 baseCount: itemMap.size,
-                onProgress: async ({ count }) => {
+                onProgress: async ({ count, pageNumber, message }) => {
                   await setState({
                     fetchedCount: itemMap.size + count,
-                    message: `Fetching cameo videos... ${itemMap.size + count} found so far.`,
-                  });
+                    message: message || `Fetching cameo videos... ${itemMap.size + count} found so far.`,
+                    fetchProgress: getNextFetchProgress({
+                      stage: "fetching-source",
+                      stageLabel: `Loading ${sourceLabel}`,
+                      detail: message || `Fetching ${sourceLabel}...`,
+                      progressRatio: getFetchSourceProgressRatio(sourceIndex, sources.length, pageNumber),
+                      currentSource: source,
+                      currentSourceLabel: sourceLabel,
+                      currentSourceIndex: sourceIndex + 1,
+                      totalSources: sources.length,
+                      itemsFound: itemMap.size + count,
+                      processedCount: pageNumber,
+                      totalCount: 0,
+                    }),
+                  }, { persist: false });
                 },
               })
               : await fetchAllCharacterItems({
@@ -1734,11 +2100,24 @@ async function collectItems(sources, maxVideos) {
                 characterAccounts: currentState.characterAccounts,
                 selectedCharacterAccountIds: currentState.selectedCharacterAccountIds,
                 baseCount: itemMap.size,
-                onProgress: async ({ count }) => {
+                onProgress: async ({ count, pageNumber, message }) => {
                   await setState({
                     fetchedCount: itemMap.size + count,
-                    message: `Fetching character videos... ${itemMap.size + count} found so far.`,
-                  });
+                    message: message || `Fetching character videos... ${itemMap.size + count} found so far.`,
+                    fetchProgress: getNextFetchProgress({
+                      stage: "fetching-source",
+                      stageLabel: `Loading ${sourceLabel}`,
+                      detail: message || `Fetching ${sourceLabel}...`,
+                      progressRatio: getFetchSourceProgressRatio(sourceIndex, sources.length, pageNumber),
+                      currentSource: source,
+                      currentSourceLabel: sourceLabel,
+                      currentSourceIndex: sourceIndex + 1,
+                      totalSources: sources.length,
+                      itemsFound: itemMap.size + count,
+                      processedCount: pageNumber,
+                      totalCount: 0,
+                    }),
+                  }, { persist: false });
                 },
               });
 
@@ -1769,6 +2148,24 @@ async function collectItems(sources, maxVideos) {
     if (sourceResult.partialWarning) {
       partialWarning = sourceResult.partialWarning;
     }
+
+    await setState({
+      fetchedCount: itemMap.size,
+      fetchProgress: getNextFetchProgress({
+        stage: "fetching-source",
+        stageLabel: `Loaded ${sourceLabel}`,
+        detail: `${itemMap.size} item(s) found so far.`,
+        progressRatio: getFetchSourceCompleteRatio(sourceIndex, sources.length),
+        currentSource: source,
+        currentSourceLabel: sourceLabel,
+        currentSourceIndex: sourceIndex + 1,
+        totalSources: sources.length,
+        itemsFound: itemMap.size,
+        processedCount: sourceIndex + 1,
+        totalCount: sources.length,
+      }),
+    }, { persist: false });
+    await yieldForUi();
   }
 
   return {

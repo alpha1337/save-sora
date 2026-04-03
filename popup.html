@@ -168,6 +168,26 @@
                 </div>
               </div>
 
+              <div id="fetch-progress-panel" class="fetch-progress-panel hidden" aria-live="polite">
+                <div class="fetch-progress-head">
+                  <div class="fetch-progress-copy">
+                    <p id="fetch-progress-stage" class="fetch-progress-stage">Opening Sora...</p>
+                    <p id="fetch-progress-detail" class="fetch-progress-detail">
+                      Preparing a background Sora tab...
+                    </p>
+                  </div>
+                  <span id="fetch-progress-percent" class="fetch-progress-percent">0%</span>
+                </div>
+                <div class="fetch-progress-bar" aria-hidden="true">
+                  <span id="fetch-progress-fill" class="fetch-progress-fill"></span>
+                </div>
+                <div class="fetch-progress-meta">
+                  <span id="fetch-progress-source" class="fetch-progress-pill">Source 1 of 1</span>
+                  <span id="fetch-progress-count" class="fetch-progress-pill">0 found</span>
+                  <span id="fetch-progress-eta" class="fetch-progress-pill">Estimating time left...</span>
+                </div>
+              </div>
+
               <div id="picker-scroll-region" class="picker-scroll-region">
                 <div id="character-selection-grid" class="character-selection-grid hidden" aria-live="polite"></div>
                 <div id="empty-state" class="empty-state" aria-hidden="true">

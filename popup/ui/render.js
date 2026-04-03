@@ -11,6 +11,7 @@ import {
 import { updateDownloadOverlay } from "./overlay.js";
 import { renderItemsList } from "./list/index.js";
 import { startFetchStatusRotation, stopFetchStatusRotation } from "./render/fetch-status.js";
+import { syncFetchProgressPanel } from "./render/fetch-progress.js";
 import { syncPrimaryControls } from "./render/primary-controls.js";
 import { syncSettingsInputs } from "./render/settings-sync.js";
 import { syncCharacterMenu } from "../controllers/source-menus.js";
@@ -131,6 +132,7 @@ export function renderState(state) {
     phase,
   };
 
+  syncFetchProgressPanel(state);
   updateDownloadOverlay(state);
 
   if (!isEditingTitleInput()) {
