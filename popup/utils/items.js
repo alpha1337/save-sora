@@ -15,6 +15,37 @@ export function getItemKey(item) {
 }
 
 /**
+ * Returns a human-readable label for the item's fetched source bucket.
+ *
+ * @param {object} item
+ * @returns {string}
+ */
+export function getItemSourceLabel(item) {
+  switch (item && item.sourcePage) {
+    case "drafts":
+      return "Draft";
+    case "likes":
+      return "Liked";
+    case "creatorPublished":
+      return "Posts";
+    case "creatorCameos":
+      return "Cast In";
+    case "creatorCharacters":
+      return "Creator Character";
+    case "creatorCharacterCameos":
+      return "Character Cameo";
+    case "cameos":
+      return "Cameo";
+    case "characters":
+      return "Character";
+    default:
+      return item && typeof item.sourceLabel === "string" && item.sourceLabel.trim()
+        ? item.sourceLabel.trim()
+        : "Published";
+  }
+}
+
+/**
  * Derives the default editable title from the current filename or ID.
  *
  * @param {object} item
@@ -87,7 +118,9 @@ export function getItemReviewUrl(item) {
   const shouldUseDraftFallback =
     item &&
     (item.sourcePage === "drafts" ||
-      ((item.sourcePage === "cameos" || item.sourcePage === "characters") &&
+      ((item.sourcePage === "cameos" ||
+        item.sourcePage === "characters" ||
+        item.sourcePage === "creatorCharacterCameos") &&
         item.sourceType === "draft"));
 
   if (shouldUseDraftFallback) {
@@ -111,6 +144,9 @@ export function getItemReviewUrl(item) {
   if (
     item &&
     (item.sourcePage === "profile" ||
+      item.sourcePage === "creatorPublished" ||
+      item.sourcePage === "creatorCameos" ||
+      item.sourcePage === "creatorCharacters" ||
       item.sourcePage === "likes" ||
       item.sourcePage === "cameos" ||
       item.sourcePage === "characters") &&
@@ -209,4 +245,123 @@ export function getAspectRatioLabel(item) {
   }
 
   return ratio > 1 ? "Landscape" : "Portrait";
+}
+
+/**
+ * Returns whether the item came from a saved creator profile result bucket.
+ *
+ * @param {object} item
+ * @returns {boolean}
+ */
+export function isCreatorScopedItem(item) {
+  return (
+    item &&
+    (item.sourcePage === "creatorPublished" ||
+      item.sourcePage === "creatorCameos" ||
+      item.sourcePage === "creatorCharacters" ||
+      item.sourcePage === "creatorCharacterCameos")
+  );
+}
+
+/**
+ * Maps a creator-scoped item into a stable sub-tab key.
+ *
+ * @param {object} item
+ * @returns {"published"|"castIn"|"characters"|"characterCameos"|"all"}
+ */
+export function getCreatorResultsTabKey(item) {
+  switch (item && item.sourcePage) {
+    case "creatorPublished":
+      return "published";
+    case "creatorCameos":
+      return "castIn";
+    case "creatorCharacters":
+      return "characters";
+    case "creatorCharacterCameos":
+      return "characterCameos";
+    default:
+      return "all";
+  }
+}
+
+/**
+ * Returns the user-facing label for a creator result tab key.
+ *
+ * @param {string} tabKey
+ * @returns {string}
+ */
+export function getCreatorResultsTabLabel(tabKey) {
+  switch (tabKey) {
+    case "published":
+      return "Posts";
+    case "castIn":
+      return "Cast In";
+    case "characters":
+      return "Characters";
+    case "characterCameos":
+      return "Character Cameos";
+    default:
+      return "All";
+  }
+}
+
+/**
+ * Builds the creator-only tab list for the current result set.
+ *
+ * Tabs are only shown when every rendered item came from the Creators source and
+ * at least two creator subtypes are present.
+ *
+ * @param {object[]} items
+ * @returns {{key:string,label:string,count:number}[]}
+ */
+export function getCreatorResultsTabs(items) {
+  const nextItems = Array.isArray(items) ? items : [];
+  if (!nextItems.length || !nextItems.every((item) => isCreatorScopedItem(item))) {
+    return [];
+  }
+
+  const counts = new Map();
+  for (const item of nextItems) {
+    const tabKey = getCreatorResultsTabKey(item);
+    if (tabKey === "all") {
+      continue;
+    }
+
+    counts.set(tabKey, (counts.get(tabKey) || 0) + 1);
+  }
+
+  if (counts.size <= 1) {
+    return [];
+  }
+
+  return [
+    {
+      key: "all",
+      label: getCreatorResultsTabLabel("all"),
+      count: nextItems.length,
+    },
+    ...["published", "castIn", "characters", "characterCameos"]
+      .filter((tabKey) => counts.has(tabKey))
+      .map((tabKey) => ({
+        key: tabKey,
+        label: getCreatorResultsTabLabel(tabKey),
+        count: counts.get(tabKey) || 0,
+      })),
+  ];
+}
+
+/**
+ * Filters items to the active creator result tab.
+ *
+ * @param {object[]} items
+ * @param {string} activeTabKey
+ * @returns {object[]}
+ */
+export function filterItemsForCreatorResultsTab(items, activeTabKey) {
+  const nextItems = Array.isArray(items) ? items : [];
+  if (!nextItems.length || !activeTabKey || activeTabKey === "all") {
+    return nextItems;
+  }
+
+  return nextItems.filter((item) => getCreatorResultsTabKey(item) === activeTabKey);
 }

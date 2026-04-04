@@ -15,7 +15,7 @@ import { syncFetchProgressPanel } from "./render/fetch-progress.js";
 import { syncPrimaryControls } from "./render/primary-controls.js";
 import { syncSettingsInputs } from "./render/settings-sync.js";
 import { syncCharacterMenu } from "../controllers/source-menus.js";
-import { syncCharacterSelectionScreen } from "./character-selection.js";
+import { syncSourceSelectionScreen } from "./character-selection.js";
 
 /**
  * Top-level renderer that maps background state onto popup UI.
@@ -27,11 +27,15 @@ import { syncCharacterSelectionScreen } from "./character-selection.js";
 export function renderCurrentItems() {
   syncCharacterMenu();
   if (
-    syncCharacterSelectionScreen(
+    syncSourceSelectionScreen(
       popupState.latestRenderState.phase,
       popupState.latestRenderState.items,
     )
   ) {
+    if (dom.creatorResultsTabs instanceof HTMLElement) {
+      dom.creatorResultsTabs.replaceChildren();
+      dom.creatorResultsTabs.classList.add("hidden");
+    }
     return;
   }
 
@@ -123,6 +127,12 @@ export function renderState(state) {
     : [];
   popupState.selectedCharacterAccountIds = Array.isArray(state && state.selectedCharacterAccountIds)
     ? state.selectedCharacterAccountIds
+    : [];
+  popupState.creatorProfiles = Array.isArray(state && state.creatorProfiles)
+    ? state.creatorProfiles
+    : [];
+  popupState.selectedCreatorProfileIds = Array.isArray(state && state.selectedCreatorProfileIds)
+    ? state.selectedCreatorProfileIds
     : [];
   popupState.latestRenderState = {
     items,

@@ -7,7 +7,6 @@ import {
   getSelectedSourceValues,
   normalizeSortValue,
   serializeSourceValues,
-  setSelectedSourceValues,
 } from "../utils/settings.js";
 import { applyTheme, showNotice, updateBackToTopVisibility } from "../ui/layout.js";
 import { renderCurrentItems } from "../ui/render.js";
@@ -27,6 +26,28 @@ export function handleSearchInput() {
  */
 export function handleSortChange() {
   popupState.browseState.sort = dom.sortSelect?.value || "newest";
+  rerenderBrowseResults();
+}
+
+/**
+ * Switches the visible creator-only results tab.
+ *
+ * @param {MouseEvent} event
+ */
+export function handleCreatorResultsTabClick(event) {
+  const button = event.target instanceof Element
+    ? event.target.closest("[data-creator-results-tab]")
+    : null;
+  if (!(button instanceof HTMLButtonElement)) {
+    return;
+  }
+
+  const nextTab = button.dataset.creatorResultsTab || "all";
+  if (nextTab === popupState.activeCreatorResultsTab) {
+    return;
+  }
+
+  popupState.activeCreatorResultsTab = nextTab;
   rerenderBrowseResults();
 }
 
@@ -171,11 +192,6 @@ async function saveSettingsFromForm() {
     source: serializeSourceValues(defaultSource),
     sort: defaultSort,
   };
-
-  if (dom.sourceSelectLabel instanceof HTMLElement) {
-    setSelectedSourceValues(dom.sourceSelectInputs, defaultSource);
-    dom.sourceSelectLabel.textContent = formatSourceSelectionLabel(defaultSource);
-  }
 
   if (dom.defaultSourceLabel instanceof HTMLElement) {
     dom.defaultSourceLabel.textContent = formatSourceSelectionLabel(defaultSource);

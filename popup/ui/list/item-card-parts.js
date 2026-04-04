@@ -4,7 +4,12 @@ import {
   formatFileSize,
   truncatePrompt,
 } from "../../utils/format.js";
-import { getAspectRatioLabel, resolveItemTitle } from "../../utils/items.js";
+import {
+  getAspectRatioLabel,
+  getItemSourceLabel,
+  isCreatorScopedItem,
+  resolveItemTitle,
+} from "../../utils/items.js";
 
 /**
  * Creates the editable title row.
@@ -48,6 +53,11 @@ export function createTitleRow(item, context) {
 export function createMetaRow(item) {
   const metaRow = document.createElement("div");
   metaRow.className = "item-meta-row";
+
+  const sourceBadge = createSourceBadge(item);
+  if (sourceBadge) {
+    metaRow.append(sourceBadge);
+  }
 
   const aspectBadge = createAspectBadge(item);
   if (aspectBadge) {
@@ -142,6 +152,23 @@ function createAspectBadge(item) {
   const badge = document.createElement("span");
   badge.className = "item-aspect-badge";
   badge.textContent = aspectLabel;
+  return badge;
+}
+
+/**
+ * Creates a badge describing the item's source bucket when that extra context matters.
+ *
+ * @param {object} item
+ * @returns {HTMLSpanElement|null}
+ */
+function createSourceBadge(item) {
+  if (!isCreatorScopedItem(item)) {
+    return null;
+  }
+
+  const badge = document.createElement("span");
+  badge.className = "item-source-badge";
+  badge.textContent = getItemSourceLabel(item);
   return badge;
 }
 

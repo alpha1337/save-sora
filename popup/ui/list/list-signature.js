@@ -21,11 +21,14 @@ export function buildRenderSignature(
   titleOverrides,
   disableInputs,
   phase,
+  creatorResultTabs = [],
 ) {
   return JSON.stringify({
     phase,
     sort: popupState.browseState.sort,
     query: normalizeSearchText(popupState.browseState.query),
+    creatorTab: popupState.activeCreatorResultsTab,
+    creatorResultTabs,
     items: sortedItems.map((item) => ({
       key: getItemKey(item),
       selected: selectedKeys.includes(getItemKey(item)),

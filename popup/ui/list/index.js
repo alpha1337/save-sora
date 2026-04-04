@@ -1,7 +1,12 @@
 import { dom } from "../../dom.js";
 import { popupState } from "../../state.js";
+import { formatWholeNumber } from "../../utils/format.js";
 import { getSortedItems } from "../../utils/search.js";
 import { applySelectionUi, updateSelectionSummary } from "../selection.js";
+import {
+  filterItemsForCreatorResultsTab,
+  getCreatorResultsTabs,
+} from "../../utils/items.js";
 import { createItemCard } from "./item-card.js";
 import {
   renderEmptyLibrary,
@@ -27,13 +32,21 @@ export function renderItemsList(items, selectedKeys, titleOverrides, disableInpu
     return;
   }
 
-  const sortedItems = getSortedItems(items, popupState.browseState.sort);
+  const creatorResultTabs = getCreatorResultsTabs(items);
+  syncCreatorResultsTabs(creatorResultTabs);
+
+  const filteredItems = filterItemsForCreatorResultsTab(
+    items,
+    popupState.activeCreatorResultsTab,
+  );
+  const sortedItems = getSortedItems(filteredItems, popupState.browseState.sort);
   const renderSignature = buildRenderSignature(
     sortedItems,
     selectedKeys,
     titleOverrides,
     disableInputs,
     phase,
+    creatorResultTabs.map((tab) => `${tab.key}:${tab.count}`),
   );
   if (renderSignature === popupState.lastRenderedSignature) {
     return;
@@ -87,4 +100,53 @@ export function renderItemsList(items, selectedKeys, titleOverrides, disableInpu
   }
 
   applySelectionUi(items.length, selectedKeys.length, visibleCount, visibleSelectedCount, phase);
+}
+
+/**
+ * Renders the creator-only result tabs when the working set contains multiple
+ * creator subtypes like authored posts and cast-in appearances.
+ *
+ * @param {{key:string,label:string,count:number}[]} tabs
+ */
+function syncCreatorResultsTabs(tabs) {
+  if (!(dom.creatorResultsTabs instanceof HTMLElement)) {
+    return;
+  }
+
+  if (!Array.isArray(tabs) || tabs.length <= 1) {
+    popupState.activeCreatorResultsTab = "all";
+    dom.creatorResultsTabs.replaceChildren();
+    dom.creatorResultsTabs.classList.add("hidden");
+    return;
+  }
+
+  const validKeys = new Set(tabs.map((tab) => tab.key));
+  if (!validKeys.has(popupState.activeCreatorResultsTab)) {
+    popupState.activeCreatorResultsTab = "all";
+  }
+
+  const fragment = document.createDocumentFragment();
+  for (const tab of tabs) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "creator-results-tab";
+    button.dataset.creatorResultsTab = tab.key;
+    button.setAttribute("role", "tab");
+    button.setAttribute("aria-selected", tab.key === popupState.activeCreatorResultsTab ? "true" : "false");
+    button.classList.toggle("is-active", tab.key === popupState.activeCreatorResultsTab);
+
+    const label = document.createElement("span");
+    label.className = "creator-results-tab-label";
+    label.textContent = tab.label;
+
+    const count = document.createElement("span");
+    count.className = "creator-results-tab-count";
+    count.textContent = formatWholeNumber(tab.count);
+
+    button.append(label, count);
+    fragment.append(button);
+  }
+
+  dom.creatorResultsTabs.replaceChildren(fragment);
+  dom.creatorResultsTabs.classList.remove("hidden");
 }

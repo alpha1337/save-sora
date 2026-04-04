@@ -8,16 +8,16 @@ export const AVAILABLE_SOURCE_VALUES = [
   "likes",
   "characters",
   "characterAccounts",
+  "creators",
 ];
-const DEFAULT_SOURCE_VALUES = ["profile", "drafts"];
 
 /**
  * Normalizes one or more selected sources, including legacy saved values.
  *
  * @param {string|string[]|null|undefined} value
- * @returns {("profile"|"drafts"|"likes"|"characters"|"characterAccounts")[]}
+ * @returns {("profile"|"drafts"|"likes"|"characters"|"characterAccounts"|"creators")[]}
  */
-export function normalizeSourceValues(value) {
+export function normalizeSourceValues(value, fallback = []) {
   const requested = Array.isArray(value) ? value : value == null ? [] : [value];
   const selected = new Set();
 
@@ -33,21 +33,22 @@ export function normalizeSourceValues(value) {
       entry === "drafts" ||
       entry === "likes" ||
       entry === "characters" ||
-      entry === "characterAccounts"
+      entry === "characterAccounts" ||
+      entry === "creators"
     ) {
       selected.add(entry);
     }
   }
 
   const ordered = AVAILABLE_SOURCE_VALUES.filter((entry) => selected.has(entry));
-  return ordered.length ? ordered : [...DEFAULT_SOURCE_VALUES];
+  return ordered.length ? ordered : [...fallback];
 }
 
 /**
  * Reads the checked source values from a checkbox group without applying a fallback.
  *
  * @param {Iterable<Element>|ArrayLike<Element>|null|undefined} inputs
- * @returns {("profile"|"drafts"|"likes"|"characters"|"characterAccounts")[]}
+ * @returns {("profile"|"drafts"|"likes"|"characters"|"characterAccounts"|"creators")[]}
  */
 export function readCheckedSourceValues(inputs) {
   const selected = new Set();
@@ -62,7 +63,8 @@ export function readCheckedSourceValues(inputs) {
       input.value === "drafts" ||
       input.value === "likes" ||
       input.value === "characters" ||
-      input.value === "characterAccounts"
+      input.value === "characterAccounts" ||
+      input.value === "creators"
     ) {
       selected.add(input.value);
     }
@@ -72,10 +74,10 @@ export function readCheckedSourceValues(inputs) {
 }
 
 /**
- * Reads a checkbox group and guarantees at least the default source selection.
+ * Reads a checkbox group and returns the explicit checked source values.
  *
  * @param {Iterable<Element>|ArrayLike<Element>|null|undefined} inputs
- * @returns {("profile"|"drafts"|"likes"|"characters"|"characterAccounts")[]}
+ * @returns {("profile"|"drafts"|"likes"|"characters"|"characterAccounts"|"creators")[]}
  */
 export function getSelectedSourceValues(inputs) {
   return normalizeSourceValues(readCheckedSourceValues(inputs));
@@ -112,7 +114,7 @@ export function serializeSourceValues(values) {
 /**
  * Returns the display label for a single source value.
  *
- * @param {"profile"|"drafts"|"likes"|"characters"|"characterAccounts"} value
+ * @param {"profile"|"drafts"|"likes"|"characters"|"characterAccounts"|"creators"} value
  * @returns {string}
  */
 export function getSourceOptionLabel(value) {
@@ -132,6 +134,10 @@ export function getSourceOptionLabel(value) {
     return "Characters";
   }
 
+  if (value === "creators") {
+    return "Creators";
+  }
+
   return "Cameos";
 }
 
@@ -143,6 +149,10 @@ export function getSourceOptionLabel(value) {
  */
 export function formatSourceSelectionLabel(values) {
   const normalized = normalizeSourceValues(values);
+  if (normalized.length === 0) {
+    return "No sources selected";
+  }
+
   if (normalized.length > 2) {
     return `${getSourceOptionLabel(normalized[0])} +${normalized.length - 1} more`;
   }

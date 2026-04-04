@@ -1,6 +1,6 @@
 {
   "name": "save-sora",
-  "version": "1.12.0",
+  "version": "1.13.40",
   "private": true,
   "description": "Build helpers for the Save Sora Chrome extension.",
   "scripts": {

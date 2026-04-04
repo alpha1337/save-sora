@@ -1,12 +1,15 @@
 import { dom } from "../dom.js";
 import { popupState } from "../state.js";
 import {
-  isCharacterSelectionScreenVisible,
-  setCharacterSelectionSummary,
+  getSelectionScreenActionState,
+  isSourceSelectionScreenVisible,
+  setSourceSelectionSummary,
 } from "./character-selection.js";
 import { formatFileSize, formatWholeNumber } from "../utils/format.js";
 import { getSelectedSourceValues } from "../utils/settings.js";
 import {
+  getCreatorResultsTabLabel,
+  getCreatorResultsTabs,
   getActiveSelectableCount,
   getDownloadedCount,
   getSelectedBatchMetrics,
@@ -135,8 +138,17 @@ export function updateSelectionSummary({
 
   const downloadedCount = getDownloadedCount(popupState.latestRenderState.items);
   const selectedSources = getSelectedSourceValues(dom.sourceSelectInputs);
-  const isCharacterSelectionMode =
-    selectedSources.includes("characterAccounts") &&
+  const creatorResultTabs = getCreatorResultsTabs(popupState.latestRenderState.items);
+  const activeCreatorResultsTab = new Set(creatorResultTabs.map((tab) => tab.key)).has(
+    popupState.activeCreatorResultsTab,
+  )
+    ? popupState.activeCreatorResultsTab
+    : "all";
+  const creatorFilterActive =
+    creatorResultTabs.length > 1 && activeCreatorResultsTab !== "all";
+  const creatorFilterLabel = getCreatorResultsTabLabel(activeCreatorResultsTab);
+  const isSourceSelectionMode =
+    (selectedSources.includes("characterAccounts") || selectedSources.includes("creators")) &&
     phase !== "fetching" &&
     totalCount === 0;
   popupState.latestSummaryContext = {
@@ -154,8 +166,13 @@ export function updateSelectionSummary({
     return;
   }
 
-  if (isCharacterSelectionMode) {
-    setCharacterSelectionSummary();
+  if (isSourceSelectionMode) {
+    setSourceSelectionSummary();
+    return;
+  }
+
+  if (selectedSources.length === 0 && totalCount === 0) {
+    dom.selectionSummary.textContent = "Choose at least one source to fetch.";
     return;
   }
 
@@ -166,10 +183,17 @@ export function updateSelectionSummary({
   }
 
   if (query.trim()) {
+    const scopeSuffix = creatorFilterActive ? ` in ${creatorFilterLabel}` : "";
     dom.selectionSummary.textContent =
       visibleCount > 0
-        ? `${formatWholeNumber(visibleCount)} matches • ${formatWholeNumber(visibleSelectedCount)} selected in view • ${formatWholeNumber(selectedCount)} selected overall${downloadedCount > 0 ? ` • ${formatWholeNumber(downloadedCount)} downloaded` : ""}`
-        : `No matches for “${query.trim()}”`;
+        ? `${formatWholeNumber(visibleCount)} matches${scopeSuffix} • ${formatWholeNumber(visibleSelectedCount)} selected in view • ${formatWholeNumber(selectedCount)} selected overall${downloadedCount > 0 ? ` • ${formatWholeNumber(downloadedCount)} downloaded` : ""}`
+        : `No matches for “${query.trim()}”${scopeSuffix}`;
+    return;
+  }
+
+  if (creatorFilterActive) {
+    dom.selectionSummary.textContent =
+      `${formatWholeNumber(visibleCount)} ${creatorFilterLabel.toLowerCase()} • ${formatWholeNumber(visibleSelectedCount)} selected in view • ${formatWholeNumber(selectedCount)} selected overall${downloadedCount > 0 ? ` • ${formatWholeNumber(downloadedCount)} downloaded` : ""}`;
     return;
   }
 
@@ -186,16 +210,15 @@ export function updateSelectionSummary({
 export function syncSelectionControls(totalCount, selectedCount, visibleCount = totalCount) {
   const phase = popupState.latestRenderState.phase || "idle";
   const hasLoadedResults = popupState.latestRenderState.items.length > 0;
-  const hasCharacterSelection =
-    isCharacterSelectionScreenVisible() &&
-    Array.isArray(popupState.characterAccounts) &&
-    popupState.characterAccounts.length > 0;
+  const selectionScreenState = getSelectionScreenActionState();
+  const hasSourceSelection =
+    isSourceSelectionScreenVisible() && selectionScreenState.totalCount > 0;
   const isFetching = phase === "fetching";
   const showDownloadButton =
     hasLoadedResults && selectedCount > 0 && !popupState.latestBusy && !popupState.latestPaused && !isFetching;
   const showBatchActions =
     !isFetching &&
-    ((hasLoadedResults && visibleCount > 0) || hasCharacterSelection);
+    ((hasLoadedResults && visibleCount > 0) || hasSourceSelection);
   const showBrowseTools = hasLoadedResults;
   const showSummaryPanel = hasLoadedResults && !isFetching;
 

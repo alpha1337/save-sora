@@ -2,6 +2,7 @@ import { dom } from "../../dom.js";
 import { popupState } from "../../state.js";
 import {
   formatSourceSelectionLabel,
+  getSelectedSourceValues,
   serializeSourceValues,
   setSelectedSourceValues,
 } from "../../utils/settings.js";
@@ -41,13 +42,17 @@ export function syncSettingsInputs(settings, { theme, defaultSource, defaultSort
     dom.defaultThemeInput.value = theme;
   }
 
-  if (
-    dom.sourceSelectLabel instanceof HTMLElement &&
-    defaultsChanged &&
-    !isFocusedSourceGroup(dom.sourceSelectButton, dom.sourceSelectInputs)
-  ) {
-    setSelectedSourceValues(dom.sourceSelectInputs, defaultSource);
-    dom.sourceSelectLabel.textContent = formatSourceSelectionLabel(defaultSource);
+  if (dom.sourceSelectLabel instanceof HTMLElement) {
+    if (
+      !popupState.hasCustomOverviewSourceSelection &&
+      !isFocusedSourceGroup(dom.sourceSelectButton, dom.sourceSelectInputs)
+    ) {
+      setSelectedSourceValues(dom.sourceSelectInputs, defaultSource);
+    }
+
+    dom.sourceSelectLabel.textContent = formatSourceSelectionLabel(
+      getSelectedSourceValues(dom.sourceSelectInputs),
+    );
   }
 
   if (dom.sortSelect && (defaultsChanged || !dom.sortSelect.value) && !isFocusedElement(dom.sortSelect)) {

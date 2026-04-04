@@ -19,6 +19,7 @@ import {
 import { startPolling, stopPolling } from "./polling.js";
 import {
   handleClearStorageClick,
+  handleCreatorResultsTabClick,
   handleMaxVideosInput,
   handleSearchInput,
   handleSettingsBlur,
@@ -29,6 +30,11 @@ import {
 import {
   handleCharacterMenuChange,
   handleCharacterSelectionClick,
+  handleCreatorDialogCancelClick,
+  handleCreatorDialogCancelEvent,
+  handleCreatorDetailsCancelEvent,
+  handleCreatorDetailsCloseClick,
+  handleCreatorDialogSubmit,
   handleCharacterMenuTriggerClick,
   handleOverviewSourceMenuChange,
   handleOverviewSourceTriggerClick,
@@ -59,6 +65,7 @@ export function initializeEventHandlers() {
   dom.itemsList?.addEventListener("focusin", handleItemsListFocusIn);
   dom.itemsList?.addEventListener("focusout", handleItemsListFocusOut);
   dom.searchInput?.addEventListener("input", handleSearchInput);
+  dom.creatorResultsTabs?.addEventListener("click", handleCreatorResultsTabClick);
   dom.sortSelect?.addEventListener("change", handleSortChange);
   dom.themeToggle?.addEventListener("change", handleThemeToggleChange);
   dom.sourceSelectButton?.addEventListener("click", handleOverviewSourceTriggerClick);
@@ -66,6 +73,11 @@ export function initializeEventHandlers() {
   dom.characterSelectButton?.addEventListener("click", handleCharacterMenuTriggerClick);
   dom.characterSelectMenu?.addEventListener("change", handleCharacterMenuChange);
   dom.characterSelectionGrid?.addEventListener("click", handleCharacterSelectionClick);
+  dom.creatorDialogForm?.addEventListener("submit", handleCreatorDialogSubmit);
+  dom.creatorDialogCancel?.addEventListener("click", handleCreatorDialogCancelClick);
+  dom.creatorDialog?.addEventListener("cancel", handleCreatorDialogCancelEvent);
+  dom.creatorDetailsClose?.addEventListener("click", handleCreatorDetailsCloseClick);
+  dom.creatorDetailsDialog?.addEventListener("cancel", handleCreatorDetailsCancelEvent);
   dom.maxVideosInput?.addEventListener("input", handleMaxVideosInput);
   dom.maxVideosInput?.addEventListener("blur", handleSettingsBlur);
   dom.defaultSourceButton?.addEventListener("click", handleSettingsSourceTriggerClick);

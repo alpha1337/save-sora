@@ -36,13 +36,23 @@ export function updateAppScrollLock() {
   }
 
   const isOverview = popupState.activeTab === "overview";
-  const shouldLockApp = isOverview;
-  const shouldEnablePickerScroll = isOverview;
+  const hasModalTakeover = isModalTakeoverOpen();
+  const shouldLockApp = isOverview || hasModalTakeover;
+  const shouldEnablePickerScroll = isOverview && !hasModalTakeover;
 
   dom.appShell.classList.toggle("is-scroll-locked", shouldLockApp);
   dom.appShell.classList.toggle("is-scrollable", !shouldLockApp);
   dom.pickerScrollRegion.classList.toggle("is-scroll-locked", !shouldEnablePickerScroll);
   dom.pickerScrollRegion.classList.toggle("is-scrollable", shouldEnablePickerScroll);
+  document.documentElement.classList.toggle("is-modal-takeover-open", hasModalTakeover);
+  document.body.classList.toggle("is-modal-takeover-open", hasModalTakeover);
+}
+
+export function isModalTakeoverOpen() {
+  return (
+    (dom.creatorDialog instanceof HTMLDialogElement && dom.creatorDialog.open) ||
+    (dom.creatorDetailsDialog instanceof HTMLDialogElement && dom.creatorDetailsDialog.open)
+  );
 }
 
 /**

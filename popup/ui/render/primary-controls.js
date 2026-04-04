@@ -1,11 +1,15 @@
 import { dom } from "../../dom.js";
 import { popupState } from "../../state.js";
+import { getSelectedSourceValues } from "../../utils/settings.js";
 import {
   applyCurrentSelectionUi,
   getItemCheckboxesWithOptions,
   getSelectedKeysFromDom,
 } from "../selection.js";
-import { isCharacterSelectionScreenVisible } from "../character-selection.js";
+import {
+  getSelectionScreenActionState,
+  isSourceSelectionScreenVisible,
+} from "../character-selection.js";
 
 /**
  * Updates the primary button states after a render.
@@ -13,11 +17,14 @@ import { isCharacterSelectionScreenVisible } from "../character-selection.js";
  * @param {{isBusy:boolean,isPaused:boolean,isFetching:boolean,hasResults:boolean}} context
  */
 export function syncPrimaryControls({ isBusy, isPaused, isFetching, hasResults }) {
+  const hasSelectedSources = getSelectedSourceValues(dom.sourceSelectInputs).length > 0;
+  const isResetMode = hasResults && !isFetching;
+
   if (dom.fetchButton) {
-    dom.fetchButton.disabled = isBusy;
-    dom.fetchButton.dataset.mode = hasResults && !isFetching ? "reset" : "scan";
+    dom.fetchButton.disabled = isBusy || (!isResetMode && !hasSelectedSources);
+    dom.fetchButton.dataset.mode = isResetMode ? "reset" : "scan";
     dom.fetchButton.dataset.loading = String(isFetching);
-    dom.fetchButton.classList.toggle("is-danger", hasResults && !isFetching);
+    dom.fetchButton.classList.toggle("is-danger", isResetMode);
   }
 
   if (dom.fetchButtonLabel) {
@@ -39,19 +46,15 @@ export function syncPrimaryControls({ isBusy, isPaused, isFetching, hasResults }
 
   applyCurrentSelectionUi();
 
-  const isCharacterSelectionVisible = isCharacterSelectionScreenVisible();
-  const characterCount = Array.isArray(popupState.characterAccounts)
-    ? popupState.characterAccounts.length
-    : 0;
-  const selectedCharacterCount = Array.isArray(popupState.selectedCharacterAccountIds)
-    ? popupState.selectedCharacterAccountIds.length
-    : 0;
+  const selectionScreenState = getSelectionScreenActionState();
+  const isSourceSelectionVisible = isSourceSelectionScreenVisible();
 
   if (dom.selectAllButton) {
     dom.selectAllButton.disabled =
       isBusy || isPaused || (
-        isCharacterSelectionVisible
-          ? characterCount === 0 || selectedCharacterCount === characterCount
+        isSourceSelectionVisible
+          ? selectionScreenState.visibleCount === 0 ||
+            selectionScreenState.visibleSelectedCount === selectionScreenState.visibleCount
           : getItemCheckboxesWithOptions({ visibleOnly: true, enabledOnly: true }).length === 0
       );
   }
@@ -59,8 +62,8 @@ export function syncPrimaryControls({ isBusy, isPaused, isFetching, hasResults }
   if (dom.clearSelectionButton) {
     dom.clearSelectionButton.disabled =
       isBusy || isPaused || (
-        isCharacterSelectionVisible
-          ? selectedCharacterCount === 0
+        isSourceSelectionVisible
+          ? selectionScreenState.visibleSelectedCount === 0
           : getSelectedKeysFromDom({ visibleOnly: true }).length === 0
       );
   }

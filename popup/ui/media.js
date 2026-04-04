@@ -1,5 +1,5 @@
 import { formatCompactCount, formatDuration } from "../utils/format.js";
-import { resolveItemTitle } from "../utils/items.js";
+import { getItemSourceLabel, resolveItemTitle } from "../utils/items.js";
 
 /**
  * Media-preview helpers for item cards.
@@ -180,16 +180,7 @@ function activateInlineVideo(media, item, titleOverrides) {
 function createThumbnailFallback(item) {
   const fallback = document.createElement("div");
   fallback.className = "item-thumbnail-fallback";
-  fallback.textContent =
-    item.sourcePage === "drafts"
-      ? "Draft"
-      : item.sourcePage === "likes"
-        ? "Liked"
-        : item.sourcePage === "cameos"
-          ? "Cameo"
-        : item.sourcePage === "characters"
-          ? "Character"
-          : "Published";
+  fallback.textContent = getItemSourceLabel(item);
   return fallback;
 }
 

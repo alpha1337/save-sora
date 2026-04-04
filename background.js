@@ -11,29 +11,46 @@ const START_ARCHIVE_BUILD = "START_ARCHIVE_BUILD";
 const ABORT_ARCHIVE_BUILD = "ABORT_ARCHIVE_BUILD";
 const RELEASE_ARCHIVE_OBJECT_URL = "RELEASE_ARCHIVE_OBJECT_URL";
 const PROFILE_LIMIT = 100;
+const CREATOR_PROFILE_FEED_LIMIT = 8;
+const CREATOR_PROFILE_FEED_MIN_PAGE_CAP = 250;
+const CREATOR_PROFILE_FEED_PAGE_BUFFER = 50;
+const CREATOR_PROFILE_FEED_MAX_PAGE_CAP = 5000;
 const DRAFT_BATCH_LIMIT = 100;
 const LIKES_BATCH_LIMIT = 100;
 const CHARACTERS_BATCH_LIMIT = 100;
 const CHARACTER_ACCOUNT_LIMIT = 100;
 const DOWNLOAD_PROGRESS_PERSIST_INTERVAL = 25;
 const CATALOG_FULL_REFRESH_INTERVAL_MS = 1000 * 60 * 60 * 6;
+const CREATOR_SOURCE_SELECTION_SIGNATURE_VERSION = "creator-feed-v9";
 const FETCH_OPENING_PROGRESS_RATIO = 0.04;
 const FETCH_SOURCE_PROGRESS_RATIO = 0.74;
 const FETCH_PROCESSING_PROGRESS_RATIO = 0.22;
 const FETCH_PROCESSING_STEP_COUNT = 2;
 const FETCH_PROGRESS_CHUNK_SIZE = 250;
-const AVAILABLE_SOURCE_VALUES = ["profile", "drafts", "likes", "characters", "characterAccounts"];
-const DEFAULT_SOURCE_VALUES = ["profile", "drafts"];
+const AVAILABLE_SOURCE_VALUES = [
+  "profile",
+  "drafts",
+  "likes",
+  "characters",
+  "characterAccounts",
+  "creators",
+];
+const DEFAULT_SOURCE_VALUES = [];
 const SOURCE_ROUTES = {
   profile: "https://sora.chatgpt.com/profile",
   drafts: "https://sora.chatgpt.com/drafts",
   likes: "https://sora.chatgpt.com/profile",
   characters: "https://sora.chatgpt.com/profile",
   characterAccounts: "https://sora.chatgpt.com/profile",
+  creators: "https://sora.chatgpt.com/profile",
   characterDrafts: "https://sora.chatgpt.com/profile",
   characterProfiles: "https://sora.chatgpt.com/profile",
   characterAccountPosts: "https://sora.chatgpt.com/profile",
   characterAccountDrafts: "https://sora.chatgpt.com/profile",
+  creatorProfileLookup: "https://sora.chatgpt.com/profile",
+  creatorPublished: "https://sora.chatgpt.com/profile",
+  creatorCameos: "https://sora.chatgpt.com/profile",
+  creatorCharacters: "https://sora.chatgpt.com/profile",
 };
 
 let currentState = createDefaultState();
@@ -182,6 +199,18 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 
+  if (message.type === "REFRESH_CREATOR_PROFILES") {
+    void refreshWeakCreatorProfiles()
+      .then(() => {
+        sendResponse({ ok: true, state: currentState });
+      })
+      .catch((error) => {
+        console.error("Failed to refresh the saved creator profiles.", error);
+        sendResponse({ ok: false, error: getErrorMessage(error) });
+      });
+    return true;
+  }
+
   if (message.type === "SET_SELECTION") {
     if (!Array.isArray(message.selectedKeys)) {
       sendResponse({ ok: false, error: "The selection payload must be an array." });
@@ -293,6 +322,74 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       })
       .catch((error) => {
         console.error("Failed to update the character selection.", error);
+        sendResponse({ ok: false, error: getErrorMessage(error) });
+      });
+    return true;
+  }
+
+  if (message.type === "ADD_CREATOR_PROFILE") {
+    if (typeof message.profileUrl !== "string" || !message.profileUrl.trim()) {
+      sendResponse({ ok: false, error: "Paste a valid Sora creator username or profile link." });
+      return false;
+    }
+
+    void addCreatorProfile(message.profileUrl)
+      .then((creatorProfile) => {
+        sendResponse({ ok: true, creatorProfile, state: currentState });
+      })
+      .catch((error) => {
+        console.error("Failed to add the creator profile.", error);
+        sendResponse({ ok: false, error: getErrorMessage(error) });
+      });
+    return true;
+  }
+
+  if (message.type === "ADD_CREATOR_PROFILES") {
+    if (!Array.isArray(message.profileUrls) || message.profileUrls.length === 0) {
+      sendResponse({ ok: false, error: "Paste at least one Sora creator username or profile link." });
+      return false;
+    }
+
+    void addCreatorProfiles(message.profileUrls)
+      .then((result) => {
+        sendResponse({ ok: true, ...result, state: currentState });
+      })
+      .catch((error) => {
+        console.error("Failed to add creator profiles.", error);
+        sendResponse({ ok: false, error: getErrorMessage(error) });
+      });
+    return true;
+  }
+
+  if (message.type === "REMOVE_CREATOR_PROFILE") {
+    if (typeof message.creatorProfileId !== "string" || !message.creatorProfileId) {
+      sendResponse({ ok: false, error: "A valid creator profile id is required." });
+      return false;
+    }
+
+    void removeCreatorProfile(message.creatorProfileId)
+      .then(() => {
+        sendResponse({ ok: true, state: currentState });
+      })
+      .catch((error) => {
+        console.error("Failed to remove the creator profile.", error);
+        sendResponse({ ok: false, error: getErrorMessage(error) });
+      });
+    return true;
+  }
+
+  if (message.type === "SET_CREATOR_SELECTION") {
+    if (!Array.isArray(message.selectedCreatorProfileIds)) {
+      sendResponse({ ok: false, error: "The creator selection payload must be an array." });
+      return false;
+    }
+
+    void setSelectedCreatorProfileIds(message.selectedCreatorProfileIds)
+      .then(() => {
+        sendResponse({ ok: true, state: currentState });
+      })
+      .catch((error) => {
+        console.error("Failed to update the creator selection.", error);
         sendResponse({ ok: false, error: getErrorMessage(error) });
       });
     return true;
@@ -414,9 +511,13 @@ function createDefaultState(overrides = {}) {
     likesIds: [],
     cameoIds: [],
     characterIds: [],
+    creatorIds: [],
     characterAccounts: [],
     selectedCharacterAccountIds: [],
     hasExplicitCharacterAccountSelection: true,
+    creatorProfiles: [],
+    selectedCreatorProfileIds: [],
+    hasExplicitCreatorProfileSelection: true,
     items: [],
     selectedKeys: [],
     titleOverrides: {},
@@ -456,6 +557,7 @@ function createDefaultCatalogState(overrides = {}) {
       likes: createDefaultCatalogSyncEntry(),
       characters: createDefaultCatalogSyncEntry(),
       characterAccounts: createDefaultCatalogSyncEntry(),
+      creators: createDefaultCatalogSyncEntry(),
     },
     ...overrides,
   };
@@ -519,6 +621,10 @@ function getFetchSourceLabel(source) {
 
   if (source === "characterAccounts") {
     return "character videos";
+  }
+
+  if (source === "creators") {
+    return "creator videos";
   }
 
   return "videos";
@@ -593,6 +699,7 @@ function normalizeCatalogSourceSync(sourceSync) {
     likes: normalizeCatalogSyncEntry(normalizedSync.likes),
     characters: normalizeCatalogSyncEntry(normalizedSync.characters),
     characterAccounts: normalizeCatalogSyncEntry(normalizedSync.characterAccounts),
+    creators: normalizeCatalogSyncEntry(normalizedSync.creators),
   };
 }
 
@@ -614,13 +721,98 @@ function normalizeCatalogItems(items) {
   return [...itemMap.values()];
 }
 
+function stripItemForPersistence(item) {
+  if (!item || typeof item !== "object" || typeof item.id !== "string") {
+    return null;
+  }
+
+  const {
+    metadataEntries: _metadataEntries,
+    ...persistedItem
+  } = item;
+
+  const key = persistedItem.key || getItemKey(persistedItem);
+  return {
+    ...persistedItem,
+    key,
+  };
+}
+
+function normalizePersistedItems(items) {
+  const persistedItems = [];
+
+  for (const item of normalizeCatalogItems(items)) {
+    const persistedItem = stripItemForPersistence(item);
+    if (persistedItem) {
+      persistedItems.push(persistedItem);
+    }
+  }
+
+  return persistedItems;
+}
+
+function buildPersistedItemKeys(items) {
+  return normalizeCatalogItems(items).map((item) => item.key || getItemKey(item));
+}
+
+function serializeStateForPersistence(state = currentState) {
+  const persistedItemKeys = buildPersistedItemKeys(state && state.items);
+  const nextState = {
+    ...(state && typeof state === "object" ? state : createDefaultState()),
+    profileIds: [],
+    draftIds: [],
+    likesIds: [],
+    cameoIds: [],
+    characterIds: [],
+    creatorIds: [],
+    items: [],
+    itemKeys: persistedItemKeys,
+    pendingItems: normalizePersistedItems(state && state.pendingItems),
+    failedItems: normalizePersistedItems(state && state.failedItems),
+    fetchProgress: createDefaultFetchProgress(),
+  };
+
+  nextState.selectedKeys = Array.isArray(nextState.selectedKeys)
+    ? nextState.selectedKeys.filter((value) => typeof value === "string")
+    : [];
+
+  return nextState;
+}
+
+function serializeCatalogForPersistence(catalog = currentCatalog) {
+  const sourceCatalog = catalog && typeof catalog === "object" ? catalog : createDefaultCatalogState();
+  return {
+    ...sourceCatalog,
+    items: normalizePersistedItems(sourceCatalog.items),
+    sourceSync: normalizeCatalogSourceSync(sourceCatalog.sourceSync),
+  };
+}
+
+function restorePersistedItems(savedState, catalogItems) {
+  const sourceState = savedState && typeof savedState === "object" ? savedState : null;
+  const catalogByKey = new Map(
+    normalizeCatalogItems(catalogItems).map((item) => [item.key || getItemKey(item), item]),
+  );
+  const savedItemKeys = Array.isArray(sourceState && sourceState.itemKeys)
+    ? sourceState.itemKeys.filter((value) => typeof value === "string" && value)
+    : [];
+
+  if (savedItemKeys.length > 0) {
+    return savedItemKeys
+      .map((key) => catalogByKey.get(key))
+      .filter((item) => Boolean(item));
+  }
+
+  return normalizeCatalogItems(sourceState && sourceState.items);
+}
+
 async function restoreState() {
   // Restore local-only extension state so the popup can reopen without losing the current
   // queue, previous results, or user preferences.
   try {
     const stored = await chrome.storage.local.get([STATE_KEY, CATALOG_STORAGE_KEY]);
+    const savedState = stored && stored[STATE_KEY] ? stored[STATE_KEY] : null;
     if (stored && stored[STATE_KEY]) {
-      const savedState = stored[STATE_KEY];
       currentState = {
         ...createDefaultState(),
         ...savedState,
@@ -655,12 +847,37 @@ async function restoreState() {
           hasExplicitCharacterAccountSelection: true,
         };
       }
+      currentState.creatorProfiles = normalizeResolvedCreatorProfiles(currentState.creatorProfiles);
+      if (currentState.hasExplicitCreatorProfileSelection !== true) {
+        const savedSelection = Array.isArray(currentState.selectedCreatorProfileIds)
+          ? currentState.selectedCreatorProfileIds.filter((value) => typeof value === "string")
+          : [];
+        const savedCreatorIds = currentState.creatorProfiles.map((profile) => profile.profileId);
+        const selectionMatchedEveryCreator =
+          savedCreatorIds.length > 0 &&
+          savedSelection.length === savedCreatorIds.length &&
+          savedCreatorIds.every((profileId) => savedSelection.includes(profileId));
+
+        currentState = {
+          ...currentState,
+          selectedCreatorProfileIds: selectionMatchedEveryCreator ? [] : savedSelection,
+          hasExplicitCreatorProfileSelection: true,
+        };
+      }
       currentState.selectedCharacterAccountIds = normalizeSelectedCharacterAccountIds(
         currentState.characterAccounts,
         currentState.selectedCharacterAccountIds,
         null,
         {
           allowEmpty: currentState.hasExplicitCharacterAccountSelection === true,
+        },
+      );
+      currentState.selectedCreatorProfileIds = normalizeSelectedCreatorProfileIds(
+        currentState.creatorProfiles,
+        currentState.selectedCreatorProfileIds,
+        null,
+        {
+          allowEmpty: currentState.hasExplicitCreatorProfileSelection === true,
         },
       );
       currentState.items = normalizeCatalogItems(currentState.items);
@@ -678,17 +895,37 @@ async function restoreState() {
         sourceSync: normalizeCatalogSourceSync(savedCatalog.sourceSync),
       });
     }
+
+    const restoredItems = restorePersistedItems(savedState, currentCatalog.items);
+    if (restoredItems.length > 0 || (savedState && Array.isArray(savedState.itemKeys))) {
+      const restoredSourceIds = deriveSourceIdsFromItems(restoredItems);
+      currentState = {
+        ...currentState,
+        items: restoredItems,
+        profileIds: restoredSourceIds.profileIds,
+        draftIds: restoredSourceIds.draftIds,
+        likesIds: restoredSourceIds.likesIds,
+        cameoIds: restoredSourceIds.cameoIds,
+        characterIds: restoredSourceIds.characterIds,
+        creatorIds: restoredSourceIds.creatorIds,
+        fetchedCount: restoredItems.length,
+        selectedKeys: normalizeSelectedKeys(restoredItems, currentState.selectedKeys),
+        titleOverrides: pruneLegacyTitleOverrides(restoredItems, currentState.titleOverrides),
+      };
+    }
+
+    void refreshWeakCreatorProfiles();
   } catch (error) {
     console.warn("Failed to restore extension state.", error);
   }
 }
 
 async function persistState(state = currentState) {
-  await chrome.storage.local.set({ [STATE_KEY]: state });
+  await chrome.storage.local.set({ [STATE_KEY]: serializeStateForPersistence(state) });
 }
 
 async function persistCatalogState(catalog = currentCatalog) {
-  await chrome.storage.local.set({ [CATALOG_STORAGE_KEY]: catalog });
+  await chrome.storage.local.set({ [CATALOG_STORAGE_KEY]: serializeCatalogForPersistence(catalog) });
 }
 
 async function setState(patch, options = {}) {
@@ -696,6 +933,13 @@ async function setState(patch, options = {}) {
     ...currentState,
     ...patch,
   };
+  currentState.creatorProfiles = normalizeResolvedCreatorProfiles(currentState.creatorProfiles);
+  currentState.selectedCreatorProfileIds = normalizeSelectedCreatorProfileIds(
+    currentState.creatorProfiles,
+    currentState.selectedCreatorProfileIds,
+    [],
+    { allowEmpty: true },
+  );
 
   if (options.persist === false) {
     return;
@@ -728,6 +972,14 @@ async function resetExtensionState() {
           ? currentState.settings
           : {}),
       },
+      creatorProfiles: normalizeResolvedCreatorProfiles(currentState.creatorProfiles),
+      selectedCreatorProfileIds: normalizeSelectedCreatorProfileIds(
+        normalizeResolvedCreatorProfiles(currentState.creatorProfiles),
+        currentState.selectedCreatorProfileIds,
+        [],
+        { allowEmpty: true },
+      ),
+      hasExplicitCreatorProfileSelection: true,
     }),
   );
 }
@@ -739,7 +991,7 @@ async function clearLocalStorageState() {
 }
 
 function normalizeSources(input) {
-  return normalizeSourceSelection(input);
+  return normalizeSourceSelection(input, []);
 }
 
 function getItemKey(item) {
@@ -1017,6 +1269,14 @@ function getArchiveMediaFolderPath(item) {
       return "cameos";
     case "characters":
       return `characters/${getArchiveCharacterFolderName(item)}/${item && item.sourceType === "draft" ? "drafts" : "published"}`;
+    case "creatorPublished":
+      return `creators/${getArchiveCreatorFolderName(item)}/published`;
+    case "creatorCameos":
+      return `creators/${getArchiveCreatorFolderName(item)}/cameos`;
+    case "creatorCharacters":
+      return `creators/${getArchiveCreatorFolderName(item)}/characters`;
+    case "creatorCharacterCameos":
+      return `creators/${getArchiveCreatorFolderName(item)}/character-cameos`;
     default:
       return "videos";
   }
@@ -1024,6 +1284,15 @@ function getArchiveMediaFolderPath(item) {
 
 function getArchiveFolderImagePath(item) {
   if (!item || item.sourcePage !== "characters") {
+    if (
+      item &&
+      (item.sourcePage === "creatorPublished" ||
+        item.sourcePage === "creatorCameos" ||
+        item.sourcePage === "creatorCharacters" ||
+        item.sourcePage === "creatorCharacterCameos")
+    ) {
+      return getArchiveMediaFolderPath(item);
+    }
     return getArchiveMediaFolderPath(item);
   }
 
@@ -1037,6 +1306,15 @@ function getArchiveCharacterFolderName(item) {
     (item && item.characterAccountId) ||
     "character";
   return sanitizeFilenamePart(preferredName) || "character";
+}
+
+function getArchiveCreatorFolderName(item) {
+  const preferredName =
+    (item && item.creatorProfileDisplayName) ||
+    (item && item.creatorProfileUsername) ||
+    (item && item.creatorProfileId) ||
+    "creator";
+  return sanitizeFilenamePart(preferredName) || "creator";
 }
 
 function getArchiveFilename(item) {
@@ -1143,6 +1421,7 @@ function deriveSourceIdsFromItems(items) {
   const likesIds = new Set();
   const cameoIds = new Set();
   const characterIds = new Set();
+  const creatorIds = new Set();
 
   for (const item of Array.isArray(items) ? items : []) {
     if (!item || typeof item.id !== "string") {
@@ -1159,6 +1438,13 @@ function deriveSourceIdsFromItems(items) {
       cameoIds.add(item.id);
     } else if (item.sourcePage === "characters") {
       characterIds.add(item.id);
+    } else if (
+      item.sourcePage === "creatorPublished" ||
+      item.sourcePage === "creatorCameos" ||
+      item.sourcePage === "creatorCharacters" ||
+      item.sourcePage === "creatorCharacterCameos"
+    ) {
+      creatorIds.add(item.id);
     }
   }
 
@@ -1168,6 +1454,7 @@ function deriveSourceIdsFromItems(items) {
     likesIds: [...likesIds],
     cameoIds: [...cameoIds],
     characterIds: [...characterIds],
+    creatorIds: [...creatorIds],
   };
 }
 
@@ -1196,24 +1483,50 @@ function getCatalogSourceForItem(item) {
     return "characterAccounts";
   }
 
+  if (
+    item.sourcePage === "creatorPublished" ||
+    item.sourcePage === "creatorCameos" ||
+    item.sourcePage === "creatorCharacters" ||
+    item.sourcePage === "creatorCharacterCameos"
+  ) {
+    return "creators";
+  }
+
   return null;
 }
 
-function itemMatchesSourceSelection(item, sources, selectedCharacterAccountIds = []) {
+function itemMatchesSourceSelection(
+  item,
+  sources,
+  selectedCharacterAccountIds = [],
+  selectedCreatorProfileIds = [],
+) {
   const source = getCatalogSourceForItem(item);
   if (!source || !Array.isArray(sources) || !sources.includes(source)) {
     return false;
   }
 
-  if (source !== "characterAccounts") {
+  if (source !== "characterAccounts" && source !== "creators") {
     return true;
   }
 
-  const selectedIds = new Set(
-    Array.isArray(selectedCharacterAccountIds) ? selectedCharacterAccountIds : [],
-  );
+  const selectedIds = new Set(source === "characterAccounts"
+    ? Array.isArray(selectedCharacterAccountIds)
+      ? selectedCharacterAccountIds
+      : []
+    : Array.isArray(selectedCreatorProfileIds)
+      ? selectedCreatorProfileIds
+      : []);
   if (selectedIds.size === 0) {
-    return true;
+    return false;
+  }
+
+  if (source === "creators") {
+    return (
+      typeof item.creatorProfileId === "string" &&
+      item.creatorProfileId &&
+      selectedIds.has(item.creatorProfileId)
+    );
   }
 
   return (
@@ -1230,14 +1543,95 @@ function getCharacterAccountSelectionSignature(selectedCharacterAccountIds = [])
     .join("|");
 }
 
+function getCreatorProfileSelectionSignature(selectedCreatorProfileIds = []) {
+  const selectedIds = [...new Set(Array.isArray(selectedCreatorProfileIds) ? selectedCreatorProfileIds : [])]
+    .filter((value) => typeof value === "string" && value)
+    .sort((left, right) => left.localeCompare(right))
+    .join("|");
+  return `${CREATOR_SOURCE_SELECTION_SIGNATURE_VERSION}:${selectedIds}`;
+}
+
+function getSourceSelectionSignature(source, options = {}) {
+  if (source === "characterAccounts") {
+    return getCharacterAccountSelectionSignature(options.selectedCharacterAccountIds);
+  }
+
+  if (source === "creators") {
+    return getCreatorProfileSelectionSignature(options.selectedCreatorProfileIds);
+  }
+
+  return "";
+}
+
+function getCreatorProfileExpectedPostCount(profile) {
+  const profileData =
+    profile && profile.profileData && typeof profile.profileData === "object"
+      ? profile.profileData
+      : null;
+  const candidates = [
+    profileData && profileData.post_count,
+    profileData && profileData.postCount,
+    profileData && profileData.posts_count,
+    profileData && profileData.postsCount,
+  ];
+
+  for (const candidate of candidates) {
+    if (typeof candidate === "number" && Number.isFinite(candidate) && candidate > 0) {
+      return Math.floor(candidate);
+    }
+  }
+
+  return 0;
+}
+
+function getExpectedCreatorSelectionCount(creatorProfiles, selectedCreatorProfileIds) {
+  const selectedIds = new Set(
+    normalizeSelectedCreatorProfileIds(creatorProfiles, selectedCreatorProfileIds, [], {
+      allowEmpty: true,
+    }),
+  );
+
+  if (selectedIds.size === 0) {
+    return 0;
+  }
+
+  let expectedCount = 0;
+  for (const profile of normalizeCreatorProfiles(creatorProfiles)) {
+    if (!selectedIds.has(profile.profileId)) {
+      continue;
+    }
+
+    expectedCount += getCreatorProfileExpectedPostCount(profile);
+  }
+
+  return expectedCount;
+}
+
+function getCreatorFeedPageCap(creatorProfile) {
+  const expectedCount = getCreatorProfileExpectedPostCount(creatorProfile);
+  if (!expectedCount) {
+    return CREATOR_PROFILE_FEED_MIN_PAGE_CAP;
+  }
+
+  const expectedPages =
+    Math.ceil(expectedCount / Math.max(1, CREATOR_PROFILE_FEED_LIMIT)) +
+    CREATOR_PROFILE_FEED_PAGE_BUFFER;
+
+  return Math.min(
+    CREATOR_PROFILE_FEED_MAX_PAGE_CAP,
+    Math.max(CREATOR_PROFILE_FEED_MIN_PAGE_CAP, expectedPages),
+  );
+}
+
 function buildWorkingItemsFromCatalog(
   catalogItems,
   sources,
   maxVideos,
   selectedCharacterAccountIds = currentState.selectedCharacterAccountIds,
+  selectedCreatorProfileIds = currentState.selectedCreatorProfileIds,
 ) {
   const matchingItems = normalizeCatalogItems(catalogItems).filter((item) =>
-    itemMatchesSourceSelection(item, sources, selectedCharacterAccountIds),
+    itemMatchesSourceSelection(item, sources, selectedCharacterAccountIds, selectedCreatorProfileIds),
   );
   const sortedItems = sortItemsByNewest(matchingItems);
   const normalizedMaxVideos = getMaxVideosSetting({ maxVideos });
@@ -1252,11 +1646,12 @@ function getKnownItemKeysForSource(
   source,
   catalogItems = currentCatalog.items,
   selectedCharacterAccountIds = currentState.selectedCharacterAccountIds,
+  selectedCreatorProfileIds = currentState.selectedCreatorProfileIds,
 ) {
   const knownKeys = new Set();
 
   for (const item of normalizeCatalogItems(catalogItems)) {
-    if (!itemMatchesSourceSelection(item, [source], selectedCharacterAccountIds)) {
+    if (!itemMatchesSourceSelection(item, [source], selectedCharacterAccountIds, selectedCreatorProfileIds)) {
       continue;
     }
 
@@ -1279,6 +1674,7 @@ function shouldRunFullSourceRefresh(source, options = {}) {
     source,
     options.catalogItems,
     options.selectedCharacterAccountIds,
+    options.selectedCreatorProfileIds,
   );
   if (existingKeys.size === 0) {
     return true;
@@ -1286,15 +1682,23 @@ function shouldRunFullSourceRefresh(source, options = {}) {
 
   const syncEntry = getCatalogSyncEntryForSource(source);
   const selectionSignature =
-    source === "characterAccounts"
-      ? getCharacterAccountSelectionSignature(options.selectedCharacterAccountIds)
-      : "";
+    getSourceSelectionSignature(source, options);
   if (!syncEntry.lastFullSyncAt) {
     return true;
   }
 
-  if (source === "characterAccounts" && syncEntry.selectionSignature !== selectionSignature) {
+  if ((source === "characterAccounts" || source === "creators") && syncEntry.selectionSignature !== selectionSignature) {
     return true;
+  }
+
+  if (source === "creators") {
+    const expectedCreatorCount = getExpectedCreatorSelectionCount(
+      options.creatorProfiles,
+      options.selectedCreatorProfileIds,
+    );
+    if (expectedCreatorCount > 0 && existingKeys.size < expectedCreatorCount) {
+      return true;
+    }
   }
 
   const lastFullSyncTime = new Date(syncEntry.lastFullSyncAt).getTime();
@@ -1320,20 +1724,36 @@ function shouldRunFullSourceRefresh(source, options = {}) {
   return false;
 }
 
-function shouldReplaceCatalogItemForSource(item, source, selectedCharacterAccountIds = []) {
-  if (!itemMatchesSourceSelection(item, [source], selectedCharacterAccountIds)) {
+function shouldReplaceCatalogItemForSource(
+  item,
+  source,
+  selectedCharacterAccountIds = [],
+  selectedCreatorProfileIds = [],
+) {
+  if (!itemMatchesSourceSelection(item, [source], selectedCharacterAccountIds, selectedCreatorProfileIds)) {
+    if (source === "characterAccounts" || source === "creators") {
+      return getCatalogSourceForItem(item) === source;
+    }
     return false;
   }
 
-  if (source !== "characterAccounts") {
+  if (source !== "characterAccounts" && source !== "creators") {
     return true;
   }
 
-  const selectedIds = new Set(
-    Array.isArray(selectedCharacterAccountIds) ? selectedCharacterAccountIds : [],
-  );
+  const selectedIds = new Set(source === "characterAccounts"
+    ? Array.isArray(selectedCharacterAccountIds)
+      ? selectedCharacterAccountIds
+      : []
+    : Array.isArray(selectedCreatorProfileIds)
+      ? selectedCreatorProfileIds
+      : []);
   if (selectedIds.size === 0) {
     return true;
+  }
+
+  if (source === "creators") {
+    return typeof item.creatorProfileId === "string" && selectedIds.has(item.creatorProfileId);
   }
 
   return typeof item.characterAccountId === "string" && selectedIds.has(item.characterAccountId);
@@ -1343,6 +1763,7 @@ function mergeCatalogItemsWithSourceResults(
   existingItems,
   sourceResults,
   selectedCharacterAccountIds = currentState.selectedCharacterAccountIds,
+  selectedCreatorProfileIds = currentState.selectedCreatorProfileIds,
 ) {
   const itemMap = new Map(
     normalizeCatalogItems(existingItems).map((item) => [item.key || getItemKey(item), item]),
@@ -1355,7 +1776,14 @@ function mergeCatalogItemsWithSourceResults(
 
     if (sourceResult.syncMode === "full") {
       for (const [key, item] of itemMap.entries()) {
-        if (shouldReplaceCatalogItemForSource(item, sourceResult.source, selectedCharacterAccountIds)) {
+        if (
+          shouldReplaceCatalogItemForSource(
+            item,
+            sourceResult.source,
+            selectedCharacterAccountIds,
+            selectedCreatorProfileIds,
+          )
+        ) {
           itemMap.delete(key);
         }
       }
@@ -1536,6 +1964,7 @@ async function buildScanSelectionState(items, options = {}) {
   const likesIds = new Set();
   const cameoIds = new Set();
   const characterIds = new Set();
+  const creatorIds = new Set();
   const selectedKeys = [];
   const sourceItems = Array.isArray(items) ? items : [];
 
@@ -1563,6 +1992,13 @@ async function buildScanSelectionState(items, options = {}) {
           cameoIds.add(item.id);
         } else if (item.sourcePage === "characters") {
           characterIds.add(item.id);
+        } else if (
+          item.sourcePage === "creatorPublished" ||
+          item.sourcePage === "creatorCameos" ||
+          item.sourcePage === "creatorCharacters" ||
+          item.sourcePage === "creatorCharacterCameos"
+        ) {
+          creatorIds.add(item.id);
         }
       }
     }
@@ -1587,6 +2023,7 @@ async function buildScanSelectionState(items, options = {}) {
       likesIds: [...likesIds],
       cameoIds: [...cameoIds],
       characterIds: [...characterIds],
+      creatorIds: [...creatorIds],
     },
     selectedKeys: normalizeSelectedKeys(sourceItems, selectedKeys),
   };
@@ -1614,7 +2051,7 @@ function normalizeTheme(value) {
 }
 
 function normalizeDefaultSource(value) {
-  return normalizeSourceSelection(value);
+  return normalizeSourceSelection(value, []);
 }
 
 function normalizeSourceSelection(input, fallback = DEFAULT_SOURCE_VALUES) {
@@ -1633,7 +2070,8 @@ function normalizeSourceSelection(input, fallback = DEFAULT_SOURCE_VALUES) {
       value === "drafts" ||
       value === "likes" ||
       value === "characters" ||
-      value === "characterAccounts"
+      value === "characterAccounts" ||
+      value === "creators"
     ) {
       selected.add(value);
     }
@@ -1649,6 +2087,15 @@ function normalizeDefaultSort(value) {
 
 function getMaxVideosSetting(settings) {
   return normalizeMaxVideos(settings && settings.maxVideos);
+}
+
+function getEffectiveMaxVideosForSources(sources, settings = currentState.settings) {
+  const normalizedSources = Array.isArray(sources) ? sources : [];
+  if (normalizedSources.includes("creators")) {
+    return null;
+  }
+
+  return getMaxVideosSetting(settings);
 }
 
 function createControlError(code, message) {
@@ -1982,8 +2429,16 @@ async function startScan(requestedSources, requestedSearchQuery = "") {
   const sources = normalizeSources(requestedSources);
   const searchQuery = normalizeSearchText(requestedSearchQuery);
 
+  if (sources.length === 0) {
+    throw new Error("Select at least one source to fetch.");
+  }
+
   if (sources.includes("characterAccounts")) {
     await ensureCharacterAccountsLoaded();
+  }
+
+  if (sources.includes("creators")) {
+    await refreshWeakCreatorProfiles();
   }
 
   activeRun = scanSources(sources, searchQuery);
@@ -2017,13 +2472,15 @@ async function requestScanAbort() {
 async function scanSources(sources, searchQuery = "") {
   // A scan now starts from the local catalog so previously fetched results appear
   // immediately, then reconciles against Sora and merges any new or changed items.
-  const maxVideos = getMaxVideosSetting(currentState.settings);
+  const maxVideos = getEffectiveMaxVideosForSources(sources, currentState.settings);
   const selectedCharacterAccountIds = [...currentState.selectedCharacterAccountIds];
+  const selectedCreatorProfileIds = [...currentState.selectedCreatorProfileIds];
   const cachedWorkingItems = buildWorkingItemsFromCatalog(
     currentCatalog.items,
     sources,
     maxVideos,
     selectedCharacterAccountIds,
+    selectedCreatorProfileIds,
   );
   const cachedFilteredItems = filterItemsBySearchQuery(cachedWorkingItems, searchQuery);
   const cachedSelectedKeys = normalizeSelectedKeys(
@@ -2046,11 +2503,14 @@ async function scanSources(sources, searchQuery = "") {
       currentSource: sources[0] ?? null,
       characterAccounts: currentState.characterAccounts,
       selectedCharacterAccountIds,
+      creatorProfiles: currentState.creatorProfiles,
+      selectedCreatorProfileIds,
       profileIds: cachedSourceIds.profileIds,
       draftIds: cachedSourceIds.draftIds,
       likesIds: cachedSourceIds.likesIds,
       cameoIds: cachedSourceIds.cameoIds,
       characterIds: cachedSourceIds.characterIds,
+      creatorIds: cachedSourceIds.creatorIds,
       items: cachedFilteredItems,
       fetchedCount: cachedFilteredItems.length,
       selectedKeys: cachedSelectedKeys,
@@ -2078,11 +2538,13 @@ async function scanSources(sources, searchQuery = "") {
     const collected = await collectItems(sources, maxVideos, {
       catalogItems: currentCatalog.items,
       selectedCharacterAccountIds,
+      selectedCreatorProfileIds,
     });
     const mergedCatalogItems = mergeCatalogItemsWithSourceResults(
       currentCatalog.items,
       collected.sourceResults,
       selectedCharacterAccountIds,
+      selectedCreatorProfileIds,
     );
     await setCatalogState({
       items: normalizeCatalogItems(mergedCatalogItems),
@@ -2094,6 +2556,7 @@ async function scanSources(sources, searchQuery = "") {
       sources,
       maxVideos,
       selectedCharacterAccountIds,
+      selectedCreatorProfileIds,
     );
     await setState({
       message: `Processing ${workingItems.length} item(s)...`,
@@ -2179,6 +2642,7 @@ async function scanSources(sources, searchQuery = "") {
       likesIds: filteredSourceIds.likesIds,
       cameoIds: filteredSourceIds.cameoIds,
       characterIds: filteredSourceIds.characterIds,
+      creatorIds: filteredSourceIds.creatorIds,
       items: filteredItems,
       fetchedCount: filteredItems.length,
       selectedKeys,
@@ -2289,6 +2753,156 @@ function normalizeCharacterAccounts(value) {
     }));
 }
 
+function decodeCreatorUrlSegment(value) {
+  if (typeof value !== "string" || !value) {
+    return "";
+  }
+
+  try {
+    return decodeURIComponent(value);
+  } catch (_error) {
+    return value;
+  }
+}
+
+function normalizeCreatorUsername(value) {
+  if (typeof value !== "string") {
+    return "";
+  }
+
+  const cleaned = decodeCreatorUrlSegment(value)
+    .trim()
+    .replace(/^@+/, "")
+    .replace(/\/+$/, "");
+
+  if (!cleaned) {
+    return "";
+  }
+
+  const reservedSegments = new Set(["profile", "profiles", "drafts", "characters", "likes"]);
+  return reservedSegments.has(cleaned.toLowerCase()) ? "" : cleaned;
+}
+
+function getCreatorUsernameFromPathname(value) {
+  if (typeof value !== "string" || !value) {
+    return "";
+  }
+
+  const segments = value
+    .split("/")
+    .map((segment) => normalizeCreatorUsername(segment))
+    .filter(Boolean);
+
+  if (!segments.length) {
+    return "";
+  }
+
+  if (value.includes("/@")) {
+    const atSegment = value
+      .split("/")
+      .find((segment) => typeof segment === "string" && segment.trim().startsWith("@"));
+    return normalizeCreatorUsername(atSegment || "");
+  }
+
+  if (segments[0].toLowerCase() === "profile") {
+    return normalizeCreatorUsername(segments[1] || "");
+  }
+
+  return normalizeCreatorUsername(segments[0]);
+}
+
+function getCreatorUsernameFromUrl(value) {
+  if (typeof value !== "string" || !value) {
+    return "";
+  }
+
+  try {
+    return getCreatorUsernameFromPathname(new URL(value, "https://sora.chatgpt.com").pathname);
+  } catch (_error) {
+    return getCreatorUsernameFromPathname(value);
+  }
+}
+
+function isGenericCreatorDisplayName(value) {
+  if (typeof value !== "string") {
+    return false;
+  }
+
+  const normalized = value.trim().replace(/\s+/g, " ").toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+
+  return (
+    normalized === "sora" ||
+    normalized === "chatgpt" ||
+    normalized === "openai" ||
+    /^sora\s*[-|:]/.test(normalized) ||
+    /^chatgpt\s*[-|:]/.test(normalized) ||
+    /^openai\s*[-|:]/.test(normalized) ||
+    normalized.includes("guardrails around content") ||
+    normalized.startsWith("http://") ||
+    normalized.startsWith("https://")
+  );
+}
+
+function normalizeCreatorDisplayName(value, fallbackUsername = "") {
+  if (typeof value === "string" && value.trim() && !isGenericCreatorDisplayName(value)) {
+    return value.trim().replace(/\s+/g, " ");
+  }
+
+  return normalizeCreatorUsername(fallbackUsername);
+}
+
+function normalizeCreatorProfiles(value) {
+  return (Array.isArray(value) ? value : [])
+    .filter(
+      (profile) =>
+        profile &&
+        typeof profile.profileId === "string" &&
+        profile.profileId,
+    )
+    .map((profile) => {
+      const profileId = profile.profileId;
+      const userId = typeof profile.userId === "string" ? profile.userId : "";
+      const permalink =
+        typeof profile.permalink === "string" && profile.permalink ? profile.permalink : null;
+      const username =
+        normalizeCreatorUsername(profile.username) ||
+        getCreatorUsernameFromUrl(permalink) ||
+        (/[/:@]/.test(profileId) ? getCreatorUsernameFromUrl(profileId) : "");
+      const displayName =
+        normalizeCreatorDisplayName(profile.displayName, username) ||
+        username ||
+        userId ||
+        profileId;
+
+      return {
+        profileId,
+        userId,
+        username,
+        displayName,
+        permalink,
+        profilePictureUrl:
+          typeof profile.profilePictureUrl === "string" ? profile.profilePictureUrl : null,
+        profileFetchedAt:
+          typeof profile.profileFetchedAt === "string" && profile.profileFetchedAt
+            ? profile.profileFetchedAt
+            : null,
+        profileData:
+          profile.profileData && typeof profile.profileData === "object"
+            ? profile.profileData
+            : null,
+      };
+    });
+}
+
+function normalizeResolvedCreatorProfiles(value) {
+  return normalizeCreatorProfiles(value).filter((profile) =>
+    isCanonicalCreatorUserId(profile.userId),
+  );
+}
+
 function normalizeSelectedCharacterAccountIds(
   characterAccounts,
   requestedIds,
@@ -2318,6 +2932,40 @@ function normalizeSelectedCharacterAccountIds(
 
   if (Array.isArray(fallbackIds) && fallbackIds.length) {
     return normalizeSelectedCharacterAccountIds(characterAccounts, fallbackIds, [], options);
+  }
+
+  return [...validIds];
+}
+
+function normalizeSelectedCreatorProfileIds(
+  creatorProfiles,
+  requestedIds,
+  fallbackIds = null,
+  options = {},
+) {
+  const validIds = new Set(
+    normalizeCreatorProfiles(creatorProfiles).map((profile) => profile.profileId),
+  );
+  const selected = [];
+  const allowEmpty = options && options.allowEmpty === true;
+
+  for (const value of Array.isArray(requestedIds) ? requestedIds : []) {
+    if (typeof value !== "string" || !validIds.has(value) || selected.includes(value)) {
+      continue;
+    }
+    selected.push(value);
+  }
+
+  if (selected.length) {
+    return selected;
+  }
+
+  if (allowEmpty && Array.isArray(requestedIds)) {
+    return [];
+  }
+
+  if (Array.isArray(fallbackIds) && fallbackIds.length) {
+    return normalizeSelectedCreatorProfileIds(creatorProfiles, fallbackIds, [], options);
   }
 
   return [...validIds];
@@ -2366,6 +3014,395 @@ async function setSelectedCharacterAccountIds(requestedIds) {
     characterAccounts,
     selectedCharacterAccountIds,
     hasExplicitCharacterAccountSelection: true,
+  });
+}
+
+async function setSelectedCreatorProfileIds(requestedIds) {
+  const creatorProfiles = normalizeResolvedCreatorProfiles(currentState.creatorProfiles);
+  const selectedCreatorProfileIds = normalizeSelectedCreatorProfileIds(
+    creatorProfiles,
+    requestedIds,
+    [],
+    {
+      allowEmpty: true,
+    },
+  );
+
+  await setState({
+    creatorProfiles,
+    selectedCreatorProfileIds,
+    hasExplicitCreatorProfileSelection: true,
+  });
+}
+
+function normalizeCreatorProfileUrl(profileUrl) {
+  if (typeof profileUrl !== "string" || !profileUrl.trim()) {
+    throw new Error("Paste a valid Sora creator username or profile link.");
+  }
+
+  const trimmedValue = profileUrl.trim();
+  const buildCanonicalProfileUrl = (username) =>
+    `https://sora.chatgpt.com/profile/${encodeURIComponent(username)}`;
+
+  const directUsername = normalizeCreatorUsername(trimmedValue);
+  if (directUsername && !/[/:]/.test(trimmedValue.replace(/^@+/, ""))) {
+    return buildCanonicalProfileUrl(directUsername);
+  }
+
+  const pathUsername = getCreatorUsernameFromPathname(trimmedValue);
+  if (pathUsername && !/^https?:\/\//i.test(trimmedValue)) {
+    return buildCanonicalProfileUrl(pathUsername);
+  }
+
+  let normalizedUrl;
+  try {
+    normalizedUrl = new URL(
+      /^sora\.chatgpt\.com(?:\/|$)/i.test(trimmedValue)
+        ? `https://${trimmedValue}`
+        : trimmedValue,
+    );
+  } catch (_error) {
+    throw new Error("Paste a valid Sora creator username or profile link.");
+  }
+
+  if (normalizedUrl.origin !== "https://sora.chatgpt.com") {
+    throw new Error("Only sora.chatgpt.com creator usernames and profile links are supported.");
+  }
+
+  const username = getCreatorUsernameFromUrl(normalizedUrl.toString());
+  if (!username) {
+    throw new Error("Paste a valid Sora creator username or profile link.");
+  }
+
+  return buildCanonicalProfileUrl(username);
+}
+
+function shouldRefreshCreatorProfileMetadata(profile) {
+  const lookupId = getCreatorLookupId(profile);
+  return Boolean(
+    profile &&
+    typeof profile === "object" &&
+    lookupId &&
+    (!profile.userId ||
+      !profile.username ||
+      !profile.displayName ||
+      isGenericCreatorDisplayName(profile.displayName) ||
+      !profile.profilePictureUrl ||
+      !profile.profileData),
+  );
+}
+
+async function enrichCreatorProfile(profile) {
+  const normalizedProfile = normalizeCreatorProfiles([profile])[0];
+  if (!normalizedProfile || !shouldRefreshCreatorProfileMetadata(normalizedProfile)) {
+    return normalizedProfile || profile;
+  }
+
+  const candidateSources = ["creatorPublished"];
+  const creatorLookupId = getCreatorLookupId(normalizedProfile);
+  if (!creatorLookupId) {
+    return normalizedProfile;
+  }
+
+  for (const source of candidateSources) {
+    try {
+      const response = await fetchSourceDataFromTab(source, {
+        routeUrl: getCreatorRouteUrl(normalizedProfile),
+        creatorId: creatorLookupId,
+        limit: 1,
+      });
+      const item = Array.isArray(response && response.items) ? response.items[0] : null;
+      if (!item || typeof item !== "object") {
+        continue;
+      }
+
+      const enrichedProfile = normalizeCreatorProfiles([
+        {
+          ...normalizedProfile,
+          username:
+            typeof item.creatorUsername === "string" && item.creatorUsername
+              ? item.creatorUsername
+              : normalizedProfile.username,
+          displayName:
+            typeof item.creatorDisplayName === "string" && item.creatorDisplayName
+              ? item.creatorDisplayName
+              : normalizedProfile.displayName,
+          profilePictureUrl:
+            typeof item.creatorProfilePictureUrl === "string" && item.creatorProfilePictureUrl
+              ? item.creatorProfilePictureUrl
+              : normalizedProfile.profilePictureUrl,
+        },
+      ])[0];
+
+      if (
+        enrichedProfile &&
+        enrichedProfile.username &&
+        enrichedProfile.displayName &&
+        enrichedProfile.profilePictureUrl
+      ) {
+        return enrichedProfile;
+      }
+
+      if (enrichedProfile) {
+        return enrichedProfile;
+      }
+    } catch (_error) {
+      // Best-effort enrichment only. The saved creator still remains usable if the follow-up
+      // lookup cannot improve the card metadata.
+    }
+  }
+
+  return normalizedProfile;
+}
+
+function findMatchingCreatorProfileKey(creatorMap, creatorProfile) {
+  for (const [profileId, existingProfile] of creatorMap.entries()) {
+    if (
+      creatorProfile.userId &&
+      existingProfile &&
+      typeof existingProfile.userId === "string" &&
+      existingProfile.userId === creatorProfile.userId
+    ) {
+      return profileId;
+    }
+
+    if (
+      creatorProfile.permalink &&
+      existingProfile &&
+      typeof existingProfile.permalink === "string" &&
+      existingProfile.permalink === creatorProfile.permalink
+    ) {
+      return profileId;
+    }
+
+    if (
+      creatorProfile.username &&
+      existingProfile &&
+      typeof existingProfile.username === "string" &&
+      existingProfile.username === creatorProfile.username
+    ) {
+      return profileId;
+    }
+  }
+
+  return null;
+}
+
+async function resolveCreatorProfile(profileUrl) {
+  const normalizedUrl = normalizeCreatorProfileUrl(profileUrl);
+  const response = await fetchSourceDataFromTab("creatorProfileLookup", {
+    routeUrl: normalizedUrl,
+  });
+  const creatorProfile = normalizeCreatorProfiles([
+    {
+      ...(response && response.profile && typeof response.profile === "object" ? response.profile : {}),
+      permalink: normalizedUrl,
+    },
+  ])[0];
+
+  if (!creatorProfile) {
+    throw new Error("Could not read that creator profile from Sora.");
+  }
+
+  if (!isCanonicalCreatorUserId(creatorProfile.userId)) {
+    throw new Error(
+      `Could not resolve a canonical creator user_id for ${creatorProfile.username || "that creator"}.`,
+    );
+  }
+
+  return enrichCreatorProfile(creatorProfile);
+}
+
+async function refreshWeakCreatorProfiles() {
+  if (activeRun) {
+    return;
+  }
+
+  const creatorProfiles = normalizeCreatorProfiles(currentState.creatorProfiles);
+  if (!creatorProfiles.length) {
+    return;
+  }
+
+  let didChange = false;
+  const nextProfiles = [];
+
+  for (const creatorProfile of creatorProfiles) {
+    if (
+      !shouldRefreshCreatorProfileMetadata(creatorProfile) ||
+      typeof creatorProfile.permalink !== "string" ||
+      !creatorProfile.permalink
+    ) {
+      nextProfiles.push(creatorProfile);
+      continue;
+    }
+
+    try {
+      const refreshedProfile = await resolveCreatorProfile(creatorProfile.permalink);
+      const mergedProfile = normalizeCreatorProfiles([
+        {
+          ...creatorProfile,
+          ...refreshedProfile,
+          profileId: creatorProfile.profileId,
+        },
+      ])[0];
+
+      nextProfiles.push(mergedProfile || creatorProfile);
+      didChange =
+        didChange ||
+        JSON.stringify(mergedProfile || creatorProfile) !== JSON.stringify(creatorProfile);
+    } catch (_error) {
+      nextProfiles.push(creatorProfile);
+    }
+  }
+
+  if (!didChange) {
+    return;
+  }
+
+  await setState({
+    creatorProfiles: nextProfiles,
+    selectedCreatorProfileIds: normalizeSelectedCreatorProfileIds(
+      nextProfiles,
+      currentState.selectedCreatorProfileIds,
+      [],
+      { allowEmpty: true },
+    ),
+  });
+}
+
+async function addCreatorProfile(profileUrl) {
+  const result = await addCreatorProfiles([profileUrl]);
+  const [creatorProfile] = Array.isArray(result.creatorProfiles) ? result.creatorProfiles : [];
+  if (!creatorProfile) {
+    throw new Error("Could not add that creator profile.");
+  }
+
+  return creatorProfile;
+}
+
+async function addCreatorProfiles(profileUrls) {
+  if (activeRun) {
+    throw new Error("Wait until the current fetch or download run finishes.");
+  }
+
+  const creatorMap = new Map(
+    normalizeResolvedCreatorProfiles(currentState.creatorProfiles).map((profile) => [profile.profileId, profile]),
+  );
+  const selectedSet = new Set(
+    normalizeSelectedCreatorProfileIds(
+      [...creatorMap.values()],
+      currentState.selectedCreatorProfileIds,
+      [],
+      { allowEmpty: true },
+    ),
+  );
+  const creatorProfiles = [];
+  const failures = [];
+  const uniqueUrls = [...new Set(
+    (Array.isArray(profileUrls) ? profileUrls : [])
+      .filter((profileUrl) => typeof profileUrl === "string" && profileUrl.trim())
+      .map((profileUrl) => profileUrl.trim()),
+  )];
+
+  for (const profileUrl of uniqueUrls) {
+    try {
+      const resolvedProfile = await resolveCreatorProfile(profileUrl);
+      if (!isCanonicalCreatorUserId(resolvedProfile.userId)) {
+        throw new Error(
+          `Could not resolve a canonical creator user_id for ${resolvedProfile.username || "that creator"}.`,
+        );
+      }
+      const existingKey = findMatchingCreatorProfileKey(creatorMap, resolvedProfile);
+      const creatorProfileId = existingKey || resolvedProfile.profileId;
+      creatorMap.set(creatorProfileId, {
+        ...(creatorMap.get(creatorProfileId) || {}),
+        ...resolvedProfile,
+        profileId: creatorProfileId,
+      });
+      selectedSet.add(creatorProfileId);
+      creatorProfiles.push(creatorMap.get(creatorProfileId));
+    } catch (error) {
+      failures.push({
+        profileUrl,
+        error: getErrorMessage(error),
+      });
+    }
+  }
+
+  if (creatorProfiles.length === 0 && failures.length > 0) {
+    throw new Error(failures[0].error);
+  }
+
+  const nextCreatorProfiles = [...creatorMap.values()].sort((left, right) =>
+    left.displayName.localeCompare(right.displayName, undefined, { sensitivity: "base" }),
+  );
+  const selectedCreatorProfileIds = nextCreatorProfiles
+    .map((profile) => profile.profileId)
+    .filter((profileId) => selectedSet.has(profileId));
+
+  await setState({
+    creatorProfiles: nextCreatorProfiles,
+    selectedCreatorProfileIds,
+    hasExplicitCreatorProfileSelection: true,
+  });
+
+  return {
+    creatorProfiles,
+    failures,
+  };
+}
+
+async function removeCreatorProfile(creatorProfileId) {
+  if (activeRun) {
+    throw new Error("Wait until the current fetch or download run finishes.");
+  }
+
+  const creatorProfiles = normalizeCreatorProfiles(currentState.creatorProfiles).filter(
+    (profile) => profile.profileId !== creatorProfileId,
+  );
+
+  if (creatorProfiles.length === normalizeCreatorProfiles(currentState.creatorProfiles).length) {
+    throw new Error("That creator is no longer in your saved list.");
+  }
+
+  const selectedCreatorProfileIds = normalizeSelectedCreatorProfileIds(
+    creatorProfiles,
+    (Array.isArray(currentState.selectedCreatorProfileIds) ? currentState.selectedCreatorProfileIds : [])
+      .filter((profileId) => profileId !== creatorProfileId),
+    [],
+    {
+      allowEmpty: true,
+    },
+  );
+  const nextItems = normalizeCatalogItems(currentState.items).filter(
+    (item) => item.creatorProfileId !== creatorProfileId,
+  );
+  const nextSelectedKeys = normalizeSelectedKeys(nextItems, currentState.selectedKeys);
+  const sourceIds = deriveSourceIdsFromItems(nextItems);
+  const nextCatalogItems = normalizeCatalogItems(currentCatalog.items).filter(
+    (item) => item.creatorProfileId !== creatorProfileId,
+  );
+
+  await setCatalogState({
+    items: nextCatalogItems,
+  });
+  await setState({
+    creatorProfiles,
+    selectedCreatorProfileIds,
+    hasExplicitCreatorProfileSelection: true,
+    items: nextItems,
+    selectedKeys: nextSelectedKeys,
+    titleOverrides: pruneLegacyTitleOverrides(nextItems, currentState.titleOverrides),
+    profileIds: sourceIds.profileIds,
+    draftIds: sourceIds.draftIds,
+    likesIds: sourceIds.likesIds,
+    cameoIds: sourceIds.cameoIds,
+    characterIds: sourceIds.characterIds,
+    creatorIds: sourceIds.creatorIds,
+    fetchedCount: nextItems.length,
+    queued: nextSelectedKeys.length,
+    failedItems: (currentState.failedItems || []).filter((item) => item.creatorProfileId !== creatorProfileId),
+    pendingItems: (currentState.pendingItems || []).filter((item) => item.creatorProfileId !== creatorProfileId),
   });
 }
 
@@ -2457,6 +3494,7 @@ async function setItemRemovedState(itemKey, removed) {
     likesIds: sourceIds.likesIds,
     cameoIds: sourceIds.cameoIds,
     characterIds: sourceIds.characterIds,
+    creatorIds: sourceIds.creatorIds,
     fetchedCount: nextItems.length,
     selectedKeys: nextSelectedKeys,
     titleOverrides:
@@ -3170,11 +4208,15 @@ async function collectItems(sources, maxVideos, options = {}) {
   const likesIds = new Set();
   const cameoIds = new Set();
   const characterIds = new Set();
+  const creatorIds = new Set();
   const sourceResults = [];
   const catalogItems = normalizeCatalogItems(options.catalogItems);
   const selectedCharacterAccountIds = Array.isArray(options.selectedCharacterAccountIds)
     ? options.selectedCharacterAccountIds
     : currentState.selectedCharacterAccountIds;
+  const selectedCreatorProfileIds = Array.isArray(options.selectedCreatorProfileIds)
+    ? options.selectedCreatorProfileIds
+    : currentState.selectedCreatorProfileIds;
   let partialWarning = "";
 
   for (let sourceIndex = 0; sourceIndex < sources.length; sourceIndex += 1) {
@@ -3189,13 +4231,20 @@ async function collectItems(sources, maxVideos, options = {}) {
     const syncMode = shouldRunFullSourceRefresh(source, {
       catalogItems,
       selectedCharacterAccountIds,
+      selectedCreatorProfileIds,
+      creatorProfiles: currentState.creatorProfiles,
       maxVideos,
     })
       ? "full"
       : "incremental";
     const knownItemKeys =
       syncMode === "incremental"
-        ? getKnownItemKeysForSource(source, catalogItems, selectedCharacterAccountIds)
+        ? getKnownItemKeysForSource(
+          source,
+          catalogItems,
+          selectedCharacterAccountIds,
+          selectedCreatorProfileIds,
+        )
         : null;
     await setState({
       phase: "fetching",
@@ -3210,7 +4259,9 @@ async function collectItems(sources, maxVideos, options = {}) {
                 ? "Checking for new liked videos..."
                 : source === "characters"
                   ? "Checking for new cameo videos..."
-                  : "Checking for new character videos..."
+                  : source === "characterAccounts"
+                    ? "Checking for new character videos..."
+                    : "Checking for new creator videos..."
           : source === "profile"
             ? "Fetching published videos..."
             : source === "drafts"
@@ -3219,7 +4270,9 @@ async function collectItems(sources, maxVideos, options = {}) {
                 ? "Fetching liked videos..."
                 : source === "characters"
                   ? "Fetching cameo videos..."
-                  : "Fetching character videos...",
+                  : source === "characterAccounts"
+                    ? "Fetching character videos..."
+                    : "Fetching creator videos...",
       fetchProgress: getNextFetchProgress({
         stage: "fetching-source",
         stageLabel: syncMode === "incremental" ? `Checking ${sourceLabel}` : `Loading ${sourceLabel}`,
@@ -3339,7 +4392,8 @@ async function collectItems(sources, maxVideos, options = {}) {
                   }, { persist: false });
                 },
               })
-              : await fetchAllCharacterItems({
+              : source === "characterAccounts"
+                ? await fetchAllCharacterItems({
                 maxItems: maxRemaining,
                 characterAccounts: currentState.characterAccounts,
                 selectedCharacterAccountIds,
@@ -3364,7 +4418,32 @@ async function collectItems(sources, maxVideos, options = {}) {
                     }),
                   }, { persist: false });
                 },
-              });
+                })
+                : await fetchAllCreatorItems({
+                  maxItems: maxRemaining,
+                  creatorProfiles: currentState.creatorProfiles,
+                  selectedCreatorProfileIds,
+                  knownItemKeys,
+                  onProgress: async ({ count, pageNumber, message }) => {
+                    await setState({
+                      fetchedCount: itemMap.size + count,
+                      message: message || `Fetching creator videos... ${itemMap.size + count} found so far.`,
+                      fetchProgress: getNextFetchProgress({
+                        stage: "fetching-source",
+                        stageLabel: `Loading ${sourceLabel}`,
+                        detail: message || `Fetching ${sourceLabel}...`,
+                        progressRatio: getFetchSourceProgressRatio(sourceIndex, sources.length, pageNumber),
+                        currentSource: source,
+                        currentSourceLabel: sourceLabel,
+                        currentSourceIndex: sourceIndex + 1,
+                        totalSources: sources.length,
+                        itemsFound: itemMap.size + count,
+                        processedCount: pageNumber,
+                        totalCount: 0,
+                      }),
+                    }, { persist: false });
+                  },
+                });
 
     throwIfFetchAbortRequested();
     sourceResults.push({
@@ -3374,9 +4453,10 @@ async function collectItems(sources, maxVideos, options = {}) {
       syncMode,
       isExhaustive: sourceResult.isExhaustive === true,
       selectionSignature:
-        source === "characterAccounts"
-          ? getCharacterAccountSelectionSignature(selectedCharacterAccountIds)
-          : "",
+        getSourceSelectionSignature(source, {
+          selectedCharacterAccountIds,
+          selectedCreatorProfileIds,
+        }),
     });
 
     for (const item of sourceResult.items) {
@@ -3398,8 +4478,10 @@ async function collectItems(sources, maxVideos, options = {}) {
         likesIds.add(id);
       } else if (source === "characters") {
         cameoIds.add(id);
-      } else {
+      } else if (source === "characterAccounts") {
         characterIds.add(id);
+      } else {
+        creatorIds.add(id);
       }
     }
 
@@ -3433,6 +4515,7 @@ async function collectItems(sources, maxVideos, options = {}) {
     likesIds: [...likesIds],
     cameoIds: [...cameoIds],
     characterIds: [...characterIds],
+    creatorIds: [...creatorIds],
     partialWarning,
     sourceResults,
   };
@@ -3909,6 +4992,315 @@ function appendCharacterAccountContext(item, characterAccount) {
   };
 }
 
+function appendCreatorProfileContext(item, creatorProfile, options = {}) {
+  if (!item || !creatorProfile) {
+    return item;
+  }
+
+  const metadataEntries = Array.isArray(item.metadataEntries)
+    ? [...item.metadataEntries]
+    : [];
+
+  if (typeof options.categoryLabel === "string" && options.categoryLabel) {
+    metadataEntries.push({
+      label: "Creator Bucket",
+      value: options.categoryLabel,
+      type: "text",
+    });
+  }
+
+  if (creatorProfile.displayName) {
+    metadataEntries.push({
+      label: "Saved Creator",
+      value: creatorProfile.displayName,
+      type: "text",
+    });
+  }
+
+  if (creatorProfile.username) {
+    metadataEntries.push({
+      label: "Saved Creator Username",
+      value: `@${creatorProfile.username}`,
+      type: "text",
+    });
+  }
+
+  if (creatorProfile.permalink) {
+    metadataEntries.push({
+      label: "Saved Creator Profile",
+      value: creatorProfile.permalink,
+      type: "link",
+    });
+  }
+
+  return {
+    ...item,
+    sourcePage:
+      typeof options.sourcePage === "string" && options.sourcePage ? options.sourcePage : item.sourcePage,
+    creatorProfileId: creatorProfile.profileId,
+    creatorProfileUserId: creatorProfile.userId,
+    creatorProfileUsername: creatorProfile.username,
+    creatorProfileDisplayName: creatorProfile.displayName,
+    creatorProfilePictureUrl:
+      typeof creatorProfile.profilePictureUrl === "string" ? creatorProfile.profilePictureUrl : null,
+    creatorProfilePermalink:
+      typeof creatorProfile.permalink === "string" ? creatorProfile.permalink : null,
+    metadataEntries,
+  };
+}
+
+function getCreatorRouteUrl(creatorProfile) {
+  return creatorProfile && typeof creatorProfile.permalink === "string" && creatorProfile.permalink
+    ? creatorProfile.permalink
+    : SOURCE_ROUTES.creators;
+}
+
+function isCanonicalCreatorUserId(value) {
+  return typeof value === "string" && /^user-[A-Za-z0-9_-]+$/.test(value);
+}
+
+function getCreatorLookupId(creatorProfile) {
+  if (!creatorProfile || typeof creatorProfile !== "object") {
+    return "";
+  }
+
+  if (typeof creatorProfile.userId === "string" && creatorProfile.userId) {
+    return creatorProfile.userId;
+  }
+
+  if (typeof creatorProfile.username === "string" && creatorProfile.username) {
+    return creatorProfile.username;
+  }
+
+  if (typeof creatorProfile.permalink === "string" && creatorProfile.permalink) {
+    return getCreatorUsernameFromUrl(creatorProfile.permalink);
+  }
+
+  if (typeof creatorProfile.profileId === "string" && creatorProfile.profileId) {
+    return /[/:@]/.test(creatorProfile.profileId)
+      ? getCreatorUsernameFromUrl(creatorProfile.profileId)
+      : creatorProfile.profileId;
+  }
+
+  return "";
+}
+
+async function ensureCreatorProfileReadyForFetch(creatorProfile) {
+  const normalizedProfile = normalizeCreatorProfiles([creatorProfile])[0];
+  if (!normalizedProfile) {
+    return creatorProfile;
+  }
+
+  if (normalizedProfile.userId || !normalizedProfile.permalink) {
+    return normalizedProfile;
+  }
+
+  try {
+    const refreshedProfile = await resolveCreatorProfile(normalizedProfile.permalink);
+    const mergedProfile = normalizeCreatorProfiles([
+      {
+        ...normalizedProfile,
+        ...refreshedProfile,
+        profileId: normalizedProfile.profileId,
+      },
+    ])[0];
+
+    if (!mergedProfile) {
+      return normalizedProfile;
+    }
+
+    const nextCreatorProfiles = normalizeCreatorProfiles(currentState.creatorProfiles).map((profile) =>
+      profile.profileId === normalizedProfile.profileId ? mergedProfile : profile,
+    );
+
+    await setState({
+      creatorProfiles: nextCreatorProfiles,
+      selectedCreatorProfileIds: normalizeSelectedCreatorProfileIds(
+        nextCreatorProfiles,
+        currentState.selectedCreatorProfileIds,
+        [],
+        { allowEmpty: true },
+      ),
+    });
+
+    return mergedProfile;
+  } catch (_error) {
+    return normalizedProfile;
+  }
+}
+
+async function fetchAllCreatorFeedItems(creatorProfile, options = {}) {
+  const ids = new Set();
+  const itemMap = new Map();
+  const maxItems = getMaxVideosSetting({ maxVideos: options.maxItems });
+  const knownItemKeys = options.knownItemKeys instanceof Set ? options.knownItemKeys : null;
+  const maxPageCount = getCreatorFeedPageCap(creatorProfile);
+  let isExhaustive = false;
+  let cursor = null;
+  let previousCursor = null;
+
+  const getCreatorFeedItemKey = (item) =>
+    [
+      item && typeof item.id === "string" ? item.id : "",
+      item && typeof item.downloadUrl === "string" && item.downloadUrl
+        ? item.downloadUrl
+        : item && typeof item.detailUrl === "string" && item.detailUrl
+          ? item.detailUrl
+          : `attachment:${Number.isInteger(item && item.attachmentIndex) ? item.attachmentIndex : 0}`,
+    ].join("|");
+
+  for (let pageNumber = 0; pageNumber < maxPageCount; pageNumber += 1) {
+    throwIfFetchAbortRequested();
+    const page = await fetchSourceDataFromTab("creatorPublished", {
+      routeUrl: getCreatorRouteUrl(creatorProfile),
+      creatorId: creatorProfile.userId,
+      creatorUserId: creatorProfile.userId,
+      creatorUsername: creatorProfile.username,
+      limit: CREATOR_PROFILE_FEED_LIMIT,
+      cursor,
+    });
+
+    for (const id of page.ids) {
+      ids.add(id);
+    }
+
+    const pageItems = [];
+    for (const item of page.items) {
+      const mappedItem = appendCreatorProfileContext(item, creatorProfile, {
+        categoryLabel:
+          item && item.sourcePage === "creatorCameos"
+            ? "Creator Cast In"
+            : "Creator Posts",
+      });
+      pageItems.push(mappedItem);
+
+      const itemKey = getCreatorFeedItemKey(mappedItem);
+      const existingItem = itemMap.get(itemKey);
+      if (
+        !existingItem ||
+        (existingItem.sourcePage !== "creatorPublished" && mappedItem.sourcePage === "creatorPublished")
+      ) {
+        itemMap.set(itemKey, mappedItem);
+      }
+    }
+
+    if (maxItems && itemMap.size > maxItems) {
+      const nextEntries = [...itemMap.entries()].slice(0, maxItems);
+      itemMap.clear();
+      for (const [key, value] of nextEntries) {
+        itemMap.set(key, value);
+      }
+    }
+
+    if (typeof options.onProgress === "function") {
+      await options.onProgress({
+        count: itemMap.size,
+        pageNumber: pageNumber + 1,
+      });
+    }
+
+    throwIfFetchAbortRequested();
+
+    if (didPageContainOnlyKnownItems(pageItems, knownItemKeys)) {
+      break;
+    }
+
+    if (
+      page.rowCount === 0 ||
+      !page.nextCursor ||
+      page.nextCursor === cursor ||
+      page.nextCursor === previousCursor
+    ) {
+      isExhaustive = !(maxItems && itemMap.size >= maxItems);
+      break;
+    }
+
+    if (maxItems && itemMap.size >= maxItems) {
+      break;
+    }
+
+    previousCursor = cursor;
+    cursor = page.nextCursor;
+  }
+
+  return {
+    ids: [...ids],
+    items: [...itemMap.values()],
+    partialWarning: "",
+    isExhaustive,
+  };
+}
+
+async function fetchAllCreatorCameoItems(creatorProfile, options = {}) {
+  const ids = new Set();
+  const items = [];
+  const maxItems = getMaxVideosSetting({ maxVideos: options.maxItems });
+  const knownItemKeys = options.knownItemKeys instanceof Set ? options.knownItemKeys : null;
+  let isExhaustive = false;
+  let cursor = null;
+  let previousCursor = null;
+
+  for (let pageNumber = 0; pageNumber < 250; pageNumber += 1) {
+    throwIfFetchAbortRequested();
+    const page = await fetchSourceDataFromTab("creatorCameos", {
+      routeUrl: getCreatorRouteUrl(creatorProfile),
+      creatorId: getCreatorLookupId(creatorProfile),
+      limit: CHARACTERS_BATCH_LIMIT,
+      cursor,
+    });
+
+    for (const id of page.ids) {
+      ids.add(id);
+    }
+
+    const pageItems = [];
+    for (const item of page.items) {
+      const mappedItem = appendCreatorProfileContext(item, creatorProfile, {
+        sourcePage: "creatorCameos",
+        categoryLabel: "Creator Cast In",
+      });
+      pageItems.push(mappedItem);
+      items.push(mappedItem);
+    }
+
+    if (maxItems && items.length > maxItems) {
+      items.length = maxItems;
+    }
+
+    if (typeof options.onProgress === "function") {
+      await options.onProgress({
+        count: items.length,
+        pageNumber: pageNumber + 1,
+      });
+    }
+
+    throwIfFetchAbortRequested();
+
+    if (didPageContainOnlyKnownItems(pageItems, knownItemKeys)) {
+      break;
+    }
+
+    if (page.rowCount === 0 || !page.nextCursor || page.nextCursor === previousCursor) {
+      isExhaustive = !(maxItems && items.length >= maxItems);
+      break;
+    }
+
+    if (maxItems && items.length >= maxItems) {
+      break;
+    }
+
+    previousCursor = cursor;
+    cursor = page.nextCursor;
+  }
+
+  return {
+    ids: [...ids],
+    items,
+    partialWarning: "",
+    isExhaustive,
+  };
+}
+
 async function fetchAllCharacterAccountPublishedItems(characterAccount, options = {}) {
   const ids = new Set();
   const items = [];
@@ -4143,6 +5535,113 @@ async function fetchAllCharacterItems(options = {}) {
   };
 }
 
+async function fetchAllCreatorItems(options = {}) {
+  const maxItems = getMaxVideosSetting({ maxVideos: options.maxItems });
+  const knownItemKeys = options.knownItemKeys instanceof Set ? options.knownItemKeys : null;
+  const normalizedCreatorProfiles = normalizeCreatorProfiles(options.creatorProfiles);
+  const selectedCreatorProfileIds = normalizeSelectedCreatorProfileIds(
+    normalizedCreatorProfiles,
+    options.selectedCreatorProfileIds,
+    [],
+    {
+      allowEmpty: true,
+    },
+  );
+  const selectedCreatorProfiles = normalizedCreatorProfiles.filter((profile) =>
+    selectedCreatorProfileIds.includes(profile.profileId),
+  );
+  const ids = new Set();
+  const itemMap = new Map();
+  const partialWarnings = [];
+  let totalCount = 0;
+  let isExhaustive = true;
+
+  const mergeResult = (result) => {
+    for (const id of result.ids) {
+      ids.add(id);
+    }
+
+    for (const item of result.items) {
+      const key = getItemKey(item);
+      if (!itemMap.has(key)) {
+        itemMap.set(key, item);
+      }
+    }
+  };
+
+  const reportProgress = async (messagePrefix) => {
+    if (typeof options.onProgress !== "function") {
+      return;
+    }
+
+    await options.onProgress({
+      count: totalCount,
+      pageNumber: 1,
+      message: messagePrefix,
+    });
+  };
+
+  for (const creatorProfile of selectedCreatorProfiles) {
+    throwIfFetchAbortRequested();
+    const creatorProfileForFetch = await ensureCreatorProfileReadyForFetch(creatorProfile);
+    const creatorLookupId = isCanonicalCreatorUserId(creatorProfileForFetch.userId)
+      ? creatorProfileForFetch.userId
+      : "";
+
+    if (!creatorLookupId) {
+      partialWarnings.push(
+        `Could not resolve a canonical creator user_id for ${creatorProfileForFetch.displayName}.`,
+      );
+      continue;
+    }
+
+    try {
+      const publishedBaseCount = itemMap.size;
+      const maxRemaining = getRemainingFetchCapacity(publishedBaseCount, maxItems);
+      if (maxRemaining === 0) {
+        isExhaustive = false;
+        break;
+      }
+
+      const creatorFeedResult = await fetchAllCreatorFeedItems(
+        creatorProfileForFetch,
+        {
+          maxItems: maxRemaining,
+          knownItemKeys,
+          onProgress: async ({ count }) => {
+            totalCount = maxItems
+              ? Math.min(maxItems, publishedBaseCount + count)
+              : publishedBaseCount + count;
+            await reportProgress(`Fetching ${creatorProfileForFetch.displayName} creator feed...`);
+          },
+        },
+      );
+      mergeResult(creatorFeedResult);
+      isExhaustive = isExhaustive && creatorFeedResult.isExhaustive === true;
+    } catch (error) {
+      if (isControlError(error, "abort")) {
+        throw error;
+      }
+
+      partialWarnings.push(
+        `${creatorProfileForFetch.displayName}: ${getErrorMessage(error)}`,
+      );
+    }
+  }
+
+  const items = sortItemsByNewest([...itemMap.values()]);
+  if (maxItems && items.length > maxItems) {
+    items.length = maxItems;
+  }
+
+  return {
+    ids: [...ids],
+    items,
+    partialWarning: joinPartialWarnings(partialWarnings),
+    isExhaustive,
+  };
+}
+
 async function fetchAllCameoItems(options = {}) {
   const maxItems = getMaxVideosSetting({ maxVideos: options.maxItems });
   const knownItemKeys = options.knownItemKeys instanceof Set ? options.knownItemKeys : null;
@@ -4219,31 +5718,55 @@ async function fetchAllCameoItems(options = {}) {
   };
 }
 
+async function executeSourceFetchInTab(tabId, source, options) {
+  const results = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: injectedFetchSource,
+    args: [{ source, options }],
+  });
+
+  if (!results || !results.length) {
+    throw new Error("Chrome did not return data from the injected fetch.");
+  }
+
+  const payload = results[0].result;
+  if (!payload || typeof payload !== "object") {
+    throw new Error("Sora returned an invalid payload.");
+  }
+
+  if (payload.error) {
+    throw new Error(payload.error);
+  }
+
+  return payload;
+}
+
+function isHiddenTabFrameResetError(error) {
+  const message = getErrorMessage(error);
+  return /Frame with ID \d+ was removed/i.test(message) || /No frame with id \d+/i.test(message);
+}
+
 async function fetchSourceDataFromTab(source, options) {
   throwIfFetchAbortRequested();
-  const tabId = await ensureHiddenTab(SOURCE_ROUTES[source]);
+  const routeUrl =
+    options && typeof options.routeUrl === "string" && options.routeUrl
+      ? options.routeUrl
+      : SOURCE_ROUTES[source];
 
   try {
-    const results = await chrome.scripting.executeScript({
-      target: { tabId },
-      func: injectedFetchSource,
-      args: [{ source, options }],
-    });
+    const runFetch = async () => {
+      const tabId = await ensureHiddenTab(routeUrl);
+      return executeSourceFetchInTab(tabId, source, options);
+    };
 
-    if (!results || !results.length) {
-      throw new Error("Chrome did not return data from the injected fetch.");
+    try {
+      return await runFetch();
+    } catch (error) {
+      if (isHiddenTabFrameResetError(error)) {
+        return await runFetch();
+      }
+      throw error;
     }
-
-    const payload = results[0].result;
-    if (!payload || typeof payload !== "object") {
-      throw new Error("Sora returned an invalid payload.");
-    }
-
-    if (payload.error) {
-      throw new Error(payload.error);
-    }
-
-    return payload;
   } catch (error) {
     if (isFetchAbortRequested()) {
       throw createControlError("abort", "Fetch aborted.");
@@ -4260,11 +5783,19 @@ async function fetchSourceDataFromTab(source, options) {
               ? "character account"
               : source === "characterAccountPosts"
                 ? "character account post"
-            : source === "characterDrafts"
-              ? "cameo drafts"
-              : source === "characterAccountDrafts"
-                ? "character account drafts"
-            : "cameo";
+                : source === "creatorPublished"
+                  ? "creator posts"
+                  : source === "creatorCameos"
+                    ? "creator cast-in appearances"
+                    : source === "creatorCharacters"
+                      ? "creator characters"
+                      : source === "characterDrafts"
+                        ? "cameo drafts"
+                        : source === "characterAccountDrafts"
+                          ? "character account drafts"
+                          : source === "creatorProfileLookup"
+                            ? "creator profile"
+                            : "cameo";
     throw new Error(`Failed to fetch ${sourceLabel} data: ${getErrorMessage(error)}`);
   }
 }
@@ -4453,6 +5984,30 @@ async function refreshDownloadUrl(item) {
 
     if (!match) {
       throw new Error(`Could not refresh character video ${item.id}.`);
+    }
+
+    return {
+      ...item,
+      downloadUrl: match.downloadUrl,
+    };
+  }
+
+  if (
+    item.sourcePage === "creatorPublished" ||
+    item.sourcePage === "creatorCameos" ||
+    item.sourcePage === "creatorCharacters" ||
+    item.sourcePage === "creatorCharacterCameos"
+  ) {
+    const refreshed = await fetchAllCreatorItems({
+      creatorProfiles: currentState.creatorProfiles,
+      selectedCreatorProfileIds: item.creatorProfileId
+        ? [item.creatorProfileId]
+        : currentState.selectedCreatorProfileIds,
+    });
+    const match = refreshed.items.find((candidate) => matchesRefreshTarget(candidate, item));
+
+    if (!match) {
+      throw new Error(`Could not refresh creator video ${item.id}.`);
     }
 
     return {
@@ -4924,6 +6479,576 @@ function injectedFetchSource(config) {
       throw new Error("Could not derive your Sora user id from the signed-in browser session.");
     }
 
+    function normalizeAbsoluteUrl(value) {
+      if (typeof value !== "string" || !value) {
+        return null;
+      }
+
+      try {
+        return new URL(value, window.location.origin).toString();
+      } catch (_error) {
+        return null;
+      }
+    }
+
+    function normalizePathname(value) {
+      const absoluteUrl = normalizeAbsoluteUrl(value);
+      if (!absoluteUrl) {
+        return "";
+      }
+
+      try {
+        const pathname = new URL(absoluteUrl).pathname.replace(/\/+$/, "");
+        return pathname || "/";
+      } catch (_error) {
+        return "";
+      }
+    }
+
+    function decodeCreatorPathSegment(value) {
+      if (typeof value !== "string" || !value) {
+        return "";
+      }
+
+      try {
+        return decodeURIComponent(value);
+      } catch (_error) {
+        return value;
+      }
+    }
+
+    function normalizeCreatorUsername(value) {
+      if (typeof value !== "string") {
+        return "";
+      }
+
+      const cleaned = decodeCreatorPathSegment(value)
+        .trim()
+        .replace(/^@+/, "")
+        .replace(/\/+$/, "");
+
+      if (!cleaned) {
+        return "";
+      }
+
+      const reservedSegments = new Set(["profile", "profiles", "drafts", "characters", "likes"]);
+      return reservedSegments.has(cleaned.toLowerCase()) ? "" : cleaned;
+    }
+
+    function getCreatorUsernameFromPathname(pathname) {
+      if (typeof pathname !== "string" || !pathname) {
+        return "";
+      }
+
+      const rawSegments = pathname.split("/").filter(Boolean);
+      if (!rawSegments.length) {
+        return "";
+      }
+
+      const atSegment = rawSegments.find((segment) => segment.trim().startsWith("@"));
+      if (atSegment) {
+        return normalizeCreatorUsername(atSegment);
+      }
+
+      if (rawSegments[0].toLowerCase() === "profile") {
+        return normalizeCreatorUsername(rawSegments[1] || "");
+      }
+
+      return normalizeCreatorUsername(rawSegments[0]);
+    }
+
+    function getCreatorUsernameFromUrl(value) {
+      const pathname = normalizePathname(value);
+      return pathname ? getCreatorUsernameFromPathname(pathname) : "";
+    }
+
+    function isGenericCreatorDisplayName(value) {
+      if (typeof value !== "string") {
+        return false;
+      }
+
+      const normalized = value.trim().replace(/\s+/g, " ").toLowerCase();
+      if (!normalized) {
+        return false;
+      }
+
+      return (
+        normalized === "sora" ||
+        normalized === "chatgpt" ||
+        normalized === "openai" ||
+        /^sora\s*[-|:]/.test(normalized) ||
+        /^chatgpt\s*[-|:]/.test(normalized) ||
+        /^openai\s*[-|:]/.test(normalized) ||
+        normalized.includes("guardrails around content") ||
+        normalized.startsWith("http://") ||
+        normalized.startsWith("https://")
+      );
+    }
+
+    function normalizeCreatorDisplayName(value, fallbackUsername = "") {
+      if (typeof value === "string" && value.trim() && !isGenericCreatorDisplayName(value)) {
+        return value.trim().replace(/\s+/g, " ");
+      }
+
+      return normalizeCreatorUsername(fallbackUsername);
+    }
+
+    function isLikelyProfileUrl(value) {
+      const pathname = normalizePathname(value);
+      if (!pathname) {
+        return false;
+      }
+
+      return !/^\/(?:p|d)\//.test(pathname);
+    }
+
+    function collectProfileCandidates(payload, matches = [], depth = 0) {
+      if (depth > 6 || payload == null) {
+        return matches;
+      }
+
+      if (Array.isArray(payload)) {
+        for (const entry of payload) {
+          collectProfileCandidates(entry, matches, depth + 1);
+        }
+        return matches;
+      }
+
+      if (typeof payload !== "object") {
+        return matches;
+      }
+
+      const userId = pickFirstString([
+        payload.user_id,
+        payload.userId,
+        payload.chatgpt_user_id,
+        payload.chatgptUserId,
+      ]);
+      const username = normalizeCreatorUsername(
+        pickFirstString([
+          payload.username,
+          payload.user_name,
+          payload.userName,
+          payload.handle,
+        ]),
+      );
+      const displayName = normalizeCreatorDisplayName(
+        pickFirstString([
+          payload.display_name,
+          payload.displayName,
+          payload.full_name,
+          payload.fullName,
+          payload.name,
+        ]),
+        username,
+      );
+      const permalinkCandidate = pickFirstString([
+        payload.permalink,
+        payload.url,
+        payload.profile_url,
+        payload.profileUrl,
+        payload.public_url,
+        payload.publicUrl,
+      ]);
+      const permalink = isLikelyProfileUrl(permalinkCandidate)
+        ? normalizeAbsoluteUrl(permalinkCandidate)
+        : null;
+      const profilePictureUrl = getProfilePictureUrl(payload);
+
+      if (userId || username || displayName || permalink || profilePictureUrl) {
+        matches.push({
+          userId: userId || "",
+          username: username || "",
+          displayName: displayName || "",
+          permalink,
+          profilePictureUrl: profilePictureUrl || null,
+        });
+      }
+
+      for (const value of Object.values(payload)) {
+        collectProfileCandidates(value, matches, depth + 1);
+      }
+
+      return matches;
+    }
+
+    function scoreProfileCandidate(candidate, currentPathname, currentUsername = "") {
+      let score = 0;
+      const candidatePathname = normalizePathname(candidate && candidate.permalink);
+
+      if (candidatePathname && candidatePathname === currentPathname) {
+        score += 120;
+      }
+
+      if (
+        candidate &&
+        typeof candidate.username === "string" &&
+        candidate.username &&
+        currentPathname.toLowerCase().includes(candidate.username.toLowerCase())
+      ) {
+        score += 60;
+      }
+
+      if (
+        candidate &&
+        typeof candidate.username === "string" &&
+        candidate.username &&
+        currentUsername &&
+        candidate.username.toLowerCase() === currentUsername.toLowerCase()
+      ) {
+        score += 90;
+      }
+
+      if (candidate && typeof candidate.userId === "string" && candidate.userId) {
+        score += 20;
+      }
+
+      if (candidate && typeof candidate.displayName === "string" && candidate.displayName) {
+        score += 10;
+      }
+
+      if (candidate && typeof candidate.profilePictureUrl === "string" && candidate.profilePictureUrl) {
+        score += 5;
+      }
+
+      if (
+        candidate &&
+        isGenericCreatorDisplayName(candidate.displayName) &&
+        !(candidate.username || candidate.userId)
+      ) {
+        score -= 120;
+      }
+
+      return score;
+    }
+
+    function findProfileAvatarFromDom(username = "", displayName = "") {
+      const heading = document.querySelector("main h1, h1");
+      const headingRect = heading instanceof HTMLElement ? heading.getBoundingClientRect() : null;
+      const images = document.querySelectorAll("main img[src], [role='main'] img[src], img[src]");
+      let bestUrl = null;
+      let bestScore = -Infinity;
+
+      for (const image of images) {
+        if (!(image instanceof HTMLImageElement)) {
+          continue;
+        }
+
+        const src = normalizeAbsoluteUrl(image.currentSrc || image.src);
+        if (!src) {
+          continue;
+        }
+
+        const rect = image.getBoundingClientRect();
+        const width = rect.width || image.naturalWidth || 0;
+        const height = rect.height || image.naturalHeight || 0;
+        if (!width || !height) {
+          continue;
+        }
+
+        const ratio = width / height;
+        const minDimension = Math.min(width, height);
+        const altText = `${image.alt || ""} ${image.getAttribute("aria-label") || ""}`.toLowerCase();
+        const srcLower = src.toLowerCase();
+        let score = 0;
+
+        if (ratio >= 0.82 && ratio <= 1.18) {
+          score += 45;
+        } else if (ratio >= 0.7 && ratio <= 1.35) {
+          score += 20;
+        } else {
+          score -= 90;
+        }
+
+        if (minDimension >= 48 && minDimension <= 220) {
+          score += 25;
+        } else if (minDimension > 260 || minDimension < 24) {
+          score -= 20;
+        }
+
+        if (/avatar|profile|creator/.test(altText)) {
+          score += 35;
+        }
+
+        if (username && altText.includes(username.toLowerCase())) {
+          score += 20;
+        }
+
+        if (displayName && altText.includes(displayName.toLowerCase())) {
+          score += 20;
+        }
+
+        if (headingRect) {
+          const imageCenter = rect.top + rect.height / 2;
+          const headingCenter = headingRect.top + headingRect.height / 2;
+          const distance = Math.abs(imageCenter - headingCenter);
+          if (distance <= 220) {
+            score += 30;
+          } else if (distance <= 420) {
+            score += 10;
+          }
+        }
+
+        const parent = image.closest("header, [class*='profile'], [data-testid*='profile']");
+        if (parent) {
+          score += 18;
+        }
+
+        const borderRadius = Number.parseFloat(globalThis.getComputedStyle(image).borderRadius) || 0;
+        if (borderRadius >= minDimension / 3) {
+          score += 15;
+        }
+
+        if (/logo|wordmark|favicon|opengraph|og-image|social-preview/.test(srcLower)) {
+          score -= 80;
+        }
+
+        if (score > bestScore) {
+          bestScore = score;
+          bestUrl = src;
+        }
+      }
+
+      return bestScore >= 35 ? bestUrl : null;
+    }
+
+    function resolveCurrentProfileFromPage() {
+      const currentUrl = normalizeAbsoluteUrl(window.location.href);
+      const currentPathname = normalizePathname(currentUrl);
+      const currentUsername = getCreatorUsernameFromPathname(currentPathname);
+      const candidates = collectProfileCandidates(globalThis.__NEXT_DATA__)
+        .concat(collectProfileCandidates(globalThis.__NEXT_ROUTER_DATA__));
+
+      let bestCandidate = null;
+      let bestScore = -1;
+      for (const candidate of candidates) {
+        const score = scoreProfileCandidate(candidate, currentPathname, currentUsername);
+        if (score > bestScore) {
+          bestCandidate = candidate;
+          bestScore = score;
+        }
+      }
+
+      const metaTitle = document.querySelector('meta[property="og:title"], meta[name="twitter:title"]');
+      const heading = document.querySelector("main h1, h1");
+      const pathUserIdMatch = currentPathname.match(/\/(user-[A-Za-z0-9_-]+)/);
+
+      const userId =
+        (bestCandidate && typeof bestCandidate.userId === "string" ? bestCandidate.userId : "") ||
+        (pathUserIdMatch ? pathUserIdMatch[1] : "");
+      const username =
+        (bestCandidate && typeof bestCandidate.username === "string" ? bestCandidate.username : "") ||
+        currentUsername ||
+        "";
+      const headingText =
+        heading && typeof heading.textContent === "string" && heading.textContent.trim()
+          ? heading.textContent.trim()
+          : "";
+      const metaTitleText =
+        metaTitle && metaTitle.getAttribute("content") ? metaTitle.getAttribute("content").trim() : "";
+      const displayName =
+        normalizeCreatorDisplayName(
+          bestCandidate && typeof bestCandidate.displayName === "string" && bestCandidate.displayName
+            ? bestCandidate.displayName
+            : headingText || metaTitleText,
+          username,
+        ) ||
+        username ||
+        userId ||
+        "";
+      const permalink =
+        (bestCandidate && typeof bestCandidate.permalink === "string" && bestCandidate.permalink
+          ? bestCandidate.permalink
+          : currentUrl) || null;
+      const profilePictureUrl =
+        (bestCandidate && typeof bestCandidate.profilePictureUrl === "string" && bestCandidate.profilePictureUrl
+          ? bestCandidate.profilePictureUrl
+          : findProfileAvatarFromDom(username, displayName));
+
+      const profileId = userId || username || permalink || currentPathname || "";
+      if (!profileId) {
+        return null;
+      }
+
+      return {
+        profileId,
+        userId,
+        username,
+        displayName,
+        permalink,
+        profilePictureUrl,
+      };
+    }
+
+    function isCompleteCreatorProfile(profile) {
+      return Boolean(
+        profile &&
+        typeof profile === "object" &&
+        (profile.userId || profile.username) &&
+        profile.displayName &&
+        profile.profilePictureUrl,
+      );
+    }
+
+    async function waitForCreatorProfileSnapshot() {
+      const maxAttempts = 12;
+
+      for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+        const profile = resolveCurrentProfileFromPage();
+        if (isCompleteCreatorProfile(profile)) {
+          return profile;
+        }
+
+        if (attempt < maxAttempts - 1) {
+          await new Promise((resolve) => setTimeout(resolve, 180));
+        } else {
+          return profile;
+        }
+      }
+
+      return resolveCurrentProfileFromPage();
+    }
+
+    function isCanonicalCreatorUserId(value) {
+      return typeof value === "string" && /^user-[A-Za-z0-9_-]+$/.test(value);
+    }
+
+    function normalizeCreatorProfilePayload(payload, fallbackUsername = "", fallbackPermalink = null) {
+      if (!payload || typeof payload !== "object") {
+        return null;
+      }
+
+      const userId = pickFirstString([
+        payload.user_id,
+        payload.userId,
+        payload.owner_profile && payload.owner_profile.user_id,
+        payload.owner_profile && payload.owner_profile.userId,
+      ]);
+      const username =
+        normalizeCreatorUsername(
+          pickFirstString([
+            payload.username,
+            payload.user_name,
+            payload.userName,
+            payload.handle,
+            fallbackUsername,
+          ]),
+        ) || "";
+      const permalink =
+        normalizeAbsoluteUrl(
+          pickFirstString([
+            payload.permalink,
+            payload.url,
+            payload.profile_url,
+            payload.profileUrl,
+            fallbackPermalink,
+          ]),
+        ) || (username ? `${window.location.origin}/profile/${encodeURIComponent(username)}` : null);
+      const displayName =
+        normalizeCreatorDisplayName(
+          pickFirstString([
+            payload.display_name,
+            payload.displayName,
+            payload.public_figure_name,
+            payload.full_name,
+            payload.fullName,
+            payload.name,
+          ]),
+          username,
+        ) ||
+        username ||
+        userId ||
+        "";
+      const profilePictureUrl = getProfilePictureUrl(payload);
+      const profileId = userId || username || permalink || "";
+
+      if (!profileId) {
+        return null;
+      }
+
+      return {
+        profileId,
+        userId: userId || "",
+        username,
+        displayName,
+        permalink,
+        profilePictureUrl: profilePictureUrl || null,
+        profileFetchedAt: new Date().toISOString(),
+        profileData: payload,
+      };
+    }
+
+    async function fetchCreatorProfileByUsername(username) {
+      const normalizedUsername = normalizeCreatorUsername(username);
+      if (!normalizedUsername) {
+        return null;
+      }
+
+      const url = new URL(
+        `/backend/project_y/profile/username/${encodeURIComponent(normalizedUsername)}`,
+        window.location.origin,
+      );
+      const payload = await fetchJson(url.toString());
+      return normalizeCreatorProfilePayload(
+        payload,
+        normalizedUsername,
+        `${window.location.origin}/profile/${encodeURIComponent(normalizedUsername)}`,
+      );
+    }
+
+    async function deriveProfileUserId(options = {}) {
+      const explicitCreatorId =
+        typeof options.creatorId === "string" && options.creatorId ? options.creatorId.trim() : "";
+      if (isCanonicalCreatorUserId(explicitCreatorId)) {
+        return explicitCreatorId;
+      }
+
+      const currentProfile = await waitForCreatorProfileSnapshot();
+      if (currentProfile && isCanonicalCreatorUserId(currentProfile.userId)) {
+        return currentProfile.userId;
+      }
+
+      const explicitUsername = normalizeCreatorUsername(explicitCreatorId);
+      let routeUsername = "";
+      if (typeof options.routeUrl === "string" && options.routeUrl) {
+        routeUsername = getCreatorUsernameFromUrl(options.routeUrl);
+      }
+
+      const lookupUsername =
+        (currentProfile && normalizeCreatorUsername(currentProfile.username)) ||
+        explicitUsername ||
+        routeUsername;
+
+      if (lookupUsername) {
+        try {
+          const resolvedProfile = await fetchCreatorProfileByUsername(lookupUsername);
+          if (resolvedProfile && isCanonicalCreatorUserId(resolvedProfile.userId)) {
+            return resolvedProfile.userId;
+          }
+        } catch (_error) {
+          // Fall back to the best available page-derived identifier below.
+        }
+      }
+
+      if (currentProfile && currentProfile.userId) {
+        return currentProfile.userId;
+      }
+
+      if (explicitCreatorId) {
+        return explicitCreatorId;
+      }
+
+      if (lookupUsername) {
+        return lookupUsername;
+      }
+
+      if (normalizePathname(window.location.href) === "/profile") {
+        return deriveViewerUserId(await deriveAuthContext());
+      }
+
+      throw new Error("Could not determine the creator profile id from the current Sora page.");
+    }
+
     async function fetchJson(relativeUrl) {
       // All Sora API reads happen from inside the Sora tab so requests inherit the user's
       // current browser session and remain scoped to the declared host permissions.
@@ -5103,6 +7228,8 @@ function injectedFetchSource(config) {
         appendCandidate(source.creator);
         appendCandidate(source.account);
         appendCandidate(source.profile);
+        appendCandidate(source.owner_profile);
+        appendCandidate(source.ownerProfile);
         appendCandidate(source.profile_owner);
         appendCandidate(source.profileOwner);
         appendCandidate(source.actor);
@@ -5132,6 +7259,13 @@ function injectedFetchSource(config) {
         value.avatarUrl,
         value.picture,
         value.image,
+        value.profile_picture && pickFirstString([value.profile_picture.url, value.profile_picture.src]),
+        value.profilePicture && pickFirstString([value.profilePicture.url, value.profilePicture.src]),
+        value.avatar && pickFirstString([value.avatar.url, value.avatar.src]),
+        value.photo && pickFirstString([value.photo.url, value.photo.src]),
+        value.image && typeof value.image === "object"
+          ? pickFirstString([value.image.url, value.image.src])
+          : null,
       ]);
     }
 
@@ -5163,6 +7297,20 @@ function injectedFetchSource(config) {
         ]);
         if (username) {
           return username;
+        }
+      }
+
+      return null;
+    }
+
+    function getCreatorUserId(value) {
+      for (const candidate of getCreatorCandidates(value)) {
+        const userId = pickFirstString([
+          candidate.user_id,
+          candidate.userId,
+        ]);
+        if (userId) {
+          return userId;
         }
       }
 
@@ -5330,18 +7478,57 @@ function injectedFetchSource(config) {
       return pickFirstString([
         value.downloadable_url,
         value.downloadUrl,
+        value.raw_url,
+        value.rawUrl,
+        value.signed_url,
+        value.signedUrl,
+        value.media_url,
+        value.mediaUrl,
+        value.video_url,
+        value.videoUrl,
+        value.asset_url,
+        value.assetUrl,
+        value.source_url,
+        value.sourceUrl,
+        value.src,
         value.download_urls && value.download_urls.no_watermark,
         value.download_urls && value.download_urls.watermark,
         value.download_urls && value.download_urls.endcard_watermark,
         ...attachments.flatMap((attachment) => [
           attachment && attachment.downloadable_url,
           attachment && attachment.downloadUrl,
+          attachment && attachment.raw_url,
+          attachment && attachment.rawUrl,
+          attachment && attachment.signed_url,
+          attachment && attachment.signedUrl,
+          attachment && attachment.media_url,
+          attachment && attachment.mediaUrl,
+          attachment && attachment.video_url,
+          attachment && attachment.videoUrl,
+          attachment && attachment.asset_url,
+          attachment && attachment.assetUrl,
+          attachment && attachment.source_url,
+          attachment && attachment.sourceUrl,
+          attachment && attachment.src,
           attachment && attachment.download_urls && attachment.download_urls.no_watermark,
           attachment && attachment.download_urls && attachment.download_urls.watermark,
         ]),
         ...nested.flatMap((candidate) => [
           candidate && candidate.downloadable_url,
           candidate && candidate.downloadUrl,
+          candidate && candidate.raw_url,
+          candidate && candidate.rawUrl,
+          candidate && candidate.signed_url,
+          candidate && candidate.signedUrl,
+          candidate && candidate.media_url,
+          candidate && candidate.mediaUrl,
+          candidate && candidate.video_url,
+          candidate && candidate.videoUrl,
+          candidate && candidate.asset_url,
+          candidate && candidate.assetUrl,
+          candidate && candidate.source_url,
+          candidate && candidate.sourceUrl,
+          candidate && candidate.src,
           candidate && candidate.download_urls && candidate.download_urls.no_watermark,
           candidate && candidate.download_urls && candidate.download_urls.watermark,
           candidate && candidate.download_urls && candidate.download_urls.endcard_watermark,
@@ -5369,11 +7556,37 @@ function injectedFetchSource(config) {
       ].filter(Boolean);
       const candidates = [
         value.url,
+        value.raw_url,
+        value.rawUrl,
+        value.signed_url,
+        value.signedUrl,
+        value.media_url,
+        value.mediaUrl,
+        value.video_url,
+        value.videoUrl,
+        value.asset_url,
+        value.assetUrl,
+        value.source_url,
+        value.sourceUrl,
+        value.src,
         value.encodings && value.encodings.md && value.encodings.md.path,
         value.encodings && value.encodings.source && value.encodings.source.path,
         value.encodings && value.encodings.ld && value.encodings.ld.path,
         ...nested.flatMap((candidate) => [
           candidate && candidate.url,
+          candidate && candidate.raw_url,
+          candidate && candidate.rawUrl,
+          candidate && candidate.signed_url,
+          candidate && candidate.signedUrl,
+          candidate && candidate.media_url,
+          candidate && candidate.mediaUrl,
+          candidate && candidate.video_url,
+          candidate && candidate.videoUrl,
+          candidate && candidate.asset_url,
+          candidate && candidate.assetUrl,
+          candidate && candidate.source_url,
+          candidate && candidate.sourceUrl,
+          candidate && candidate.src,
           candidate && candidate.encodings && candidate.encodings.md && candidate.encodings.md.path,
           candidate && candidate.encodings && candidate.encodings.source && candidate.encodings.source.path,
           candidate && candidate.encodings && candidate.encodings.ld && candidate.encodings.ld.path,
@@ -5444,10 +7657,641 @@ function injectedFetchSource(config) {
       ]);
     }
 
+    function classifyCreatorFeedItem(row, post, config = {}) {
+      const targetUserId =
+        config && typeof config.creatorUserId === "string" && config.creatorUserId
+          ? config.creatorUserId
+          : "";
+      const targetUsername = normalizeCreatorUsername(
+        config && typeof config.creatorUsername === "string" ? config.creatorUsername : "",
+      );
+      const ownerUserId = pickFirstString([
+        row && row.user_id,
+        row && row.userId,
+        row && row.owner_profile && row.owner_profile.user_id,
+        row && row.ownerProfile && row.ownerProfile.userId,
+        row && row.owner && row.owner.user_id,
+        row && row.owner && row.owner.userId,
+        row && row.user && row.user.user_id,
+        row && row.user && row.user.userId,
+        post && post.user_id,
+        post && post.userId,
+        post && post.owner_profile && post.owner_profile.user_id,
+        post && post.ownerProfile && post.ownerProfile.userId,
+        post && post.owner && post.owner.user_id,
+        post && post.owner && post.owner.userId,
+        post && post.user && post.user.user_id,
+        post && post.user && post.user.userId,
+      ]);
+      const ownerUsername = normalizeCreatorUsername(
+        pickFirstString([
+          row && row.username,
+          row && row.user_name,
+          row && row.userName,
+          row && row.owner_profile && row.owner_profile.username,
+          row && row.ownerProfile && row.ownerProfile.username,
+          row && row.owner && row.owner.username,
+          row && row.user && row.user.username,
+          post && post.username,
+          post && post.user_name,
+          post && post.userName,
+          post && post.owner_profile && post.owner_profile.username,
+          post && post.ownerProfile && post.ownerProfile.username,
+          post && post.owner && post.owner.username,
+          post && post.user && post.user.username,
+        ]),
+      );
+
+      if (
+        (targetUserId && ownerUserId === targetUserId) ||
+        (targetUsername && ownerUsername && ownerUsername === targetUsername)
+      ) {
+        return {
+          sourcePage: "creatorPublished",
+          sourceLabel: "Creator Post",
+        };
+      }
+
+      const hintValues = [
+        row && row.kind,
+        row && row.feed_kind,
+        row && row.feedKind,
+        row && row.feed_type,
+        row && row.feedType,
+        row && row.relationship,
+        row && row.relationship_type,
+        row && row.relationshipType,
+        row && row.source_type,
+        row && row.sourceType,
+        row && row.surface,
+        row && row.section,
+        row && row.tab,
+        row && row.cut,
+        post && post.kind,
+        post && post.feed_kind,
+        post && post.feedKind,
+        post && post.feed_type,
+        post && post.feedType,
+        post && post.relationship,
+        post && post.relationship_type,
+        post && post.relationshipType,
+        post && post.source_type,
+        post && post.sourceType,
+        post && post.surface,
+        post && post.section,
+        post && post.tab,
+        post && post.cut,
+      ]
+        .filter((value) => typeof value === "string" && value)
+        .map((value) => value.toLowerCase());
+
+      if (hintValues.some((value) => /cast|appearance|cameo/.test(value))) {
+        return {
+          sourcePage: "creatorCameos",
+          sourceLabel: "Creator Cast In",
+        };
+      }
+
+      return {
+        sourcePage: "creatorPublished",
+        sourceLabel: "Creator Post",
+      };
+    }
+
+    function getNextCursorFromPayload(payload) {
+      return (
+        pickFirstString([
+          payload && payload.next_cursor,
+          payload && payload.nextCursor,
+          payload && payload.pagination && payload.pagination.next_cursor,
+          payload && payload.pagination && payload.pagination.nextCursor,
+          payload && payload.cursor,
+          payload && payload.pagination && payload.pagination.cursor,
+        ]) || null
+      );
+    }
+
+    function isLikelyCursorKey(value) {
+      return typeof value === "string" && /(?:^|_|[A-Z])cursor|page.*token|continuation/i.test(value);
+    }
+
+    function findNestedCursorToken(payload, requestCursor = "", keyName = "", depth = 0) {
+      if (depth > 6 || payload == null) {
+        return null;
+      }
+
+      if (typeof payload === "string") {
+        if (
+          isLikelyCursorKey(keyName) &&
+          payload &&
+          payload !== requestCursor &&
+          payload.length < 2048
+        ) {
+          return payload;
+        }
+        return null;
+      }
+
+      if (Array.isArray(payload)) {
+        for (const entry of payload) {
+          const match = findNestedCursorToken(entry, requestCursor, keyName, depth + 1);
+          if (match) {
+            return match;
+          }
+        }
+        return null;
+      }
+
+      if (typeof payload !== "object") {
+        return null;
+      }
+
+      const priorityKeys = [
+        "next_cursor",
+        "nextCursor",
+        "end_cursor",
+        "endCursor",
+        "cursor",
+        "page_cursor",
+        "pageCursor",
+      ];
+
+      for (const candidateKey of priorityKeys) {
+        if (!(candidateKey in payload)) {
+          continue;
+        }
+
+        const match = findNestedCursorToken(payload[candidateKey], requestCursor, candidateKey, depth + 1);
+        if (match) {
+          return match;
+        }
+      }
+
+      for (const [entryKey, entryValue] of Object.entries(payload)) {
+        if (priorityKeys.includes(entryKey) || (!isLikelyCursorKey(entryKey) && depth > 2)) {
+          continue;
+        }
+
+        const match = findNestedCursorToken(entryValue, requestCursor, entryKey, depth + 1);
+        if (match) {
+          return match;
+        }
+      }
+
+      return null;
+    }
+
+    function normalizeCursorToken(value) {
+      return typeof value === "string" && value ? value : "";
+    }
+
+    function normalizeCursorTimestamp(value) {
+      if (typeof value === "number" && Number.isFinite(value)) {
+        return value;
+      }
+
+      if (typeof value === "string" && value.trim()) {
+        const numericValue = Number(value);
+        if (Number.isFinite(numericValue)) {
+          return numericValue;
+        }
+
+        const parsedDateValue = Date.parse(value);
+        if (Number.isFinite(parsedDateValue)) {
+          return parsedDateValue / 1000;
+        }
+      }
+
+      return null;
+    }
+
+    function encodeCursorPayload(payload) {
+      if (!payload || typeof payload !== "object") {
+        return null;
+      }
+
+      try {
+        return btoa(JSON.stringify(payload));
+      } catch (_error) {
+        return null;
+      }
+    }
+
+    function buildCreatedAtCursorFromRows(rows, config = {}) {
+      const cursorKind =
+        config && typeof config.cursorKind === "string" && config.cursorKind
+          ? config.cursorKind
+          : "";
+      if (!cursorKind) {
+        return null;
+      }
+
+      const sourceRows = Array.isArray(rows) ? rows : [];
+      for (let index = sourceRows.length - 1; index >= 0; index -= 1) {
+        const row = sourceRows[index];
+        const post = row && row.post && typeof row.post === "object" ? row.post : null;
+        const candidates = [
+          row && row.created_at,
+          row && row.createdAt,
+          post && post.created_at,
+          post && post.createdAt,
+          post && post.posted_at,
+          post && post.postedAt,
+          post && post.updated_at,
+          post && post.updatedAt,
+        ];
+
+        for (const candidate of candidates) {
+          const createdAt = normalizeCursorTimestamp(candidate);
+          if (createdAt == null) {
+            continue;
+          }
+
+          return encodeCursorPayload({
+            kind: cursorKind,
+            created_at: createdAt,
+          });
+        }
+      }
+
+      return null;
+    }
+
+    function getNextCursorForRows(payload, rows, config = {}) {
+      const requestCursor =
+        config && typeof config.requestCursor === "string" && config.requestCursor
+          ? config.requestCursor
+          : "";
+      const explicitCursor = normalizeCursorToken(getNextCursorFromPayload(payload));
+      const nestedCursor = normalizeCursorToken(findNestedCursorToken(payload, requestCursor));
+
+      if (explicitCursor && explicitCursor !== requestCursor) {
+        return explicitCursor;
+      }
+
+      if (nestedCursor && nestedCursor !== requestCursor) {
+        return nestedCursor;
+      }
+
+      const derivedCursor = normalizeCursorToken(buildCreatedAtCursorFromRows(rows, config));
+      if (derivedCursor && derivedCursor !== requestCursor) {
+        return derivedCursor;
+      }
+
+      return explicitCursor && explicitCursor !== requestCursor ? explicitCursor : null;
+    }
+
+    function decodeEmbeddedText(value) {
+      if (typeof value !== "string" || !value) {
+        return "";
+      }
+
+      return value
+        .replace(/\\u002F/gi, "/")
+        .replace(/\\\//g, "/")
+        .replace(/&quot;/gi, "\"")
+        .replace(/&#x27;|&#39;/gi, "'")
+        .replace(/&amp;/gi, "&");
+    }
+
+    function extractPostMediaCandidatesFromHtml(html) {
+      const decodedHtml = decodeEmbeddedText(html);
+      if (!decodedHtml) {
+        return {
+          mediaUrls: [],
+          thumbnailUrl: null,
+        };
+      }
+
+      const matchedUrls = decodedHtml.match(/https:\/\/videos\.openai\.com\/[^"'`\s<\\)]+/gi) || [];
+      const uniqueUrls = [...new Set(matchedUrls)];
+      const mediaUrls = uniqueUrls.filter(
+        (url) =>
+          !/thumbnail/i.test(url) &&
+          (/(?:\/drvs\/(?:md|hd|ld|source)\/raw)/i.test(url) ||
+            /(?:\/raw(?:[?#]|$))/i.test(url) ||
+            /\.mp4(?:[?#]|$)/i.test(url)),
+      );
+      const thumbnailUrl =
+        uniqueUrls.find((url) => /thumbnail/i.test(url)) ||
+        uniqueUrls.find((url) => /\.(?:jpe?g|png|webp)(?:[?#]|$)/i.test(url)) ||
+        null;
+
+      return {
+        mediaUrls,
+        thumbnailUrl,
+      };
+    }
+
+    async function fetchPostDetailHtml(detailUrl) {
+      if (typeof detailUrl !== "string" || !detailUrl) {
+        return "";
+      }
+
+      const response = await fetch(detailUrl, {
+        credentials: "include",
+        redirect: "follow",
+      });
+
+      if (!response.ok) {
+        throw new Error(`Could not load post details (${response.status}).`);
+      }
+
+      return await response.text();
+    }
+
+    async function resolveMissingPostItemsFromDetails(unresolvedPosts) {
+      const pending = Array.isArray(unresolvedPosts) ? unresolvedPosts : [];
+      if (!pending.length) {
+        return [];
+      }
+
+      const results = [];
+      const detailCache = new Map();
+      const concurrency = 4;
+      let currentIndex = 0;
+
+      async function resolveOne(entry) {
+        if (!entry || typeof entry !== "object") {
+          return;
+        }
+
+        const detailUrl =
+          typeof entry.detailUrl === "string" && entry.detailUrl
+            ? entry.detailUrl
+            : typeof entry.id === "string" && entry.id
+              ? `https://sora.chatgpt.com/p/${entry.id}`
+              : "";
+        if (!detailUrl) {
+          return;
+        }
+
+        let detailResult = detailCache.get(detailUrl);
+        if (!detailResult) {
+          try {
+            const html = await fetchPostDetailHtml(detailUrl);
+            detailResult = extractPostMediaCandidatesFromHtml(html);
+          } catch (_error) {
+            detailResult = {
+              mediaUrls: [],
+              thumbnailUrl: null,
+            };
+          }
+          detailCache.set(detailUrl, detailResult);
+        }
+
+        const mediaUrls =
+          detailResult && Array.isArray(detailResult.mediaUrls) ? detailResult.mediaUrls : [];
+        if (!mediaUrls.length) {
+          return;
+        }
+
+        const thumbnailUrl =
+          detailResult && typeof detailResult.thumbnailUrl === "string" && detailResult.thumbnailUrl
+            ? detailResult.thumbnailUrl
+            : typeof entry.thumbnailUrl === "string" && entry.thumbnailUrl
+              ? entry.thumbnailUrl
+              : null;
+
+        mediaUrls.forEach((downloadUrl, attachmentIndex) => {
+          results.push({
+            id: entry.id,
+            sourcePage: entry.sourcePage,
+            sourceLabel: entry.sourceLabel,
+            sourceType: "post",
+            detailUrl,
+            downloadUrl,
+            filename: buildFilename(entry.preferredTitle, attachmentIndex, mediaUrls.length),
+            thumbnailUrl,
+            creatorDisplayName: entry.creatorDisplayName,
+            creatorUsername: entry.creatorUsername,
+            creatorProfilePictureUrl: entry.creatorProfilePictureUrl,
+            prompt: entry.prompt,
+            discoveryPhrase: entry.discoveryPhrase,
+            createdAt: entry.createdAt,
+            postedAt: entry.postedAt,
+            likeCount: entry.likeCount,
+            viewCount: entry.viewCount,
+            shareCount: entry.shareCount,
+            repostCount: entry.repostCount,
+            remixCount: entry.remixCount,
+            attachmentIndex,
+            attachmentCount: mediaUrls.length,
+            metadataEntries: compactMetadataEntries([
+              { label: "Source", value: entry.sourceLabel },
+              { label: "Source Type", value: "post" },
+              { label: "Post ID", value: entry.id },
+              { label: "Recovered From", value: "Post detail page" },
+              { label: "Discovery Phrase", value: entry.discoveryPhrase },
+              { label: "Posted At", value: entry.postedAt ?? null },
+              { label: "Created At", value: entry.createdAt ?? null },
+              { label: "Likes", value: entry.likeCount },
+              { label: "Views", value: entry.viewCount },
+              { label: "Shares", value: entry.shareCount },
+              { label: "Reposts", value: entry.repostCount },
+              { label: "Remixes", value: entry.remixCount },
+              { label: "Creator", value: entry.creatorDisplayName },
+              { label: "Creator Username", value: entry.creatorUsername },
+              { label: "Detail URL", value: detailUrl, type: "link" },
+              { label: "Download URL", value: downloadUrl, type: "link" },
+              { label: "Thumbnail URL", value: thumbnailUrl, type: "link" },
+            ]),
+          });
+        });
+      }
+
+      async function worker() {
+        while (currentIndex < pending.length) {
+          const entry = pending[currentIndex];
+          currentIndex += 1;
+          await resolveOne(entry);
+        }
+      }
+
+      await Promise.all(
+        Array.from({ length: Math.min(concurrency, pending.length) }, () => worker()),
+      );
+
+      return results;
+    }
+
+    function getPostCandidates(row) {
+      if (!row || typeof row !== "object") {
+        return [];
+      }
+
+      return [
+        row.post,
+        row.item,
+        row.data,
+        row.output,
+        row.result,
+        row.generation,
+        row.asset,
+        row.entry,
+        row.content,
+        row.payload,
+        row.object,
+        row.target,
+        row.entity,
+        row.node,
+        row.card,
+        row,
+      ].filter((candidate) => candidate && typeof candidate === "object");
+    }
+
+    function extractPostIdFromUrl(value) {
+      if (typeof value !== "string" || !value) {
+        return "";
+      }
+
+      const patterns = [
+        /\/p\/([^/?#]+)/i,
+        /\/d\/([^/?#]+)/i,
+      ];
+
+      for (const pattern of patterns) {
+        const match = value.match(pattern);
+        if (match && typeof match[1] === "string" && match[1]) {
+          return match[1];
+        }
+      }
+
+      return "";
+    }
+
+    function getPostId(value) {
+      return (
+        pickFirstString([
+        value && value.post_id,
+        value && value.postId,
+        value && value.public_id,
+        value && value.publicId,
+        value && value.share_id,
+        value && value.shareId,
+        extractPostIdFromUrl(value && value.permalink),
+        extractPostIdFromUrl(value && value.detail_url),
+        extractPostIdFromUrl(value && value.public_url),
+        extractPostIdFromUrl(value && value.publicUrl),
+        extractPostIdFromUrl(value && value.detailUrl),
+        extractPostIdFromUrl(value && value.url),
+        value && value.id,
+        value && value.generation_id,
+        value && value.generationId,
+        value && value.task_id,
+        value && value.taskId,
+        value && value.asset_id,
+        value && value.assetId,
+        value && value.item_id,
+        value && value.itemId,
+      ]) ||
+        ""
+      );
+    }
+
+    function getPostAttachments(value) {
+      if (!value || typeof value !== "object") {
+        return [];
+      }
+
+      const attachments = [];
+
+      function appendEntries(source) {
+        if (!source || typeof source !== "object") {
+          return;
+        }
+
+        const attachmentArrays = [
+          source.attachments,
+          source.outputs,
+          source.media,
+          source.assets,
+          source.files,
+          source.videos,
+          source.entries,
+          source.nodes,
+          source.clips,
+          source.results,
+        ];
+
+        for (const array of attachmentArrays) {
+          if (!Array.isArray(array)) {
+            continue;
+          }
+
+          for (const entry of array) {
+            if (entry && typeof entry === "object") {
+              attachments.push(entry);
+            }
+          }
+        }
+
+        const singularCandidates = [
+          source.attachment,
+          source.output,
+          source.result,
+          source.generation,
+          source.asset,
+          source.file,
+          source.video,
+          source.entry,
+          source.content,
+          source.payload,
+          source.object,
+          source.target,
+          source.entity,
+          source.node,
+          source.card,
+        ];
+
+        for (const entry of singularCandidates) {
+          if (entry && typeof entry === "object") {
+            attachments.push(entry);
+          }
+        }
+      }
+
+      appendEntries(value);
+      for (const candidate of getPostCandidates(value)) {
+        appendEntries(candidate);
+      }
+
+      const dedupedAttachments = [];
+      const seenAttachmentKeys = new Set();
+
+      for (const attachment of attachments) {
+        const attachmentKey =
+          pickFirstString([
+            attachment && attachment.id,
+            attachment && attachment.generation_id,
+            attachment && attachment.generationId,
+            attachment && attachment.task_id,
+            attachment && attachment.taskId,
+            getDownloadUrl(attachment),
+            getDirectMediaUrl(attachment),
+            attachment && attachment.url,
+            attachment && attachment.path,
+          ]) || null;
+
+        if (attachmentKey) {
+          if (seenAttachmentKeys.has(attachmentKey)) {
+            continue;
+          }
+
+          seenAttachmentKeys.add(attachmentKey);
+        }
+
+        dedupedAttachments.push(attachment);
+      }
+
+      return dedupedAttachments;
+    }
+
     function normalizePostListingResponse(payload, config = {}) {
       const rows = Array.isArray(payload && payload.items) ? payload.items : [];
       const ids = [];
       const items = [];
+      const unresolvedPosts = [];
       const sourcePage =
         pickFirstString([
           config && config.sourcePage,
@@ -5466,68 +8310,132 @@ function injectedFetchSource(config) {
       const requireOwner = Boolean(config && config.requireOwner);
 
       for (const row of rows) {
-        const post = row && row.post ? row.post : null;
-        if (!post || typeof post.id !== "string" || (requireOwner && !post.is_owner)) {
+        const post = getPostCandidates(row).find((candidate) => {
+          const postId = getPostId(candidate);
+          return Boolean(postId && (!requireOwner || candidate.is_owner));
+        });
+        const postId = getPostId(post);
+        if (!post || typeof postId !== "string" || (requireOwner && !post.is_owner)) {
           continue;
         }
 
-        const attachments = Array.isArray(post.attachments)
-          ? post.attachments.filter((attachment) => attachment && getDownloadUrl(attachment))
-          : [];
+        const creatorClassification =
+          config && config.separateCreatorBuckets === true
+            ? classifyCreatorFeedItem(row, post, config)
+            : {
+              sourcePage,
+              sourceLabel,
+            };
+        const itemSourcePage =
+          creatorClassification && typeof creatorClassification.sourcePage === "string"
+            ? creatorClassification.sourcePage
+            : sourcePage;
+        const itemSourceLabel =
+          creatorClassification && typeof creatorClassification.sourceLabel === "string"
+            ? creatorClassification.sourceLabel
+            : sourceLabel;
+        const discoveryPhrase = pickFirstString([
+          post.discovery_phrase,
+          post.discoveryPhrase,
+        ]);
+        const detailUrl =
+          typeof post.permalink === "string" && post.permalink
+            ? post.permalink
+            : `https://sora.chatgpt.com/p/${postId}`;
+        const creatorDisplayName = getCreatorDisplayName(row) || getCreatorDisplayName(post) || null;
+        const creatorUsername = getCreatorUsername(row) || getCreatorUsername(post) || null;
+        const creatorProfilePictureUrl =
+          getCreatorProfilePictureUrl(row) || getCreatorProfilePictureUrl(post) || null;
+        const prompt =
+          (typeof post.text === "string" && post.text) ||
+          null;
+        const preferredTitle = pickFirstString([
+          discoveryPhrase,
+          prompt,
+          postId,
+        ]);
+        const createdAt = post.posted_at ?? post.updated_at ?? null;
+        const postedAt = post.posted_at ?? null;
+
+        let attachments = getPostAttachments(row).filter(
+          (attachment) =>
+            attachment &&
+            (getDownloadUrl(attachment) || getDirectMediaUrl(attachment)),
+        );
+
+        if (
+          attachments.length === 0 &&
+          (getDownloadUrl(row) || getDirectMediaUrl(row) || getDownloadUrl(post) || getDirectMediaUrl(post))
+        ) {
+          attachments = [row];
+        }
 
         if (!attachments.length) {
+          if (config && config.collectUnresolvedPosts === true) {
+            unresolvedPosts.push({
+              id: postId,
+              sourcePage: itemSourcePage,
+              sourceLabel: itemSourceLabel,
+              detailUrl,
+              creatorDisplayName,
+              creatorUsername,
+              creatorProfilePictureUrl,
+              prompt,
+              discoveryPhrase,
+              preferredTitle,
+              createdAt,
+              postedAt,
+              likeCount: post.like_count ?? null,
+              viewCount: post.view_count ?? null,
+              shareCount: post.share_count ?? null,
+              repostCount: post.repost_count ?? null,
+              remixCount: post.remix_count ?? null,
+              thumbnailUrl: getThumbnailUrl(post) || null,
+            });
+          }
           continue;
         }
 
-        ids.push(post.id);
+        ids.push(postId);
 
         attachments.forEach((attachment, attachmentIndex) => {
           const durationSeconds = getDurationSeconds(attachment) || null;
           const fileSizeBytes = getFileSizeBytes(attachment) || null;
-          const downloadUrl = getDownloadUrl(attachment);
-          const discoveryPhrase = pickFirstString([
-            post.discovery_phrase,
-            post.discoveryPhrase,
-          ]);
-          const preferredTitle = pickFirstString([
+          const downloadUrl =
+            getDownloadUrl(attachment) ||
+            getDirectMediaUrl(attachment) ||
+            getDownloadUrl(row) ||
+            getDirectMediaUrl(row) ||
+            getDownloadUrl(post) ||
+            getDirectMediaUrl(post);
+          const preferredAttachmentTitle = pickFirstString([
             discoveryPhrase,
-            post.text,
+            prompt,
             attachment.prompt,
-            post.id,
+            postId,
           ]);
           items.push({
-            id: post.id,
-            sourcePage,
+            id: postId,
+            sourcePage: itemSourcePage,
+            sourceLabel: itemSourceLabel,
             sourceType: "post",
-            detailUrl:
-              typeof post.permalink === "string" && post.permalink
-                ? post.permalink
-                : `https://sora.chatgpt.com/p/${post.id}`,
+            detailUrl,
             downloadUrl,
-            filename: buildFilename(preferredTitle, attachmentIndex, attachments.length),
+            filename: buildFilename(preferredAttachmentTitle, attachmentIndex, attachments.length),
             thumbnailUrl:
               getThumbnailUrl(attachment) ||
               getThumbnailUrl(post) ||
               null,
-            creatorDisplayName:
-              getCreatorDisplayName(row) ||
-              getCreatorDisplayName(post) ||
-              null,
-            creatorUsername:
-              getCreatorUsername(row) ||
-              getCreatorUsername(post) ||
-              null,
-            creatorProfilePictureUrl:
-              getCreatorProfilePictureUrl(row) ||
-              getCreatorProfilePictureUrl(post) ||
-              null,
+            creatorDisplayName,
+            creatorUsername,
+            creatorProfilePictureUrl,
             prompt:
-              (typeof post.text === "string" && post.text) ||
+              prompt ||
               (typeof attachment.prompt === "string" && attachment.prompt) ||
               null,
             discoveryPhrase,
-            createdAt: post.posted_at ?? post.updated_at ?? null,
-            postedAt: post.posted_at ?? null,
+            createdAt,
+            postedAt,
             durationSeconds,
             fileSizeBytes,
             width: attachment.width ?? null,
@@ -5540,9 +8448,9 @@ function injectedFetchSource(config) {
             attachmentIndex,
             attachmentCount: attachments.length,
             metadataEntries: compactMetadataEntries([
-              { label: "Source", value: sourceLabel },
+              { label: "Source", value: itemSourceLabel },
               { label: "Source Type", value: "post" },
-              { label: "Post ID", value: post.id },
+              { label: "Post ID", value: postId },
               { label: "Attachment ID", value: attachment.id },
               { label: "Generation ID", value: attachment.generation_id },
               { label: "Generation Type", value: attachment.generation_type },
@@ -5570,11 +8478,11 @@ function injectedFetchSource(config) {
               { label: "Can Create Cameo", value: pickFirstBoolean([attachment.can_create_character]) },
               {
                 label: "Creator",
-                value: getCreatorDisplayName(row) || getCreatorDisplayName(post),
+                value: creatorDisplayName,
               },
               {
                 label: "Creator Username",
-                value: getCreatorUsername(row) || getCreatorUsername(post),
+                value: creatorUsername,
               },
               {
                 label: "Share Setting",
@@ -5587,7 +8495,7 @@ function injectedFetchSource(config) {
               { label: "Thumbnail URL", value: getThumbnailUrl(attachment) || getThumbnailUrl(post), type: "link" },
               {
                 label: "Creator Profile Image",
-                value: getCreatorProfilePictureUrl(row) || getCreatorProfilePictureUrl(post),
+                value: creatorProfilePictureUrl,
                 type: "link",
               },
               { label: "SRT URL", value: post.srt_url, type: "link" },
@@ -5601,8 +8509,9 @@ function injectedFetchSource(config) {
         ids: [...new Set(ids)],
         items,
         rowCount: rows.length,
-        nextCursor: typeof payload.cursor === "string" && payload.cursor ? payload.cursor : null,
+        nextCursor: getNextCursorForRows(payload, rows, config),
         partialWarning: "",
+        unresolvedPosts,
       };
     }
 
@@ -5657,7 +8566,7 @@ function injectedFetchSource(config) {
       return {
         accounts,
         rowCount: rows.length,
-        nextCursor: typeof payload.cursor === "string" && payload.cursor ? payload.cursor : null,
+        nextCursor: getNextCursorFromPayload(payload),
         partialWarning: "",
       };
     }
@@ -5802,6 +8711,7 @@ function injectedFetchSource(config) {
         items.push({
           id,
           sourcePage,
+          sourceLabel,
           sourceType: "draft",
           detailUrl,
           downloadUrl,
@@ -5869,15 +8779,7 @@ function injectedFetchSource(config) {
         ids: [...new Set(ids)],
         items,
         rowCount: rows.length,
-        nextCursor:
-          pickFirstString([
-            payload && payload.cursor,
-            payload && payload.next_cursor,
-            payload && payload.nextCursor,
-            payload && payload.pagination && payload.pagination.cursor,
-            payload && payload.pagination && payload.pagination.next_cursor,
-            payload && payload.pagination && payload.pagination.nextCursor,
-          ]) || null,
+        nextCursor: getNextCursorFromPayload(payload),
         partialWarning: "",
       };
     }
@@ -5979,6 +8881,164 @@ function injectedFetchSource(config) {
         }
         const payload = await fetchJson(url.toString());
         return normalizeLikesResponse(payload);
+      }
+
+      if (source === "creatorProfileLookup") {
+        const snapshotProfile = await waitForCreatorProfileSnapshot();
+        let profile = snapshotProfile;
+
+        const lookupUsername =
+          (snapshotProfile && normalizeCreatorUsername(snapshotProfile.username)) ||
+          (typeof options.routeUrl === "string" ? getCreatorUsernameFromUrl(options.routeUrl) : "");
+
+        if ((!snapshotProfile || !isCanonicalCreatorUserId(snapshotProfile.userId)) && lookupUsername) {
+          try {
+            const resolvedProfile = await fetchCreatorProfileByUsername(lookupUsername);
+            if (resolvedProfile) {
+              profile = {
+                ...(snapshotProfile && typeof snapshotProfile === "object" ? snapshotProfile : {}),
+                ...resolvedProfile,
+                profileId:
+                  resolvedProfile.profileId ||
+                  (snapshotProfile && snapshotProfile.profileId) ||
+                  lookupUsername,
+              };
+            }
+          } catch (_error) {
+            profile = snapshotProfile;
+          }
+        }
+
+        if (!profile) {
+          throw new Error("Could not read a creator profile from that Sora page.");
+        }
+
+        return {
+          profile,
+        };
+      }
+
+      if (source === "creatorPublished") {
+        const creatorId = await deriveProfileUserId(options);
+        const limit = Number(options.limit) || 100;
+        const candidateUrls = [];
+        const listingCandidates = ["posts", "profile", "public", "published"];
+
+        for (const listingName of listingCandidates) {
+          const url = new URL(
+            `/backend/project_y/profile/${encodeURIComponent(creatorId)}/post_listing/${listingName}`,
+            window.location.origin,
+          );
+          url.searchParams.set("limit", String(limit));
+          if (typeof options.cursor === "string" && options.cursor) {
+            url.searchParams.set("cursor", options.cursor);
+          }
+          candidateUrls.push(url.toString());
+        }
+
+        const feedUrl = new URL(
+          `/backend/project_y/profile_feed/${encodeURIComponent(creatorId)}`,
+          window.location.origin,
+        );
+        feedUrl.searchParams.set("limit", String(limit));
+        feedUrl.searchParams.set("cut", "nf2");
+        if (typeof options.cursor === "string" && options.cursor) {
+          feedUrl.searchParams.set("cursor", options.cursor);
+        }
+        candidateUrls.push(feedUrl.toString());
+
+        const payload = await fetchFirstSuccessfulJson(candidateUrls);
+        const normalized = normalizePostListingResponse(payload, {
+          requireOwner: false,
+          separateCreatorBuckets: true,
+          collectUnresolvedPosts: true,
+          cursorKind: "sv2_created_at",
+          requestCursor: typeof options.cursor === "string" ? options.cursor : "",
+          creatorUserId:
+            typeof options.creatorUserId === "string" ? options.creatorUserId : "",
+          creatorUsername:
+            typeof options.creatorUsername === "string" ? options.creatorUsername : "",
+        });
+        if (Array.isArray(normalized.unresolvedPosts) && normalized.unresolvedPosts.length) {
+          const recoveredItems = await resolveMissingPostItemsFromDetails(normalized.unresolvedPosts);
+          if (recoveredItems.length) {
+            const recoveredKeys = new Set(
+              normalized.items.map((item) =>
+                `${item.id}:${item.downloadUrl || item.detailUrl || item.attachmentIndex}`,
+              ),
+            );
+            for (const item of recoveredItems) {
+              const itemKey = `${item.id}:${item.downloadUrl || item.detailUrl || item.attachmentIndex}`;
+              if (recoveredKeys.has(itemKey)) {
+                continue;
+              }
+              recoveredKeys.add(itemKey);
+              normalized.items.push(item);
+            }
+            normalized.ids = [...new Set([...normalized.ids, ...recoveredItems.map((item) => item.id)])];
+          }
+        }
+        delete normalized.unresolvedPosts;
+        return normalized;
+      }
+
+      if (source === "creatorCameos") {
+        const creatorId = await deriveProfileUserId(options);
+        const limit = Number(options.limit) || 100;
+        const url = new URL(
+          `/backend/project_y/profile_feed/${encodeURIComponent(creatorId)}`,
+          window.location.origin,
+        );
+        url.searchParams.set("limit", String(limit));
+        url.searchParams.set("cut", "appearances");
+        if (typeof options.cursor === "string" && options.cursor) {
+          url.searchParams.set("cursor", options.cursor);
+        }
+        const payload = await fetchJson(url.toString());
+        const normalized = normalizePostListingResponse(payload, {
+          sourcePage: "creatorCameos",
+          sourceLabel: "Creator Cast In",
+          requireOwner: false,
+          collectUnresolvedPosts: true,
+          cursorKind: "sv2_created_at",
+          requestCursor: typeof options.cursor === "string" ? options.cursor : "",
+        });
+        if (Array.isArray(normalized.unresolvedPosts) && normalized.unresolvedPosts.length) {
+          const recoveredItems = await resolveMissingPostItemsFromDetails(normalized.unresolvedPosts);
+          if (recoveredItems.length) {
+            const recoveredKeys = new Set(
+              normalized.items.map((item) =>
+                `${item.id}:${item.downloadUrl || item.detailUrl || item.attachmentIndex}`,
+              ),
+            );
+            for (const item of recoveredItems) {
+              const itemKey = `${item.id}:${item.downloadUrl || item.detailUrl || item.attachmentIndex}`;
+              if (recoveredKeys.has(itemKey)) {
+                continue;
+              }
+              recoveredKeys.add(itemKey);
+              normalized.items.push(item);
+            }
+            normalized.ids = [...new Set([...normalized.ids, ...recoveredItems.map((item) => item.id)])];
+          }
+        }
+        delete normalized.unresolvedPosts;
+        return normalized;
+      }
+
+      if (source === "creatorCharacters") {
+        const creatorId = await deriveProfileUserId(options);
+        const limit = Number(options.limit) || 100;
+        const url = new URL(
+          `/backend/project_y/profile/${encodeURIComponent(creatorId)}/characters`,
+          window.location.origin,
+        );
+        url.searchParams.set("limit", String(limit));
+        if (typeof options.cursor === "string" && options.cursor) {
+          url.searchParams.set("cursor", options.cursor);
+        }
+        const payload = await fetchJson(url.toString());
+        return normalizeCharacterAccountsIndexResponse(payload);
       }
 
       if (source === "characters") {

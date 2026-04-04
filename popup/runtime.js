@@ -138,6 +138,54 @@ export async function saveCharacterSelection(selectedCharacterAccountIds) {
 }
 
 /**
+ * Persists the selected saved creators used by the Creators source.
+ *
+ * @param {string[]} selectedCreatorProfileIds
+ * @returns {Promise<object>}
+ */
+export async function saveCreatorSelection(selectedCreatorProfileIds) {
+  return sendPopupMessage(
+    {
+      type: "SET_CREATOR_SELECTION",
+      selectedCreatorProfileIds,
+    },
+    "Could not save the creator selection.",
+  );
+}
+
+/**
+ * Adds one or more saved creators from pasted Sora usernames or profile URLs.
+ *
+ * @param {string[]} profileUrls
+ * @returns {Promise<object>}
+ */
+export async function addCreatorProfiles(profileUrls) {
+  return sendPopupMessage(
+    {
+      type: "ADD_CREATOR_PROFILES",
+      profileUrls,
+    },
+    "Could not add the creator profiles.",
+  );
+}
+
+/**
+ * Removes one saved creator from the local list.
+ *
+ * @param {string} creatorProfileId
+ * @returns {Promise<object>}
+ */
+export async function removeCreatorProfile(creatorProfileId) {
+  return sendPopupMessage(
+    {
+      type: "REMOVE_CREATOR_PROFILE",
+      creatorProfileId,
+    },
+    "Could not remove the creator profile.",
+  );
+}
+
+/**
  * Persists a custom title override for a single item.
  *
  * @param {string} itemKey
@@ -228,5 +276,17 @@ export async function requestAbortDownloads() {
   return sendPopupMessage(
     { type: "ABORT_DOWNLOADS" },
     "Could not cancel the active download.",
+  );
+}
+
+/**
+ * Requests a best-effort repair pass for saved creator profile metadata.
+ *
+ * @returns {Promise<object>}
+ */
+export async function requestRefreshCreatorProfiles() {
+  return sendPopupMessage(
+    { type: "REFRESH_CREATOR_PROFILES" },
+    "Could not refresh the saved creator profiles.",
   );
 }

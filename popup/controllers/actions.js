@@ -19,13 +19,13 @@ import { getItemCheckboxesWithOptions, getSelectedKeysFromDom } from "../ui/sele
 import { getSelectedSourceValues } from "../utils/settings.js";
 import { refreshStatus } from "./polling.js";
 import {
-  clearCharacterAccountsSelection,
+  clearVisibleSourceScopes,
   closeAllSourceMenus,
-  selectAllCharacterAccounts,
+  selectAllVisibleSourceScopes,
 } from "./source-menus.js";
 import { updateSelectionFromDom } from "./selection-sync.js";
 import { flushPendingTitleSaves } from "./title-edits.js";
-import { isCharacterSelectionScreenVisible } from "../ui/character-selection.js";
+import { isSourceSelectionScreenVisible } from "../ui/character-selection.js";
 
 /**
  * Handles the main fetch/reset form submission.
@@ -39,6 +39,11 @@ export async function handleRunFormSubmit(event) {
   const sources = getSelectedSourceValues(dom.sourceSelectInputs);
 
   closeAllSourceMenus();
+
+  if (!isResetMode && sources.length === 0) {
+    showNotice(dom.errorBox, "Select at least one source to fetch.");
+    return;
+  }
 
   setControlsDisabled(true);
   hideNotice(dom.errorBox);
@@ -180,8 +185,8 @@ export async function handleFetchProgressActionClick() {
  * Selects every visible, enabled item.
  */
 export async function handleSelectAllClick() {
-  if (isCharacterSelectionScreenVisible()) {
-    await selectAllCharacterAccounts();
+  if (isSourceSelectionScreenVisible()) {
+    await selectAllVisibleSourceScopes();
     return;
   }
 
@@ -197,8 +202,8 @@ export async function handleSelectAllClick() {
  * Clears every visible selection.
  */
 export async function handleClearSelectionClick() {
-  if (isCharacterSelectionScreenVisible()) {
-    await clearCharacterAccountsSelection();
+  if (isSourceSelectionScreenVisible()) {
+    await clearVisibleSourceScopes();
     return;
   }
 

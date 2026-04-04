@@ -46,6 +46,11 @@ export function getItemSearchText(item, titleOverrides) {
     item && item.description,
     item && item.caption,
     item && item.discoveryPhrase,
+    item && item.creatorProfileDisplayName,
+    item && item.creatorProfileUsername,
+    item && item.characterAccountDisplayName,
+    item && item.characterAccountUsername,
+    item && item.sourceLabel,
   ]
     .filter(Boolean)
     .join(" ");

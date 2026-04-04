@@ -83,16 +83,16 @@
                         aria-expanded="false"
                         aria-controls="source-select-menu"
                       >
-                        <span id="source-select-label">Published + Drafts</span>
+                        <span id="source-select-label">No sources selected</span>
                         <span class="multi-select-caret" aria-hidden="true">▾</span>
                       </button>
                       <div id="source-select-menu" class="multi-select-menu hidden" role="group" aria-label="Sources">
                         <label class="multi-select-option">
-                          <input type="checkbox" value="profile" data-source-group="overview" checked />
+                          <input type="checkbox" value="profile" data-source-group="overview" />
                           <span>Published</span>
                         </label>
                         <label class="multi-select-option">
-                          <input type="checkbox" value="drafts" data-source-group="overview" checked />
+                          <input type="checkbox" value="drafts" data-source-group="overview" />
                           <span>Drafts</span>
                         </label>
                         <label class="multi-select-option">
@@ -106,6 +106,10 @@
                         <label class="multi-select-option">
                           <input type="checkbox" value="characterAccounts" data-source-group="overview" />
                           <span>Characters</span>
+                        </label>
+                        <label class="multi-select-option">
+                          <input type="checkbox" value="creators" data-source-group="overview" />
+                          <span>Creators</span>
                         </label>
                       </div>
                     </div>
@@ -157,6 +161,12 @@
                 <div class="picker-copy">
                   <span id="picker-panel-label" class="label">Search Results</span>
                   <p id="selection-summary" class="picker-summary">Content Violation?</p>
+                  <div
+                    id="creator-results-tabs"
+                    class="creator-results-tabs hidden"
+                    role="tablist"
+                    aria-label="Creator content types"
+                  ></div>
                 </div>
                 <div class="picker-header-actions">
                   <button id="select-all-button" type="button" class="ghost button-small hidden">
@@ -248,7 +258,7 @@
                     aria-expanded="false"
                     aria-controls="default-source-menu"
                   >
-                    <span id="default-source-label">Published + Drafts</span>
+                    <span id="default-source-label">No sources selected</span>
                     <span class="multi-select-caret" aria-hidden="true">▾</span>
                   </button>
                   <div
@@ -258,11 +268,11 @@
                     aria-label="Default sources"
                   >
                     <label class="multi-select-option">
-                      <input type="checkbox" value="profile" data-source-group="settings" checked />
+                      <input type="checkbox" value="profile" data-source-group="settings" />
                       <span>Published</span>
                     </label>
                     <label class="multi-select-option">
-                      <input type="checkbox" value="drafts" data-source-group="settings" checked />
+                      <input type="checkbox" value="drafts" data-source-group="settings" />
                       <span>Drafts</span>
                     </label>
                     <label class="multi-select-option">
@@ -276,6 +286,10 @@
                     <label class="multi-select-option">
                       <input type="checkbox" value="characterAccounts" data-source-group="settings" />
                       <span>Characters</span>
+                    </label>
+                    <label class="multi-select-option">
+                      <input type="checkbox" value="creators" data-source-group="settings" />
+                      <span>Creators</span>
                     </label>
                   </div>
                 </div>
@@ -406,6 +420,58 @@
         </section>
       </section>
       </main>
+
+      <dialog id="creator-dialog" class="creator-dialog" aria-labelledby="creator-dialog-title">
+        <form id="creator-dialog-form" class="creator-dialog-form" method="dialog">
+          <div class="creator-dialog-head">
+            <span class="label">Saved Creators</span>
+            <h2 id="creator-dialog-title">Add Creator</h2>
+            <p class="creator-dialog-copy">
+              Paste one or more Sora creator usernames or profile links. You can add a single creator or batch import several entries at once.
+            </p>
+          </div>
+
+          <label class="creator-dialog-field" for="creator-dialog-input">
+            <span class="settings-label">Creator username(s) or URL(s)</span>
+            <textarea
+              id="creator-dialog-input"
+              class="creator-dialog-input"
+              rows="6"
+              spellcheck="false"
+              autocomplete="off"
+              autocapitalize="off"
+              placeholder="binaryrot&#10;https://sora.chatgpt.com/profile/notbobbylee&#10;@anothercreator"
+            ></textarea>
+          </label>
+
+          <p id="creator-dialog-error" class="notice error hidden" role="alert"></p>
+
+          <div class="creator-dialog-actions">
+            <button id="creator-dialog-cancel" type="button" class="secondary">Cancel</button>
+            <button id="creator-dialog-submit" type="submit" class="primary-cta">Add Creator</button>
+          </div>
+        </form>
+      </dialog>
+
+      <dialog id="creator-details-dialog" class="creator-details-dialog" aria-labelledby="creator-details-title">
+        <div class="creator-details-panel">
+          <div class="creator-details-head">
+            <div class="creator-details-copy">
+              <span class="label">Creator Profile</span>
+              <h2 id="creator-details-title">Creator snapshot</h2>
+              <p id="creator-details-summary" class="creator-details-summary">
+                A polished snapshot of the saved public creator profile.
+              </p>
+            </div>
+            <button id="creator-details-close" type="button" class="secondary">
+              Close
+            </button>
+          </div>
+
+          <section id="creator-details-profile" class="creator-details-profile" aria-label="Creator profile"></section>
+          <div id="creator-details-stats" class="creator-details-stats"></div>
+        </div>
+      </dialog>
 
       <div id="download-overlay" class="download-overlay hidden" aria-hidden="true">
         <div class="download-overlay-panel">
