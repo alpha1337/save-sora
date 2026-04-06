@@ -250,42 +250,6 @@
                 </div>
               </div>
 
-              <div id="fetch-progress-panel" class="fetch-progress-panel hidden" aria-live="polite">
-                <div class="fetch-progress-head">
-                  <div class="fetch-progress-copy">
-                    <p id="fetch-progress-stage" class="fetch-progress-stage">Opening Sora...</p>
-                    <p id="fetch-progress-detail" class="fetch-progress-detail">
-                      Preparing a background Sora tab...
-                    </p>
-                  </div>
-                  <span id="fetch-progress-percent" class="fetch-progress-percent">0%</span>
-                </div>
-                <div class="fetch-progress-bar" aria-hidden="true">
-                  <span id="fetch-progress-fill" class="fetch-progress-fill"></span>
-                </div>
-                <div class="fetch-progress-meta">
-                  <span id="fetch-progress-source" class="fetch-progress-pill">Source 1 of 1</span>
-                  <span id="fetch-progress-count" class="fetch-progress-pill">0 found</span>
-                  <span id="fetch-progress-eta" class="fetch-progress-pill">Estimating time left...</span>
-                </div>
-              </div>
-              <div id="fetch-progress-actions" class="fetch-progress-actions hidden">
-                <button
-                  id="fetch-progress-pause-action"
-                  type="button"
-                  class="ghost button-small fetch-progress-action"
-                >
-                  Pause Fetch
-                </button>
-                <button
-                  id="fetch-progress-action"
-                  type="button"
-                  class="ghost button-small fetch-progress-action"
-                >
-                  Cancel and Start Over
-                </button>
-              </div>
-
               <div id="picker-scroll-region" class="picker-scroll-region">
                 <div id="character-selection-grid" class="character-selection-grid hidden" aria-live="polite"></div>
                 <div id="empty-state" class="empty-state" aria-hidden="true">
@@ -297,6 +261,62 @@
                   <p id="empty-state-text" class="empty-state-text hidden"></p>
                 </div>
                 <div id="items-list" class="item-list hidden" aria-live="polite"></div>
+              </div>
+            </section>
+
+            <section id="fetch-progress-panel" class="fetch-progress-panel hidden" aria-live="polite">
+              <div class="fetch-progress-head">
+                <div class="fetch-progress-copy">
+                  <p id="fetch-progress-stage" class="fetch-progress-stage">Opening Sora...</p>
+                </div>
+                <div class="fetch-progress-head-actions">
+                  <span id="fetch-progress-percent" class="fetch-progress-percent">0%</span>
+                  <button
+                    id="fetch-progress-toggle"
+                    type="button"
+                    class="ghost button-small fetch-progress-toggle"
+                    aria-expanded="false"
+                    aria-controls="fetch-progress-body"
+                  >
+                    View Queue
+                  </button>
+                </div>
+              </div>
+              <div class="fetch-progress-bar" aria-hidden="true">
+                <span id="fetch-progress-fill" class="fetch-progress-fill"></span>
+              </div>
+              <div class="fetch-progress-meta fetch-progress-meta-collapsed">
+                <span id="fetch-progress-count" class="fetch-progress-pill">0 found</span>
+                <span id="fetch-progress-eta" class="fetch-progress-pill">Estimating time left...</span>
+              </div>
+              <div id="fetch-progress-body" class="fetch-progress-body hidden">
+                <p id="fetch-progress-detail" class="fetch-progress-detail">
+                  Preparing a background Sora tab...
+                </p>
+                <div class="fetch-progress-meta">
+                  <span id="fetch-progress-source" class="fetch-progress-pill">Source 1 of 1</span>
+                  <span class="fetch-progress-pill">Background fetch active</span>
+                </div>
+                <section class="fetch-progress-queue-shell" aria-labelledby="fetch-progress-queue-label">
+                  <span id="fetch-progress-queue-label" class="label">Current Queue</span>
+                  <div id="fetch-progress-queue" class="fetch-progress-queue" role="list"></div>
+                </section>
+                <div id="fetch-progress-actions" class="fetch-progress-actions">
+                  <button
+                    id="fetch-progress-pause-action"
+                    type="button"
+                    class="ghost button-small fetch-progress-action"
+                  >
+                    Pause Fetch
+                  </button>
+                  <button
+                    id="fetch-progress-action"
+                    type="button"
+                    class="ghost button-small fetch-progress-action"
+                  >
+                    Cancel Fetch
+                  </button>
+                </div>
               </div>
             </section>
           </section>

@@ -1,8 +1,9 @@
 import { dom } from "../../dom.js";
+import { popupState } from "../../state.js";
 
 /**
- * Renders the active fetch-progress card shown while the background worker is
- * scanning and processing Sora results.
+ * Renders the fixed fetch-status drawer shown while the background worker is
+ * scanning and streaming Sora results into the popup.
  *
  * @param {object} state
  */
@@ -14,11 +15,14 @@ export function syncFetchProgressPanel(state) {
     !(dom.fetchProgressDetail instanceof HTMLElement) ||
     !(dom.fetchProgressPercent instanceof HTMLElement) ||
     !(dom.fetchProgressFill instanceof HTMLElement) ||
+    !(dom.fetchProgressToggle instanceof HTMLButtonElement) ||
+    !(dom.fetchProgressBody instanceof HTMLElement) ||
     !(dom.fetchProgressPauseAction instanceof HTMLButtonElement) ||
     !(dom.fetchProgressAction instanceof HTMLButtonElement) ||
     !(dom.fetchProgressSource instanceof HTMLElement) ||
     !(dom.fetchProgressCount instanceof HTMLElement) ||
-    !(dom.fetchProgressEta instanceof HTMLElement)
+    !(dom.fetchProgressEta instanceof HTMLElement) ||
+    !(dom.fetchProgressQueue instanceof HTMLElement)
   ) {
     return;
   }
@@ -32,13 +36,24 @@ export function syncFetchProgressPanel(state) {
   const isVisible = phase === "fetching" || isPaused;
 
   dom.fetchProgressPanel.classList.toggle("hidden", !isVisible);
-  dom.fetchProgressActions.classList.toggle("hidden", !isVisible);
+  dom.fetchProgressPanel.classList.toggle("is-expanded", isVisible && popupState.fetchDrawerExpanded);
+  dom.fetchProgressBody.classList.toggle("hidden", !isVisible || !popupState.fetchDrawerExpanded);
+  dom.fetchProgressActions.classList.toggle("hidden", !isVisible || !popupState.fetchDrawerExpanded);
+  dom.fetchProgressToggle.setAttribute(
+    "aria-expanded",
+    isVisible && popupState.fetchDrawerExpanded ? "true" : "false",
+  );
+  dom.fetchProgressToggle.textContent =
+    isVisible && popupState.fetchDrawerExpanded ? "Hide Queue" : "View Queue";
+
   if (!isVisible) {
     dom.fetchProgressFill.style.width = "0%";
     dom.fetchProgressPauseAction.disabled = false;
     dom.fetchProgressPauseAction.textContent = "Pause Fetch";
     dom.fetchProgressAction.disabled = false;
-    dom.fetchProgressAction.textContent = "Cancel and Start Over";
+    dom.fetchProgressAction.textContent = "Cancel Fetch";
+    dom.fetchProgressQueue.replaceChildren();
+    setFooterHeight(0);
     return;
   }
 
@@ -58,6 +73,7 @@ export function syncFetchProgressPanel(state) {
     progress && typeof progress.currentSourceLabel === "string" && progress.currentSourceLabel
       ? progress.currentSourceLabel
       : "videos";
+  const queueLabels = getQueueLabels(progress, currentSourceLabel);
 
   dom.fetchProgressStage.textContent =
     (progress && progress.stageLabel) || "Fetching videos";
@@ -81,7 +97,67 @@ export function syncFetchProgressPanel(state) {
       ? "Stopping..."
       : progress && progress.stage === "pausing"
         ? "Pausing..."
-        : "Cancel and Start Over";
+        : "Cancel Fetch";
+
+  renderQueue(queueLabels, currentSourceIndex);
+  setFooterHeight(dom.fetchProgressPanel.offsetHeight || 0);
+}
+
+function renderQueue(queueLabels, currentSourceIndex) {
+  dom.fetchProgressQueue.replaceChildren();
+
+  queueLabels.forEach((label, index) => {
+    const queueItem = document.createElement("div");
+    queueItem.className = "fetch-progress-queue-item";
+
+    if (index + 1 < currentSourceIndex) {
+      queueItem.classList.add("is-complete");
+    } else if (index + 1 === currentSourceIndex) {
+      queueItem.classList.add("is-current");
+    } else {
+      queueItem.classList.add("is-pending");
+    }
+
+    const title = document.createElement("span");
+    title.className = "fetch-progress-queue-title";
+    title.textContent = toTitleCase(label);
+
+    const status = document.createElement("span");
+    status.className = "fetch-progress-queue-status";
+    status.textContent =
+      index + 1 < currentSourceIndex
+        ? "Completed"
+        : index + 1 === currentSourceIndex
+          ? "In Progress"
+          : "Queued";
+
+    queueItem.append(title, status);
+    dom.fetchProgressQueue.append(queueItem);
+  });
+}
+
+function getQueueLabels(progress, currentSourceLabel) {
+  const queueLabels =
+    progress && Array.isArray(progress.queueLabels)
+      ? progress.queueLabels
+          .map((value) => (typeof value === "string" ? value.trim() : ""))
+          .filter(Boolean)
+      : [];
+
+  if (queueLabels.length > 0) {
+    return queueLabels;
+  }
+
+  if (typeof currentSourceLabel === "string" && currentSourceLabel) {
+    return [currentSourceLabel];
+  }
+
+  return ["videos"];
+}
+
+function setFooterHeight(height) {
+  const nextHeight = Number.isFinite(Number(height)) && Number(height) > 0 ? `${Math.ceil(Number(height) + 10)}px` : "0px";
+  document.documentElement.style.setProperty("--footer-height", nextHeight);
 }
 
 function clampProgressRatio(value) {

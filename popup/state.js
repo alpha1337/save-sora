@@ -9,6 +9,8 @@ export const popupState = {
   pollTimer: null,
   settingsSaveTimer: null,
   fetchStatusTimer: null,
+  fetchDrawerExpanded: false,
+  fetchDrawerUserToggled: false,
   activeTab: "overview",
   activeFetchStatusMessage: "",
   lastRenderedSignature: "",
@@ -68,6 +70,7 @@ export const popupState = {
     disableInputs: false,
     phase: "idle",
   },
+  latestRuntimeState: null,
   browseState: {
     query: "",
     sort: "newest",

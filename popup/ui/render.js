@@ -55,6 +55,10 @@ export function renderCurrentItems() {
  * @param {object} state
  */
 export function renderState(state) {
+  const previousPhase = popupState.latestRenderState.phase;
+  const previousItemCount = Array.isArray(popupState.latestRenderState.items)
+    ? popupState.latestRenderState.items.length
+    : 0;
   const phase = state && state.phase ? state.phase : "idle";
   const fetchedCount = Number(state && state.fetchedCount) || 0;
   const items = Array.isArray(state && state.items) ? state.items : [];
@@ -140,8 +144,26 @@ export function renderState(state) {
   const isFetching = phase === "fetching";
   const hasResults = items.length > 0;
 
+  if (phase === "fetch-paused" && previousPhase !== "fetch-paused" && !popupState.fetchDrawerUserToggled) {
+    popupState.fetchDrawerExpanded = true;
+  } else if (phase === "fetching" && previousPhase !== "fetching") {
+    popupState.fetchDrawerExpanded = items.length === 0;
+    popupState.fetchDrawerUserToggled = false;
+  } else if (
+    phase === "fetching" &&
+    !popupState.fetchDrawerUserToggled &&
+    previousItemCount === 0 &&
+    items.length > 0
+  ) {
+    popupState.fetchDrawerExpanded = false;
+  } else if (phase !== "fetching" && phase !== "fetch-paused") {
+    popupState.fetchDrawerExpanded = false;
+    popupState.fetchDrawerUserToggled = false;
+  }
+
   popupState.latestBusy = isBusy;
   popupState.latestPaused = isPaused;
+  popupState.latestRuntimeState = state && typeof state === "object" ? state : null;
   popupState.characterAccounts = Array.isArray(state && state.characterAccounts)
     ? state.characterAccounts
     : [];

@@ -19,6 +19,7 @@ import {
 } from "../utils/export.js";
 import { hideNotice, setControlsDisabled, showNotice } from "../ui/layout.js";
 import { updateDownloadOverlay } from "../ui/overlay.js";
+import { syncFetchProgressPanel } from "../ui/render/fetch-progress.js";
 import { getItemCheckboxesWithOptions, getSelectedKeysFromDom } from "../ui/selection.js";
 import { getSelectedSourceValues } from "../utils/settings.js";
 import { refreshStatus } from "./polling.js";
@@ -228,6 +229,20 @@ export async function handleFetchProgressActionClick() {
   } finally {
     await refreshStatus();
   }
+}
+
+/**
+ * Expands or collapses the fixed fetch-status drawer without interrupting the run.
+ */
+export function handleFetchProgressToggleClick() {
+  popupState.fetchDrawerExpanded = !popupState.fetchDrawerExpanded;
+  popupState.fetchDrawerUserToggled = true;
+  const phase = popupState.latestRenderState.phase;
+  const isVisible = phase === "fetching" || phase === "fetch-paused";
+  if (!isVisible) {
+    popupState.fetchDrawerExpanded = false;
+  }
+  syncFetchProgressPanel(popupState.latestRuntimeState || { phase });
 }
 
 /**

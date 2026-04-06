@@ -3,6 +3,7 @@ import { setActiveTab, updateBackToTopVisibility } from "../ui/layout.js";
 import {
   handleFetchProgressActionClick,
   handleFetchProgressPauseActionClick,
+  handleFetchProgressToggleClick,
   handleClearSelectionClick,
   handleDownloadButtonClick,
   handleDownloadOverlayCancel,
@@ -72,6 +73,7 @@ export function initializeEventHandlers() {
   dom.exportButton?.addEventListener("click", handleExportButtonClick);
   dom.exportMenuButton?.addEventListener("click", handleExportMenuButtonClick);
   dom.exportMenu?.addEventListener("click", handleExportMenuClick);
+  dom.fetchProgressToggle?.addEventListener("click", handleFetchProgressToggleClick);
   dom.fetchProgressPauseAction?.addEventListener("click", handleFetchProgressPauseActionClick);
   dom.fetchProgressAction?.addEventListener("click", handleFetchProgressActionClick);
   dom.downloadOverlayCancel?.addEventListener("click", handleDownloadOverlayCancel);

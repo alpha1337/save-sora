@@ -507,6 +507,7 @@ body[data-theme="light"] .tab-button.is-active {
   min-height: 446px;
   max-height: 446px;
   overflow: hidden;
+  padding-bottom: var(--footer-height);
 }
 
 .tab-panel.is-active {
@@ -1055,7 +1056,7 @@ body[data-theme="light"] .export-split-option:hover:not(:disabled) {
 .picker-scroll-region.is-scrollable {
   overflow-y: auto;
   overscroll-behavior: contain;
-  scroll-padding-bottom: 88px;
+  scroll-padding-bottom: 32px;
 }
 
 .picker-header {
@@ -1145,13 +1146,24 @@ body[data-theme="light"] .export-split-option:hover:not(:disabled) {
 }
 
 .fetch-progress-panel {
+  position: fixed;
+  right: 14px;
+  bottom: 14px;
+  left: 14px;
+  z-index: 48;
   display: grid;
   gap: 10px;
   padding: 12px;
   border: 1px solid rgba(131, 165, 152, 0.32);
   background:
-    linear-gradient(180deg, rgba(44, 58, 57, 0.96) 0%, rgba(34, 43, 45, 0.98) 100%);
-  box-shadow: inset 0 1px 0 rgba(251, 241, 199, 0.04);
+    linear-gradient(180deg, rgba(44, 58, 57, 0.98) 0%, rgba(34, 43, 45, 0.99) 100%);
+  box-shadow:
+    0 12px 30px rgba(0, 0, 0, 0.28),
+    inset 0 1px 0 rgba(251, 241, 199, 0.04);
+}
+
+.fetch-progress-panel.is-expanded {
+  gap: 12px;
 }
 
 .fetch-progress-head {
@@ -1165,6 +1177,13 @@ body[data-theme="light"] .export-split-option:hover:not(:disabled) {
   min-width: 0;
   display: grid;
   gap: 4px;
+}
+
+.fetch-progress-head-actions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
 }
 
 .fetch-progress-stage,
@@ -1185,12 +1204,20 @@ body[data-theme="light"] .export-split-option:hover:not(:disabled) {
   line-height: 1.4;
 }
 
+.fetch-progress-toggle {
+  min-height: 28px;
+  padding: 6px 10px;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
 .fetch-progress-percent {
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
-  min-height: 26px;
-  padding: 2px 10px;
+  min-height: 28px;
+  padding: 4px 10px;
   border: 1px solid rgba(131, 165, 152, 0.34);
   background: rgba(69, 133, 136, 0.12);
   color: var(--heading);
@@ -1202,7 +1229,7 @@ body[data-theme="light"] .export-split-option:hover:not(:disabled) {
 .fetch-progress-bar {
   position: relative;
   width: 100%;
-  height: 10px;
+  height: 8px;
   overflow: hidden;
   border: 1px solid rgba(131, 165, 152, 0.22);
   background: rgba(29, 32, 33, 0.72);
@@ -1216,6 +1243,11 @@ body[data-theme="light"] .export-split-option:hover:not(:disabled) {
     linear-gradient(90deg, rgba(69, 133, 136, 0.9) 0%, rgba(250, 189, 47, 0.92) 100%);
   box-shadow: 0 0 16px rgba(131, 165, 152, 0.18);
   transition: width 220ms ease;
+}
+
+.fetch-progress-body {
+  display: grid;
+  gap: 12px;
 }
 
 .fetch-progress-actions {
@@ -1235,6 +1267,10 @@ body[data-theme="light"] .export-split-option:hover:not(:disabled) {
   gap: 8px;
 }
 
+.fetch-progress-meta-collapsed {
+  justify-content: flex-start;
+}
+
 .fetch-progress-pill {
   display: inline-flex;
   align-items: center;
@@ -1248,6 +1284,58 @@ body[data-theme="light"] .export-split-option:hover:not(:disabled) {
   letter-spacing: 0.03em;
   text-transform: uppercase;
   white-space: nowrap;
+}
+
+.fetch-progress-queue-shell {
+  display: grid;
+  gap: 8px;
+}
+
+.fetch-progress-queue {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.fetch-progress-queue-item {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  background: rgba(29, 32, 33, 0.44);
+}
+
+.fetch-progress-queue-item.is-current {
+  border-color: rgba(131, 165, 152, 0.4);
+  background: rgba(69, 133, 136, 0.14);
+}
+
+.fetch-progress-queue-item.is-complete {
+  opacity: 0.8;
+}
+
+.fetch-progress-queue-item.is-pending {
+  opacity: 0.92;
+}
+
+.fetch-progress-queue-title,
+.fetch-progress-queue-status {
+  white-space: nowrap;
+}
+
+.fetch-progress-queue-title {
+  color: var(--heading);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.fetch-progress-queue-status {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .button-small {
@@ -1419,6 +1507,15 @@ body[data-theme="light"] .fetch-progress-bar {
 body[data-theme="light"] .fetch-progress-pill {
   background: rgba(255, 248, 226, 0.94);
   color: #2d261f;
+}
+
+body[data-theme="light"] .fetch-progress-queue-item {
+  background: rgba(255, 248, 226, 0.9);
+}
+
+body[data-theme="light"] .fetch-progress-queue-item.is-current {
+  border-color: rgba(7, 102, 120, 0.28);
+  background: rgba(7, 102, 120, 0.08);
 }
 
 .character-option-card {
