@@ -1,5 +1,4 @@
 import { dom } from "../dom.js";
-import { requestRefreshCreatorProfiles } from "../runtime.js";
 import { popupState } from "../state.js";
 import { formatCreatedAt, formatWholeNumber } from "../utils/format.js";
 import { getSelectedSourceValues } from "../utils/settings.js";
@@ -79,6 +78,8 @@ export function syncCreatorDetailsDialog() {
   if (!dom.creatorDetailsDialog.open) {
     dom.creatorDetailsDialog.showModal();
   }
+
+  queueMarqueeSync();
 
   updateAppScrollLock();
 }
@@ -191,7 +192,6 @@ function renderSelectionScreen() {
 
   setSourceSelectionSummary();
   syncSelectionActionButtons();
-  queueCreatorProfileRepair(sections);
   syncCreatorDetailsDialog();
 
   if (popupState.lastSelectionScreenSignature === renderSignature) {
@@ -283,15 +283,23 @@ function createSection(section, { showHeader = false } = {}) {
     element.append(header);
   }
 
-  const grid = document.createElement("div");
-  grid.className = "selection-option-grid";
-
   if (section.key === "creators") {
+    const grid = document.createElement("div");
+    grid.className = "selection-option-grid";
+
     for (const profile of section.items) {
       grid.append(createCreatorCard(profile));
     }
     grid.append(createAddCreatorCard());
-  } else if (section.items.length > 0) {
+
+    element.append(grid);
+    return element;
+  }
+
+  const grid = document.createElement("div");
+  grid.className = "selection-option-grid";
+
+  if (section.items.length > 0) {
     for (const account of section.items) {
       grid.append(createCharacterCard(account));
     }
@@ -372,20 +380,20 @@ function createCreatorCard(profile) {
   const card = document.createElement("article");
   card.className = "character-option-card creator-option-card";
 
-  const menuButton = document.createElement("button");
-  menuButton.type = "button";
-  menuButton.className = "selection-option-menu-button";
-  menuButton.dataset.creatorMenuId = profile.profileId;
-  menuButton.setAttribute("aria-label", `Open actions for ${profile.displayName}`);
-  menuButton.setAttribute("aria-haspopup", "menu");
-  menuButton.setAttribute("aria-expanded", "false");
-  menuButton.textContent = "⋮";
-
   const actionMenu = createCreatorActionMenu(profile);
+  const actionButton = document.createElement("button");
+  actionButton.type = "button";
+  actionButton.className = "selection-option-menu-button creator-option-settings-button";
+  actionButton.dataset.creatorMenuId = profile.profileId;
+  actionButton.setAttribute("aria-label", `Open settings for ${profile.displayName}`);
+  actionButton.setAttribute("aria-haspopup", "menu");
+  actionButton.setAttribute("aria-expanded", "false");
+  actionButton.innerHTML =
+    '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false"><path d="M4 6h16"></path><path d="M4 12h16"></path><path d="M4 18h16"></path><circle cx="9" cy="6" r="2"></circle><circle cx="15" cy="12" r="2"></circle><circle cx="11" cy="18" r="2"></circle></svg>';
 
   const button = document.createElement("button");
   button.type = "button";
-  button.className = "character-option-button creator-option-button";
+  button.className = "character-option-button";
   button.dataset.creatorProfileId = profile.profileId;
   button.setAttribute("aria-pressed", String(selected));
   if (selected) {
@@ -400,29 +408,9 @@ function createCreatorCard(profile) {
         : "Saved creator";
   const username = getCreatorCardSubtitle(profile);
 
-  const media = document.createElement("span");
-  media.className = "creator-option-media";
-
-  const avatarShell = document.createElement("span");
-  avatarShell.className = "creator-option-avatar-shell";
-  avatarShell.append(createAvatarNode(displayName, profile.profilePictureUrl, true));
-  media.append(avatarShell);
-
-  const meta = document.createElement("span");
-  meta.className = "creator-option-meta";
-
-  const title = document.createElement("strong");
-  title.className = "creator-option-display-name";
-  title.textContent = displayName;
-
-  const subtitle = document.createElement("span");
-  subtitle.className = "creator-option-handle";
-  subtitle.textContent = username;
-
-  meta.append(title, subtitle);
-  button.append(media, meta);
-
-  card.append(menuButton, actionMenu, button);
+  button.append(createAvatarNode(displayName, profile.profilePictureUrl));
+  button.append(createCopyBlock(displayName, username));
+  card.append(button, actionButton, actionMenu);
   return card;
 }
 
@@ -686,12 +674,41 @@ function normalizeCreatorProfiles(profiles) {
       continue;
     }
 
+    const profileData =
+      profile.profileData && typeof profile.profileData === "object"
+        ? profile.profileData
+        : null;
+    const characterUserId =
+      typeof profile.characterUserId === "string" && profile.characterUserId.startsWith("ch_")
+        ? profile.characterUserId
+        : typeof profileData?.user_id === "string" && profileData.user_id.startsWith("ch_")
+          ? profileData.user_id
+          : typeof profileData?.userId === "string" && profileData.userId.startsWith("ch_")
+            ? profileData.userId
+            : "";
+    const defaultPreferences = {
+      includeOfficialPosts: true,
+      includeCommunityPosts: true,
+    };
+    const hasCustomFetchPreferences = profile.hasCustomFetchPreferences === true;
+    const hasExplicitOfficialPreference = typeof profile.includeOfficialPosts === "boolean";
+    const hasExplicitCommunityPreference = typeof profile.includeCommunityPosts === "boolean";
+    const useLegacyPreferenceMigration =
+      !hasCustomFetchPreferences &&
+      hasExplicitOfficialPreference &&
+      hasExplicitCommunityPreference &&
+      ((profile.includeOfficialPosts === true && profile.includeCommunityPosts === false) ||
+        (profile.includeOfficialPosts === false && profile.includeCommunityPosts === true));
+
     normalized.push({
       profileId: profile.profileId,
       userId: typeof profile.userId === "string" ? profile.userId : "",
+      characterUserId,
       username: typeof profile.username === "string" ? profile.username : "",
       displayName:
-        typeof profile.displayName === "string" && profile.displayName
+        typeof profileData?.display_name === "string" && profileData.display_name
+          ? profileData.display_name
+          : typeof profile.displayName === "string" && profile.displayName
           ? profile.displayName
           : typeof profile.username === "string" && profile.username
             ? profile.username
@@ -712,13 +729,34 @@ function normalizeCreatorProfiles(profiles) {
         profile.profileData && typeof profile.profileData === "object"
           ? profile.profileData
           : null,
+      hasCustomFetchPreferences,
+      includeOfficialPosts:
+        useLegacyPreferenceMigration
+          ? defaultPreferences.includeOfficialPosts
+          : typeof profile.includeOfficialPosts === "boolean"
+          ? profile.includeOfficialPosts
+          : defaultPreferences.includeOfficialPosts,
+      includeCommunityPosts:
+        useLegacyPreferenceMigration
+          ? defaultPreferences.includeCommunityPosts
+          : typeof profile.includeCommunityPosts === "boolean"
+          ? profile.includeCommunityPosts
+          : defaultPreferences.includeCommunityPosts,
     });
   }
 
   return normalized;
 }
 
-function getCreatorProfileById(profileId) {
+function isCreatorCharacterProfile(profile) {
+  return Boolean(
+    profile &&
+      typeof profile.characterUserId === "string" &&
+      profile.characterUserId.startsWith("ch_"),
+  );
+}
+
+export function getCreatorProfileById(profileId) {
   if (typeof profileId !== "string" || !profileId) {
     return null;
   }
@@ -740,52 +778,6 @@ function getCreatorCardSubtitle(profile) {
   return "Saved creator";
 }
 
-function queueCreatorProfileRepair(sections) {
-  const creatorSection = Array.isArray(sections)
-    ? sections.find((section) => section && section.key === "creators")
-    : null;
-
-  if (!creatorSection || !Array.isArray(creatorSection.items) || !creatorSection.items.length) {
-    popupState.creatorProfileRepairKey = "";
-    popupState.creatorProfileRepairPending = false;
-    return;
-  }
-
-  const weakProfiles = creatorSection.items.filter((profile) =>
-    profile &&
-    typeof profile === "object" &&
-    profile.permalink &&
-    (!profile.profilePictureUrl || !profile.displayName || profile.displayName === profile.username),
-  );
-
-  if (!weakProfiles.length) {
-    popupState.creatorProfileRepairKey = "";
-    popupState.creatorProfileRepairPending = false;
-    return;
-  }
-
-  const repairKey = weakProfiles
-    .map((profile) => `${profile.profileId}:${profile.profilePictureUrl ? "1" : "0"}:${profile.displayName || ""}`)
-    .join("|");
-
-  if (
-    popupState.creatorProfileRepairPending ||
-    popupState.creatorProfileRepairKey === repairKey
-  ) {
-    return;
-  }
-
-  popupState.creatorProfileRepairKey = repairKey;
-  popupState.creatorProfileRepairPending = true;
-  void requestRefreshCreatorProfiles()
-    .catch(() => {
-      popupState.creatorProfileRepairKey = "";
-    })
-    .finally(() => {
-      popupState.creatorProfileRepairPending = false;
-    });
-}
-
 function buildSelectionScreenSignature(sections, activeTab = "") {
   return JSON.stringify(
     {
@@ -796,6 +788,7 @@ function buildSelectionScreenSignature(sections, activeTab = "") {
       items: (section && Array.isArray(section.items) ? section.items : []).map((item) => ({
         id: item && (item.profileId || item.userId) ? item.profileId || item.userId : "",
         userId: item && typeof item.userId === "string" ? item.userId : "",
+        characterUserId: item && typeof item.characterUserId === "string" ? item.characterUserId : "",
         username: item && typeof item.username === "string" ? item.username : "",
         displayName: item && typeof item.displayName === "string" ? item.displayName : "",
         profilePictureUrl:
@@ -852,6 +845,8 @@ function getSelectedCountForSection(sectionKey, items) {
 }
 
 function clearCreatorDetailsDialog() {
+  popupState.creatorDetailsHeroSignature = "";
+
   if (dom.creatorDetailsSummary instanceof HTMLElement) {
     dom.creatorDetailsSummary.textContent = "";
   }
@@ -862,6 +857,10 @@ function clearCreatorDetailsDialog() {
 
   if (dom.creatorDetailsStats instanceof HTMLElement) {
     dom.creatorDetailsStats.replaceChildren();
+  }
+
+  if (dom.creatorDetailsPreferences instanceof HTMLElement) {
+    dom.creatorDetailsPreferences.replaceChildren();
   }
 
   if (dom.creatorDetailsCode instanceof HTMLElement) {
@@ -876,71 +875,112 @@ function renderCreatorDetailsDialog(profile) {
       : null;
   const usernameValue =
     typeof profile.username === "string" && profile.username ? profile.username : "";
+  const displayNameValue =
+    typeof profileData?.display_name === "string" && profileData.display_name
+      ? profileData.display_name
+      : typeof profileData?.displayName === "string" && profileData.displayName
+        ? profileData.displayName
+        : typeof profile.displayName === "string" && profile.displayName
+          ? profile.displayName
+          : usernameValue || "Saved creator";
   const username = usernameValue ? `@${usernameValue}` : "Saved creator";
-  const updatedAt = formatDateValue(profileData && profileData.updated_at);
-  const accountAge = formatAccountAge(profileData && profileData.created_at);
-  const summaryParts = [accountAge, updatedAt ? `Last updated ${updatedAt}` : ""].filter(Boolean);
+  const joinedSoraSummary = formatJoinedSoraSummary(profileData && profileData.created_at);
+  const lastUpdatedSummary = formatLastUpdatedSummary(profileData && profileData.updated_at);
 
   if (dom.creatorDetailsDialog instanceof HTMLDialogElement) {
-    dom.creatorDetailsDialog.setAttribute("aria-label", `${username} profile`);
+    dom.creatorDetailsDialog.setAttribute("aria-label", `${displayNameValue} profile`);
   }
 
   if (dom.creatorDetailsTitle instanceof HTMLElement) {
-    dom.creatorDetailsTitle.textContent = username;
+    dom.creatorDetailsTitle.textContent = displayNameValue;
   }
 
   if (dom.creatorDetailsSummary instanceof HTMLElement) {
-    dom.creatorDetailsSummary.textContent =
-      summaryParts.join(" • ") || "Saved public creator profile snapshot";
+    dom.creatorDetailsSummary.textContent = "";
   }
 
   if (dom.creatorDetailsProfile instanceof HTMLElement) {
-    const fragment = document.createDocumentFragment();
-    const avatarShell = document.createElement("div");
-    avatarShell.className = "creator-details-avatar-shell";
-    avatarShell.append(createAvatarNode(usernameValue || "Creator", profile.profilePictureUrl));
+    const heroSignature = JSON.stringify({
+      profileId: profile.profileId,
+      displayNameValue,
+      usernameValue,
+      joinedSoraSummary,
+      lastUpdatedSummary,
+      profilePictureUrl: profile.profilePictureUrl || "",
+    });
 
-    const body = document.createElement("div");
-    body.className = "creator-details-profile-body";
+    if (popupState.creatorDetailsHeroSignature !== heroSignature) {
+      popupState.creatorDetailsHeroSignature = heroSignature;
 
-    const handle = document.createElement("p");
-    handle.className = "creator-details-handle";
-    handle.textContent = username;
+      const fragment = document.createDocumentFragment();
+      const avatarShell = document.createElement("div");
+      avatarShell.className = "creator-details-avatar-shell";
+      avatarShell.append(createAvatarNode(displayNameValue || "Creator", profile.profilePictureUrl));
 
-    const meta = document.createElement("div");
-    meta.className = "creator-details-meta";
+      const body = document.createElement("div");
+      body.className = "creator-details-profile-body";
 
-    for (const value of [accountAge, updatedAt ? `Updated ${updatedAt}` : ""]) {
-      if (!value) {
-        continue;
+      const displayName = createMarqueeLine(
+        "p",
+        "creator-details-display-name",
+        usernameValue ? username : displayNameValue,
+      );
+      const identitySummary = document.createElement("div");
+      identitySummary.className = "creator-details-identity-summary";
+
+      if (joinedSoraSummary) {
+        const joinedLine = document.createElement("p");
+        joinedLine.className = "creator-details-identity-line";
+        joinedLine.textContent = `${capitalizeSentence(joinedSoraSummary)}.`;
+        identitySummary.append(joinedLine);
       }
 
-      const chip = document.createElement("span");
-      chip.className = "creator-details-meta-chip";
-      chip.textContent = value;
-      meta.append(chip);
-    }
+      if (lastUpdatedSummary) {
+        const updateLine = document.createElement("p");
+        updateLine.className = "creator-details-identity-line";
+        updateLine.textContent = `Last update was ${lastUpdatedSummary}.`;
+        identitySummary.append(updateLine);
+      }
 
-    body.append(handle, meta);
-    fragment.append(avatarShell, body);
-    dom.creatorDetailsProfile.replaceChildren(fragment);
+      body.append(displayName);
+      if (identitySummary.childElementCount > 0) {
+        body.append(identitySummary);
+      }
+      fragment.append(avatarShell, body);
+      if (dom.creatorDetailsStats instanceof HTMLElement) {
+        fragment.append(dom.creatorDetailsStats);
+      }
+      dom.creatorDetailsProfile.replaceChildren(fragment);
+    }
   }
 
   if (dom.creatorDetailsStats instanceof HTMLElement) {
     const fragment = document.createDocumentFragment();
+    const postsValue = isCreatorCharacterProfile(profile)
+      ? pickFirstCountValue([
+        profileData && profileData.cameo_count,
+        profileData && profileData.cameoCount,
+        profileData && profileData.post_count,
+        profileData && profileData.postCount,
+      ])
+      : pickFirstCountValue([
+        profileData && profileData.post_count,
+        profileData && profileData.postCount,
+      ]);
     const stats = [
-      ["Posts", formatCountValue(profileData && profileData.post_count)],
-      ["Followers", formatCountValue(profileData && profileData.follower_count)],
-      ["Following", formatCountValue(profileData && profileData.following_count)],
-      ["Likes", formatCountValue(profileData && profileData.likes_received_count)],
-      ["Remixes", formatCountValue(profileData && profileData.remix_count)],
-      ["Cameos", formatCountValue(profileData && profileData.cameo_count)],
+      ["Posts", postsValue],
+      ["Cameos", pickFirstCountValue([profileData && profileData.cameo_count])],
+      ["Remixes", pickFirstCountValue([profileData && profileData.remix_count])],
+      ["Likes", pickFirstCountValue([profileData && profileData.likes_received_count])],
+      ["Followers", pickFirstCountValue([profileData && profileData.follower_count])],
+      ["Following", pickFirstCountValue([profileData && profileData.following_count])],
     ];
 
-    for (const [label, value] of stats) {
-      if (!value) {
+    for (const [label, rawValue] of stats) {
+      if (!Number.isFinite(rawValue) || rawValue <= 0) {
         continue;
       }
+      const value = formatCountValue(rawValue);
 
       const stat = document.createElement("article");
       stat.className = "creator-details-stat";
@@ -959,11 +999,91 @@ function renderCreatorDetailsDialog(profile) {
 
     dom.creatorDetailsStats.replaceChildren(fragment);
   }
+
+  if (dom.creatorDetailsPreferences instanceof HTMLElement) {
+    const preferencesSection = document.createDocumentFragment();
+    const label = document.createElement("span");
+    label.className = "label";
+    label.textContent = "Fetch Preferences";
+
+    const list = document.createElement("div");
+    list.className = "creator-details-preferences-list";
+
+    const isSavingPreference = popupState.creatorPreferenceSavingProfileId === profile.profileId;
+    const options = [
+      {
+        key: "includeOfficialPosts",
+        title: "Official posts",
+        checked: profile.includeOfficialPosts === true,
+      },
+      {
+        key: "includeCommunityPosts",
+        title: "Community posts",
+        checked: profile.includeCommunityPosts === true,
+      },
+    ];
+
+    for (const option of options) {
+      const optionLabel = document.createElement("label");
+      optionLabel.className = "creator-details-preference-option";
+
+      const optionCopy = document.createElement("div");
+      optionCopy.className = "creator-details-preference-copy";
+
+      const optionTitle = document.createElement("span");
+      optionTitle.className = "creator-details-preference-title";
+      optionTitle.textContent = option.title;
+
+      const optionStatus = document.createElement("span");
+      optionStatus.className = `creator-details-preference-status ${option.checked ? "is-enabled" : "is-disabled"}`;
+      optionStatus.textContent = option.checked ? "Enabled" : "Disabled";
+      optionStatus.setAttribute("aria-live", "polite");
+
+      optionCopy.append(optionTitle, optionStatus);
+
+      const switchWrap = document.createElement("span");
+      switchWrap.className = "creator-details-switch";
+
+      const input = document.createElement("input");
+      input.className = "creator-details-switch-input";
+      input.type = "checkbox";
+      input.checked = option.checked;
+      input.disabled = isSavingPreference || popupState.latestBusy || popupState.latestPaused;
+      input.dataset.creatorProfileId = profile.profileId;
+      input.dataset.creatorPreferenceKey = option.key;
+      input.setAttribute("aria-label", `${option.title}: ${option.checked ? "enabled" : "disabled"}`);
+
+      const track = document.createElement("span");
+      track.className = "creator-details-switch-track";
+
+      const thumb = document.createElement("span");
+      thumb.className = "creator-details-switch-thumb";
+      track.append(thumb);
+
+      switchWrap.append(input, track);
+      optionLabel.append(optionCopy, switchWrap);
+      list.append(optionLabel);
+    }
+
+    preferencesSection.append(label, list);
+    dom.creatorDetailsPreferences.replaceChildren(preferencesSection);
+  }
 }
 
 function formatCountValue(value) {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? formatWholeNumber(numeric) : "";
+}
+
+function pickFirstCountValue(candidates) {
+  for (const candidate of Array.isArray(candidates) ? candidates : []) {
+    const numeric = Number(candidate);
+    if (Number.isFinite(numeric) && numeric >= 0) {
+      return numeric;
+    }
+  }
+
+  return null;
 }
 
 function formatDateValue(value) {
@@ -1012,6 +1132,100 @@ function formatAccountAge(value) {
   return `${formatWholeNumber(years)}y ${formatWholeNumber(remainderMonths)}m on Sora`;
 }
 
+function formatJoinedSoraSummary(value) {
+  if (value == null || value === "") {
+    return "";
+  }
+
+  const createdAtMs =
+    typeof value === "number"
+      ? value < 1e12
+        ? value * 1000
+        : value
+      : new Date(value).getTime();
+
+  if (!Number.isFinite(createdAtMs)) {
+    return "";
+  }
+
+  const elapsedMs = Math.max(0, Date.now() - createdAtMs);
+  const dayMs = 1000 * 60 * 60 * 24;
+  const days = Math.floor(elapsedMs / dayMs);
+
+  if (days < 1) {
+    return "joined Sora today";
+  }
+
+  if (days < 30) {
+    return `joined Sora ${formatWholeNumber(days)} day${days === 1 ? "" : "s"} ago`;
+  }
+
+  if (days < 365) {
+    const months = Math.max(1, Math.floor(days / 30));
+    return `joined Sora ${formatWholeNumber(months)} month${months === 1 ? "" : "s"} ago`;
+  }
+
+  const years = Math.floor(days / 365);
+  return `joined Sora ${formatWholeNumber(years)} year${years === 1 ? "" : "s"} ago`;
+}
+
+function formatLastUpdatedSummary(value) {
+  if (value == null || value === "") {
+    return "";
+  }
+
+  const updatedAtMs =
+    typeof value === "number"
+      ? value < 1e12
+        ? value * 1000
+        : value
+      : new Date(value).getTime();
+
+  if (!Number.isFinite(updatedAtMs)) {
+    return "";
+  }
+
+  const elapsedMs = Math.max(0, Date.now() - updatedAtMs);
+  const minuteMs = 1000 * 60;
+  const hourMs = minuteMs * 60;
+  const dayMs = hourMs * 24;
+  const weekMs = dayMs * 7;
+
+  if (elapsedMs < minuteMs) {
+    return "just now";
+  }
+
+  if (elapsedMs < hourMs) {
+    const minutes = Math.max(1, Math.floor(elapsedMs / minuteMs));
+    return `${formatWholeNumber(minutes)} minute${minutes === 1 ? "" : "s"} ago`;
+  }
+
+  if (elapsedMs < dayMs) {
+    const hours = Math.max(1, Math.floor(elapsedMs / hourMs));
+    return `${formatWholeNumber(hours)} hour${hours === 1 ? "" : "s"} ago`;
+  }
+
+  if (elapsedMs < weekMs) {
+    const days = Math.max(1, Math.floor(elapsedMs / dayMs));
+    return `${formatWholeNumber(days)} day${days === 1 ? "" : "s"} ago`;
+  }
+
+  if (elapsedMs < weekMs * 2) {
+    return "last week";
+  }
+
+  return formatDateValue(value);
+}
+
+function capitalizeSentence(value) {
+  const text = typeof value === "string" ? value.trim() : "";
+  if (!text) {
+    return "";
+  }
+
+  return `${text.charAt(0).toUpperCase()}${text.slice(1)}`;
+}
+
 function normalizeSelectedIds(validIds, selectedIds) {
   const validIdSet = new Set(Array.isArray(validIds) ? validIds : []);
   const normalized = [];
@@ -1056,11 +1270,11 @@ function queueMarqueeSync() {
 }
 
 function syncMarquees() {
-  if (!(dom.characterSelectionGrid instanceof HTMLElement)) {
+  if (typeof document === "undefined") {
     return;
   }
 
-  const viewports = dom.characterSelectionGrid.querySelectorAll(".character-option-marquee");
+  const viewports = document.querySelectorAll(".character-option-marquee");
   for (const viewport of viewports) {
     if (!(viewport instanceof HTMLElement)) {
       continue;

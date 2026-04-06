@@ -9,6 +9,8 @@ import {
 } from "../runtime.js";
 import { popupState } from "../state.js";
 import {
+  buildSelectedPromptsCsv,
+  buildSelectedPromptsFilename,
   buildSelectedUrlsCsv,
   buildSelectedUrlsFilename,
   downloadCsvText,
@@ -128,6 +130,51 @@ export async function handleExportUrlsButtonClick() {
       `Downloaded a CSV with ${exportedCount} URL(s). ${skippedCount} selected item(s) were skipped because a Sora page URL was not available.`,
     );
   }
+}
+
+/**
+ * Exports using the popup's currently selected export type.
+ */
+export async function handleExportButtonClick() {
+  if (popupState.preferredExportType === "urls") {
+    await handleExportUrlsButtonClick();
+    return;
+  }
+
+  await handleExportPromptsButtonClick();
+}
+
+/**
+ * Exports a single-column CSV containing prompt text for the current selection.
+ */
+export async function handleExportPromptsButtonClick() {
+  hideNotice(dom.warningBox);
+  hideNotice(dom.errorBox);
+
+  const selectedKeys = getSelectedKeysFromDom();
+  const { csvText, exportedCount, skippedCount } = buildSelectedPromptsCsv(
+    popupState.latestRenderState.items,
+    selectedKeys,
+  );
+
+  if (!csvText || exportedCount === 0) {
+    showNotice(dom.errorBox, "The current selection does not include any exportable prompts.");
+    return;
+  }
+
+  try {
+    await downloadCsvText(csvText, buildSelectedPromptsFilename());
+  } catch (error) {
+    showNotice(dom.errorBox, error instanceof Error ? error.message : String(error));
+    return;
+  }
+
+  showNotice(
+    dom.warningBox,
+    skippedCount > 0
+      ? `Downloaded a CSV with ${exportedCount} prompt(s). ${skippedCount} selected item(s) were skipped because prompt text was not available.`
+      : `Downloaded a CSV with ${exportedCount} prompt(s).`,
+  );
 }
 
 /**

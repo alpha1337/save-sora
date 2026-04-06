@@ -11,7 +11,14 @@ export const dom = {
   fetchButton: document.getElementById("fetch-button"),
   fetchButtonLabel: document.querySelector("#fetch-button .button-label"),
   downloadButton: document.getElementById("download-button"),
-  exportUrlsButton: document.getElementById("export-urls-button"),
+  exportControl: document.getElementById("export-control"),
+  exportButton: document.getElementById("export-button"),
+  exportButtonLabel: document.getElementById("export-button-label"),
+  exportMenuButton: document.getElementById("export-menu-button"),
+  exportMenu: document.getElementById("export-menu"),
+  get exportMenuOptions() {
+    return [...document.querySelectorAll("[data-export-type]")];
+  },
   selectAllButton: document.getElementById("select-all-button"),
   clearSelectionButton: document.getElementById("clear-selection-button"),
   summaryPanel: document.querySelector(".summary-panel"),
@@ -90,5 +97,6 @@ export const dom = {
   creatorDetailsSummary: document.getElementById("creator-details-summary"),
   creatorDetailsProfile: document.getElementById("creator-details-profile"),
   creatorDetailsStats: document.getElementById("creator-details-stats"),
+  creatorDetailsPreferences: document.getElementById("creator-details-preferences"),
   creatorDetailsCode: document.getElementById("creator-details-code"),
 };

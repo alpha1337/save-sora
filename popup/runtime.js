@@ -186,6 +186,24 @@ export async function removeCreatorProfile(creatorProfileId) {
 }
 
 /**
+ * Persists fetch preferences for a saved creator profile.
+ *
+ * @param {string} creatorProfileId
+ * @param {{includeOfficialPosts?: boolean, includeCommunityPosts?: boolean}} preferences
+ * @returns {Promise<object>}
+ */
+export async function saveCreatorProfilePreferences(creatorProfileId, preferences) {
+  return sendPopupMessage(
+    {
+      type: "SET_CREATOR_PROFILE_PREFERENCES",
+      creatorProfileId,
+      preferences,
+    },
+    "Could not save the creator fetch preferences.",
+  );
+}
+
+/**
  * Persists a custom title override for a single item.
  *
  * @param {string} itemKey
@@ -276,17 +294,5 @@ export async function requestAbortDownloads() {
   return sendPopupMessage(
     { type: "ABORT_DOWNLOADS" },
     "Could not cancel the active download.",
-  );
-}
-
-/**
- * Requests a best-effort repair pass for saved creator profile metadata.
- *
- * @returns {Promise<object>}
- */
-export async function requestRefreshCreatorProfiles() {
-  return sendPopupMessage(
-    { type: "REFRESH_CREATOR_PROFILES" },
-    "Could not refresh the saved creator profiles.",
   );
 }

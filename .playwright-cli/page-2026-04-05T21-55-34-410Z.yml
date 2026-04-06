@@ -1,0 +1,36 @@
+- generic [ref=e2]:
+  - banner [ref=e3]:
+    - navigation "Sections" [ref=e4]:
+      - button "Overview" [ref=e5] [cursor=pointer]
+      - button "Settings" [ref=e6] [cursor=pointer]
+      - button "About" [ref=e7] [cursor=pointer]
+      - button "Donate" [ref=e8] [cursor=pointer]
+    - generic [ref=e9]:
+      - generic [ref=e11]:
+        - paragraph [ref=e12]: "\"Save Sora\""
+        - heading "Sora Bulk Downloader" [level=1] [ref=e13]
+        - paragraph [ref=e14]: Fetch your videos, rename what matters, and only download the ones you actually want.
+      - generic [ref=e15]:
+        - generic [ref=e16]: Theme Picker
+        - checkbox "Theme Picker"
+        - generic [ref=e17] [cursor=pointer]:
+          - img [ref=e19]
+          - img [ref=e22]
+  - main [ref=e26]:
+    - generic [ref=e28]:
+      - generic [ref=e31]:
+        - generic [ref=e32]:
+          - generic [ref=e33]: Search
+          - searchbox "Search" [ref=e34]
+        - generic [ref=e35]:
+          - generic [ref=e36]: Sources
+          - button "No sources selected" [ref=e38] [cursor=pointer]:
+            - generic [ref=e39]: No sources selected
+            - generic [ref=e40]: ▾
+        - button "Fetch Videos" [ref=e42] [cursor=pointer]:
+          - generic [ref=e43]: Fetch Videos
+      - generic [ref=e44]:
+        - generic [ref=e46]:
+          - generic [ref=e47]: Search Results
+          - paragraph [ref=e48]: Content Violation?
+        - img [ref=e51]

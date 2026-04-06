@@ -58,6 +58,8 @@ export function renderState(state) {
   const fetchedCount = Number(state && state.fetchedCount) || 0;
   const items = Array.isArray(state && state.items) ? state.items : [];
   const selectedKeys = Array.isArray(state && state.selectedKeys) ? state.selectedKeys : [];
+  const popupTotalItemCount = Number(state && state.popupTotalItemCount);
+  const popupSelectedCountTotal = Number(state && state.popupSelectedCountTotal);
   const titleOverrides =
     state && state.titleOverrides && typeof state.titleOverrides === "object"
       ? state.titleOverrides
@@ -67,7 +69,18 @@ export function renderState(state) {
   const theme = settings && settings.theme === "light" ? "light" : "dark";
   const defaultSource = normalizeSourceValues(settings.defaultSource);
   const defaultSort = normalizeSortValue(settings.defaultSort);
-  const totalVideos = phase === "fetching" ? Math.max(items.length, fetchedCount) : items.length;
+  const totalVideos =
+    Number.isFinite(popupTotalItemCount) && popupTotalItemCount >= 0
+      ? phase === "fetching"
+        ? Math.max(popupTotalItemCount, fetchedCount, items.length)
+        : popupTotalItemCount
+      : phase === "fetching"
+        ? Math.max(items.length, fetchedCount)
+        : items.length;
+  const selectedCountTotal =
+    Number.isFinite(popupSelectedCountTotal) && popupSelectedCountTotal >= 0
+      ? popupSelectedCountTotal
+      : selectedKeys.length;
 
   if (
     popupState.pendingDownloadStart &&
@@ -82,7 +95,7 @@ export function renderState(state) {
 
   popupState.latestSummaryContext = {
     totalCount: totalVideos,
-    selectedCount: selectedKeys.length,
+    selectedCount: selectedCountTotal,
     phase,
   };
 
@@ -138,6 +151,8 @@ export function renderState(state) {
     items,
     selectedKeys,
     titleOverrides,
+    totalCount: totalVideos,
+    selectedCountTotal,
     disableInputs: isBusy || isPaused,
     phase,
   };

@@ -32,6 +32,15 @@ export function renderItemsList(items, selectedKeys, titleOverrides, disableInpu
     return;
   }
 
+  const totalCount = Number(popupState.latestRenderState.totalCount);
+  const selectedCountTotal = Number(popupState.latestRenderState.selectedCountTotal);
+  const effectiveTotalCount =
+    Number.isFinite(totalCount) && totalCount >= 0 ? totalCount : items.length;
+  const effectiveSelectedCount =
+    Number.isFinite(selectedCountTotal) && selectedCountTotal >= 0
+      ? selectedCountTotal
+      : selectedKeys.length;
+
   const creatorResultTabs = getCreatorResultsTabs(items);
   syncCreatorResultsTabs(creatorResultTabs);
 
@@ -58,8 +67,8 @@ export function renderItemsList(items, selectedKeys, titleOverrides, disableInpu
   if (!items.length) {
     renderEmptyLibrary(phase);
     updateSelectionSummary({
-      totalCount: 0,
-      selectedCount: 0,
+      totalCount: effectiveTotalCount,
+      selectedCount: effectiveSelectedCount,
       phase,
     });
     return;
@@ -99,7 +108,13 @@ export function renderItemsList(items, selectedKeys, titleOverrides, disableInpu
     showPopulatedListState();
   }
 
-  applySelectionUi(items.length, selectedKeys.length, visibleCount, visibleSelectedCount, phase);
+  applySelectionUi(
+    effectiveTotalCount,
+    effectiveSelectedCount,
+    visibleCount,
+    visibleSelectedCount,
+    phase,
+  );
 }
 
 /**

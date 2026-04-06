@@ -226,9 +226,26 @@ export function syncSelectionControls(totalCount, selectedCount, visibleCount = 
     dom.downloadButton.classList.toggle("hidden", !showDownloadButton);
     dom.downloadButton.disabled = !showDownloadButton;
   }
-  if (dom.exportUrlsButton) {
-    dom.exportUrlsButton.classList.toggle("hidden", !showDownloadButton);
-    dom.exportUrlsButton.disabled = !showDownloadButton;
+  if (dom.exportControl instanceof HTMLElement) {
+    dom.exportControl.classList.toggle("hidden", !showDownloadButton);
+  }
+  if (dom.exportButton) {
+    dom.exportButton.disabled = !showDownloadButton;
+  }
+  if (dom.exportMenuButton) {
+    dom.exportMenuButton.disabled = !showDownloadButton;
+  }
+  if (!showDownloadButton) {
+    if (dom.exportMenuButton instanceof HTMLButtonElement) {
+      dom.exportMenuButton.setAttribute("aria-expanded", "false");
+    }
+    if (dom.exportControl instanceof HTMLElement) {
+      dom.exportControl.classList.remove("is-open");
+    }
+    if (dom.exportMenu instanceof HTMLElement) {
+      dom.exportMenu.classList.add("hidden");
+    }
+    popupState.exportMenuOpen = false;
   }
   if (dom.selectAllButton) {
     dom.selectAllButton.classList.toggle("hidden", !showBatchActions);
@@ -262,8 +279,14 @@ export function updateTotalSummary(items, selectedKeys) {
   }
 
   const { selectedCount, totalBytes } = getSelectedBatchMetrics(items, selectedKeys);
+  const selectedCountTotal = Number(popupState.latestRenderState.selectedCountTotal);
+  const effectiveSelectedCount =
+    Number.isFinite(selectedCountTotal) && selectedCountTotal >= selectedCount
+      ? selectedCountTotal
+      : selectedCount;
   const formattedSize = formatFileSize(totalBytes);
-  dom.totalCount.textContent = formattedSize
-    ? `${formatWholeNumber(selectedCount)} / ${formattedSize}`
-    : formatWholeNumber(selectedCount);
+  dom.totalCount.textContent =
+    formattedSize && effectiveSelectedCount === selectedCount
+      ? `${formatWholeNumber(effectiveSelectedCount)} / ${formattedSize}`
+      : formatWholeNumber(effectiveSelectedCount);
 }

@@ -14,14 +14,22 @@ const PROFILE_LIMIT = 100;
 const CREATOR_PROFILE_FEED_LIMIT = 8;
 const CREATOR_PROFILE_FEED_MIN_PAGE_CAP = 250;
 const CREATOR_PROFILE_FEED_PAGE_BUFFER = 50;
-const CREATOR_PROFILE_FEED_MAX_PAGE_CAP = 5000;
+const CREATOR_PROFILE_FEED_MAX_PAGE_CAP = 50000;
+const POPUP_STATE_ITEM_LIMIT = 3000;
+const POPUP_STATE_TARGET_BYTES = 8 * 1024 * 1024;
+const VOLATILE_SOURCE_PREVIEW_LIMIT = 3000;
+const VOLATILE_BACKUP_DB_NAME = "saveSoraVolatileBackup";
+const VOLATILE_BACKUP_DB_VERSION = 1;
+const VOLATILE_BACKUP_ITEM_STORE = "items";
+const VOLATILE_BACKUP_META_STORE = "meta";
+const VOLATILE_BACKUP_WRITE_CHUNK_SIZE = 250;
 const DRAFT_BATCH_LIMIT = 100;
 const LIKES_BATCH_LIMIT = 100;
 const CHARACTERS_BATCH_LIMIT = 100;
 const CHARACTER_ACCOUNT_LIMIT = 100;
 const DOWNLOAD_PROGRESS_PERSIST_INTERVAL = 25;
 const CATALOG_FULL_REFRESH_INTERVAL_MS = 1000 * 60 * 60 * 6;
-const CREATOR_SOURCE_SELECTION_SIGNATURE_VERSION = "creator-feed-v9";
+const CREATOR_SOURCE_SELECTION_SIGNATURE_VERSION = "creator-feed-v13";
 const FETCH_OPENING_PROGRESS_RATIO = 0.04;
 const FETCH_SOURCE_PROGRESS_RATIO = 0.74;
 const FETCH_PROCESSING_PROGRESS_RATIO = 0.22;
@@ -46,6 +54,7 @@ const SOURCE_ROUTES = {
   characterDrafts: "https://sora.chatgpt.com/profile",
   characterProfiles: "https://sora.chatgpt.com/profile",
   characterAccountPosts: "https://sora.chatgpt.com/profile",
+  characterAccountAppearances: "https://sora.chatgpt.com/profile",
   characterAccountDrafts: "https://sora.chatgpt.com/profile",
   creatorProfileLookup: "https://sora.chatgpt.com/profile",
   creatorPublished: "https://sora.chatgpt.com/profile",
@@ -61,6 +70,9 @@ let activeDownloadId = null;
 let activeArchiveJob = null;
 let creatingOffscreenDocument = null;
 let requestedControlAction = null;
+let keepAwakeRequested = false;
+let volatileBackupDbPromise = null;
+let activeVolatileBackupSessionKey = "";
 
 void restoreState();
 
@@ -131,7 +143,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message.type === "GET_STATUS") {
-    sendResponse({ ok: true, state: currentState });
+    sendResponse({ ok: true, state: buildPopupStateSnapshot(currentState) });
     return false;
   }
 
@@ -190,22 +202,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
     void clearLocalStorageState()
       .then(() => {
-        sendResponse({ ok: true, state: currentState });
+        sendResponse({ ok: true, state: buildPopupStateSnapshot(currentState) });
       })
       .catch((error) => {
         console.error("Failed to clear the Sora downloader local storage.", error);
-        sendResponse({ ok: false, error: getErrorMessage(error) });
-      });
-    return true;
-  }
-
-  if (message.type === "REFRESH_CREATOR_PROFILES") {
-    void refreshWeakCreatorProfiles()
-      .then(() => {
-        sendResponse({ ok: true, state: currentState });
-      })
-      .catch((error) => {
-        console.error("Failed to refresh the saved creator profiles.", error);
         sendResponse({ ok: false, error: getErrorMessage(error) });
       });
     return true;
@@ -250,7 +250,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
     void setItemRemovedState(message.itemKey, message.removed !== false)
       .then(() => {
-        sendResponse({ ok: true, state: currentState });
+        sendResponse({ ok: true, state: buildPopupStateSnapshot(currentState) });
       })
       .catch((error) => {
         console.error("Failed to remove the item from the Sora master set.", error);
@@ -267,7 +267,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
     void setItemDownloadedState(message.itemKey, message.downloaded !== false)
       .then(() => {
-        sendResponse({ ok: true, state: currentState });
+        sendResponse({ ok: true, state: buildPopupStateSnapshot(currentState) });
       })
       .catch((error) => {
         console.error("Failed to update the downloaded state for the item.", error);
@@ -300,7 +300,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           ok: true,
           characterAccounts,
           selectedCharacterAccountIds: [...currentState.selectedCharacterAccountIds],
-          state: currentState,
+          state: buildPopupStateSnapshot(currentState),
         });
       })
       .catch((error) => {
@@ -318,7 +318,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
     void setSelectedCharacterAccountIds(message.selectedCharacterAccountIds)
       .then(() => {
-        sendResponse({ ok: true, state: currentState });
+        sendResponse({ ok: true, state: buildPopupStateSnapshot(currentState) });
       })
       .catch((error) => {
         console.error("Failed to update the character selection.", error);
@@ -335,7 +335,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
     void addCreatorProfile(message.profileUrl)
       .then((creatorProfile) => {
-        sendResponse({ ok: true, creatorProfile, state: currentState });
+        sendResponse({ ok: true, creatorProfile, state: buildPopupStateSnapshot(currentState) });
       })
       .catch((error) => {
         console.error("Failed to add the creator profile.", error);
@@ -352,7 +352,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
     void addCreatorProfiles(message.profileUrls)
       .then((result) => {
-        sendResponse({ ok: true, ...result, state: currentState });
+        sendResponse({ ok: true, ...result, state: buildPopupStateSnapshot(currentState) });
       })
       .catch((error) => {
         console.error("Failed to add creator profiles.", error);
@@ -369,7 +369,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
     void removeCreatorProfile(message.creatorProfileId)
       .then(() => {
-        sendResponse({ ok: true, state: currentState });
+        sendResponse({ ok: true, state: buildPopupStateSnapshot(currentState) });
       })
       .catch((error) => {
         console.error("Failed to remove the creator profile.", error);
@@ -386,10 +386,32 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
     void setSelectedCreatorProfileIds(message.selectedCreatorProfileIds)
       .then(() => {
-        sendResponse({ ok: true, state: currentState });
+        sendResponse({ ok: true, state: buildPopupStateSnapshot(currentState) });
       })
       .catch((error) => {
         console.error("Failed to update the creator selection.", error);
+        sendResponse({ ok: false, error: getErrorMessage(error) });
+      });
+    return true;
+  }
+
+  if (message.type === "SET_CREATOR_PROFILE_PREFERENCES") {
+    if (typeof message.creatorProfileId !== "string" || !message.creatorProfileId) {
+      sendResponse({ ok: false, error: "A valid creator profile id is required." });
+      return false;
+    }
+
+    if (!message.preferences || typeof message.preferences !== "object") {
+      sendResponse({ ok: false, error: "Valid creator fetch preferences are required." });
+      return false;
+    }
+
+    void setCreatorProfilePreferences(message.creatorProfileId, message.preferences)
+      .then((creatorProfile) => {
+        sendResponse({ ok: true, creatorProfile, state: buildPopupStateSnapshot(currentState) });
+      })
+      .catch((error) => {
+        console.error("Failed to update the creator profile preferences.", error);
         sendResponse({ ok: false, error: getErrorMessage(error) });
       });
     return true;
@@ -413,7 +435,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
     void beginSelectedDownload()
       .then(() => {
-        sendResponse({ ok: true, state: currentState });
+        sendResponse({ ok: true, state: buildPopupStateSnapshot(currentState) });
       })
       .catch((error) => {
         console.error("Sora Bulk Downloader selected download failed.", error);
@@ -500,6 +522,7 @@ function createDefaultState(overrides = {}) {
     phase: "idle",
     message: "Fetch videos to build a download list.",
     fetchedCount: 0,
+    backedUpItemCount: 0,
     queued: 0,
     completed: 0,
     failed: 0,
@@ -544,6 +567,8 @@ function createDefaultCatalogSyncEntry(overrides = {}) {
     lastFullSyncAt: null,
     isExhaustive: false,
     selectionSignature: "",
+    backupItemCount: 0,
+    usesVolatileBackup: false,
     ...overrides,
   };
 }
@@ -672,6 +697,132 @@ async function yieldForUi() {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+function createVolatileBackupSessionKey() {
+  return `volatile-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function createIndexedDbRequestPromise(request) {
+  return new Promise((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error("IndexedDB request failed."));
+  });
+}
+
+function openVolatileBackupDb() {
+  if (volatileBackupDbPromise) {
+    return volatileBackupDbPromise;
+  }
+
+  volatileBackupDbPromise = new Promise((resolve, reject) => {
+    const request = indexedDB.open(VOLATILE_BACKUP_DB_NAME, VOLATILE_BACKUP_DB_VERSION);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(VOLATILE_BACKUP_ITEM_STORE)) {
+        const itemStore = db.createObjectStore(VOLATILE_BACKUP_ITEM_STORE, {
+          keyPath: "id",
+        });
+        itemStore.createIndex("sessionKey", "sessionKey", { unique: false });
+      }
+      if (!db.objectStoreNames.contains(VOLATILE_BACKUP_META_STORE)) {
+        db.createObjectStore(VOLATILE_BACKUP_META_STORE, {
+          keyPath: "sessionKey",
+        });
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error("Could not open the volatile backup database."));
+  }).catch((error) => {
+    volatileBackupDbPromise = null;
+    throw error;
+  });
+
+  return volatileBackupDbPromise;
+}
+
+async function clearVolatileBackups() {
+  const db = await openVolatileBackupDb();
+  await new Promise((resolve, reject) => {
+    const transaction = db.transaction(
+      [VOLATILE_BACKUP_ITEM_STORE, VOLATILE_BACKUP_META_STORE],
+      "readwrite",
+    );
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error || new Error("Could not clear the volatile backup database."));
+    transaction.objectStore(VOLATILE_BACKUP_ITEM_STORE).clear();
+    transaction.objectStore(VOLATILE_BACKUP_META_STORE).clear();
+  });
+}
+
+function buildVolatileBackupItemRecord(sessionKey, item) {
+  const compactItem = compactItemForPopup(item);
+  if (!compactItem) {
+    return null;
+  }
+
+  return {
+    id: `${sessionKey}:${compactItem.key}`,
+    sessionKey,
+    key: compactItem.key,
+    sourcePage: compactItem.sourcePage,
+    storedAt: Date.now(),
+    item: compactItem,
+  };
+}
+
+async function writeVolatileBackupMeta(sessionKey, meta = {}) {
+  if (!sessionKey) {
+    return;
+  }
+
+  const db = await openVolatileBackupDb();
+  await new Promise((resolve, reject) => {
+    const transaction = db.transaction([VOLATILE_BACKUP_META_STORE], "readwrite");
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error || new Error("Could not write volatile backup metadata."));
+    transaction.objectStore(VOLATILE_BACKUP_META_STORE).put({
+      sessionKey,
+      updatedAt: new Date().toISOString(),
+      ...meta,
+    });
+  });
+}
+
+async function appendVolatileBackupItems(sessionKey, items, meta = {}) {
+  if (!sessionKey) {
+    return 0;
+  }
+
+  const sourceItems = Array.isArray(items) ? items : [];
+  if (!sourceItems.length) {
+    return 0;
+  }
+
+  const db = await openVolatileBackupDb();
+  let storedCount = 0;
+
+  for (let index = 0; index < sourceItems.length; index += VOLATILE_BACKUP_WRITE_CHUNK_SIZE) {
+    const slice = sourceItems.slice(index, index + VOLATILE_BACKUP_WRITE_CHUNK_SIZE);
+    await new Promise((resolve, reject) => {
+      const transaction = db.transaction([VOLATILE_BACKUP_ITEM_STORE], "readwrite");
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error || new Error("Could not write volatile backup items."));
+      const store = transaction.objectStore(VOLATILE_BACKUP_ITEM_STORE);
+      for (const item of slice) {
+        const record = buildVolatileBackupItemRecord(sessionKey, item);
+        if (!record) {
+          continue;
+        }
+        storedCount += 1;
+        store.put(record);
+      }
+    });
+    await yieldForUi();
+  }
+
+  await writeVolatileBackupMeta(sessionKey, meta);
+  return storedCount;
+}
+
 function normalizeCatalogSyncEntry(entry) {
   const sourceEntry = entry && typeof entry === "object" ? entry : {};
 
@@ -687,6 +838,10 @@ function normalizeCatalogSyncEntry(entry) {
     isExhaustive: sourceEntry.isExhaustive === true,
     selectionSignature:
       typeof sourceEntry.selectionSignature === "string" ? sourceEntry.selectionSignature : "",
+    backupItemCount: Number.isFinite(Number(sourceEntry.backupItemCount))
+      ? Math.max(0, Number(sourceEntry.backupItemCount))
+      : 0,
+    usesVolatileBackup: sourceEntry.usesVolatileBackup === true,
   });
 }
 
@@ -712,8 +867,9 @@ function normalizeCatalogItems(items) {
     }
 
     const key = item.key || getItemKey(item);
+    const { metadataEntries: _metadataEntries, ...compactItem } = item;
     itemMap.set(key, {
-      ...item,
+      ...compactItem,
       key,
     });
   }
@@ -721,8 +877,166 @@ function normalizeCatalogItems(items) {
   return [...itemMap.values()];
 }
 
+function compactItemForPopup(item) {
+  if (!item || typeof item !== "object" || typeof item.id !== "string") {
+    return null;
+  }
+
+  return {
+    key: item.key || getItemKey(item),
+    id: item.id,
+    sourcePage: item.sourcePage || "",
+    sourceLabel: item.sourceLabel || "",
+    sourceType: item.sourceType || "",
+    attachmentIndex: Number.isInteger(item.attachmentIndex) ? item.attachmentIndex : 0,
+    attachmentCount: Number.isInteger(item.attachmentCount) ? item.attachmentCount : 1,
+    filename: typeof item.filename === "string" ? item.filename : "",
+    thumbnailUrl: typeof item.thumbnailUrl === "string" ? item.thumbnailUrl : "",
+    downloadUrl: typeof item.downloadUrl === "string" ? item.downloadUrl : "",
+    detailUrl: typeof item.detailUrl === "string" ? item.detailUrl : "",
+    prompt: typeof item.prompt === "string" ? item.prompt : "",
+    description: typeof item.description === "string" ? item.description : "",
+    caption: typeof item.caption === "string" ? item.caption : "",
+    discoveryPhrase: typeof item.discoveryPhrase === "string" ? item.discoveryPhrase : "",
+    createdAt: item.createdAt ?? null,
+    postedAt: item.postedAt ?? null,
+    generationId: typeof item.generationId === "string" ? item.generationId : "",
+    durationSeconds: item.durationSeconds ?? null,
+    fileSizeBytes: item.fileSizeBytes ?? null,
+    width: item.width ?? null,
+    height: item.height ?? null,
+    likeCount: item.likeCount ?? null,
+    viewCount: item.viewCount ?? null,
+    shareCount: item.shareCount ?? null,
+    repostCount: item.repostCount ?? null,
+    remixCount: item.remixCount ?? null,
+    isRemoved: item.isRemoved === true,
+    isDownloaded: item.isDownloaded === true,
+    creatorProfileId: typeof item.creatorProfileId === "string" ? item.creatorProfileId : "",
+    creatorProfileDisplayName:
+      typeof item.creatorProfileDisplayName === "string" ? item.creatorProfileDisplayName : "",
+    creatorProfileUsername:
+      typeof item.creatorProfileUsername === "string" ? item.creatorProfileUsername : "",
+    characterAccountId: typeof item.characterAccountId === "string" ? item.characterAccountId : "",
+    characterAccountDisplayName:
+      typeof item.characterAccountDisplayName === "string" ? item.characterAccountDisplayName : "",
+    characterAccountUsername:
+      typeof item.characterAccountUsername === "string" ? item.characterAccountUsername : "",
+  };
+}
+
+function estimatePopupPayloadBytes(value) {
+  try {
+    return JSON.stringify(value).length;
+  } catch (_error) {
+    return 0;
+  }
+}
+
+function buildPopupStateSnapshot(state = currentState) {
+  const sourceState = state && typeof state === "object" ? state : createDefaultState();
+  const sourceItems = Array.isArray(sourceState.items) ? sourceState.items : [];
+  const backedUpItemCount = Number.isFinite(Number(sourceState.backedUpItemCount))
+    ? Math.max(0, Number(sourceState.backedUpItemCount))
+    : 0;
+  const limitedItems = [];
+  let popupItemsBytes = 0;
+
+  for (const item of sourceItems) {
+    if (limitedItems.length >= POPUP_STATE_ITEM_LIMIT) {
+      break;
+    }
+
+    const compactItem = compactItemForPopup(item);
+    if (!compactItem) {
+      continue;
+    }
+
+    const compactItemBytes = estimatePopupPayloadBytes(compactItem);
+    if (
+      limitedItems.length > 0 &&
+      popupItemsBytes + compactItemBytes > POPUP_STATE_TARGET_BYTES
+    ) {
+      break;
+    }
+
+    limitedItems.push(compactItem);
+    popupItemsBytes += compactItemBytes;
+  }
+
+  const visibleKeys = new Set(limitedItems.map((item) => item.key || getItemKey(item)));
+  const selectedKeysTotal = Array.isArray(sourceState.selectedKeys)
+    ? sourceState.selectedKeys.filter((key) => typeof key === "string").length
+    : 0;
+  const selectedKeys = Array.isArray(sourceState.selectedKeys)
+    ? sourceState.selectedKeys.filter((key) => typeof key === "string" && visibleKeys.has(key))
+    : [];
+  const titleOverrides = pruneLegacyTitleOverrides(limitedItems, sourceState.titleOverrides);
+  const totalItemCount = sourceItems.length + backedUpItemCount;
+  const hiddenItemCount = Math.max(0, totalItemCount - limitedItems.length);
+  const truncationWarning = hiddenItemCount > 0
+    ? `Showing ${limitedItems.length.toLocaleString()} of ${totalItemCount.toLocaleString()} results in the popup to stay under Chrome's runtime and memory limits. Refine search or source scope to work with a smaller slice.`
+    : "";
+  const partialWarning = joinPartialWarnings([
+    sourceState.partialWarning,
+    truncationWarning,
+  ]);
+
+  return {
+    ...sourceState,
+    items: limitedItems,
+    selectedKeys,
+    titleOverrides,
+    queued: Number.isFinite(Number(sourceState.queued))
+      ? Number(sourceState.queued)
+      : selectedKeysTotal,
+    partialWarning,
+    popupItemsTruncated: hiddenItemCount > 0,
+    popupHiddenItemCount: hiddenItemCount,
+    popupVisibleItemCount: limitedItems.length,
+    popupTotalItemCount: totalItemCount,
+    popupSelectedCountTotal: selectedKeysTotal,
+  };
+}
+
+function setKeepAwakeEnabled(enabled) {
+  if (!chrome.power) {
+    keepAwakeRequested = false;
+    return;
+  }
+
+  if (enabled) {
+    if (keepAwakeRequested) {
+      return;
+    }
+
+    chrome.power.requestKeepAwake("system");
+    keepAwakeRequested = true;
+    return;
+  }
+
+  if (!keepAwakeRequested) {
+    return;
+  }
+
+  chrome.power.releaseKeepAwake();
+  keepAwakeRequested = false;
+}
+
+function isVolatileLargeSourcePage(sourcePage) {
+  return sourcePage === "creatorCharacters" || sourcePage === "creatorCharacterCameos";
+}
+
+function shouldPersistCatalogItem(item) {
+  return !isVolatileLargeSourcePage(item && item.sourcePage);
+}
+
 function stripItemForPersistence(item) {
   if (!item || typeof item !== "object" || typeof item.id !== "string") {
+    return null;
+  }
+
+  if (!shouldPersistCatalogItem(item)) {
     return null;
   }
 
@@ -752,11 +1066,14 @@ function normalizePersistedItems(items) {
 }
 
 function buildPersistedItemKeys(items) {
-  return normalizeCatalogItems(items).map((item) => item.key || getItemKey(item));
+  return normalizeCatalogItems(items)
+    .filter((item) => shouldPersistCatalogItem(item))
+    .map((item) => item.key || getItemKey(item));
 }
 
 function serializeStateForPersistence(state = currentState) {
   const persistedItemKeys = buildPersistedItemKeys(state && state.items);
+  const persistedItemKeySet = new Set(persistedItemKeys);
   const nextState = {
     ...(state && typeof state === "object" ? state : createDefaultState()),
     profileIds: [],
@@ -773,8 +1090,15 @@ function serializeStateForPersistence(state = currentState) {
   };
 
   nextState.selectedKeys = Array.isArray(nextState.selectedKeys)
-    ? nextState.selectedKeys.filter((value) => typeof value === "string")
+    ? nextState.selectedKeys.filter(
+      (value) => typeof value === "string" && persistedItemKeySet.has(value),
+    )
     : [];
+  nextState.titleOverrides = pruneLegacyTitleOverrides(
+    normalizeCatalogItems(state && state.items).filter((item) => shouldPersistCatalogItem(item)),
+    nextState.titleOverrides,
+  );
+  nextState.queued = nextState.selectedKeys.length;
 
   return nextState;
 }
@@ -913,19 +1237,54 @@ async function restoreState() {
         titleOverrides: pruneLegacyTitleOverrides(restoredItems, currentState.titleOverrides),
       };
     }
-
-    void refreshWeakCreatorProfiles();
   } catch (error) {
     console.warn("Failed to restore extension state.", error);
   }
 }
 
 async function persistState(state = currentState) {
-  await chrome.storage.local.set({ [STATE_KEY]: serializeStateForPersistence(state) });
+  const serializedState = serializeStateForPersistence(state);
+
+  try {
+    await chrome.storage.local.set({ [STATE_KEY]: serializedState });
+  } catch (error) {
+    if (!/quota/i.test(getErrorMessage(error))) {
+      throw error;
+    }
+
+    console.warn("Storage quota exceeded while persisting state. Retrying with a minimal snapshot.");
+    await chrome.storage.local.set({
+      [STATE_KEY]: {
+        ...serializedState,
+        itemKeys: [],
+        selectedKeys: [],
+        titleOverrides: {},
+        pendingItems: [],
+        failedItems: [],
+        queued: 0,
+      },
+    });
+  }
 }
 
 async function persistCatalogState(catalog = currentCatalog) {
-  await chrome.storage.local.set({ [CATALOG_STORAGE_KEY]: serializeCatalogForPersistence(catalog) });
+  const serializedCatalog = serializeCatalogForPersistence(catalog);
+
+  try {
+    await chrome.storage.local.set({ [CATALOG_STORAGE_KEY]: serializedCatalog });
+  } catch (error) {
+    if (!/quota/i.test(getErrorMessage(error))) {
+      throw error;
+    }
+
+    console.warn("Storage quota exceeded while persisting the catalog. Retrying without cached items.");
+    await chrome.storage.local.set({
+      [CATALOG_STORAGE_KEY]: {
+        ...serializedCatalog,
+        items: [],
+      },
+    });
+  }
 }
 
 async function setState(patch, options = {}) {
@@ -964,6 +1323,13 @@ async function setCatalogState(patch, options = {}) {
 }
 
 async function resetExtensionState() {
+  activeVolatileBackupSessionKey = "";
+  try {
+    await clearVolatileBackups();
+  } catch (error) {
+    console.warn("Failed to clear volatile backups while resetting the extension state.", error);
+  }
+
   await setState(
     createDefaultState({
       settings: {
@@ -986,6 +1352,12 @@ async function resetExtensionState() {
 
 async function clearLocalStorageState() {
   await chrome.storage.local.clear();
+  activeVolatileBackupSessionKey = "";
+  try {
+    await clearVolatileBackups();
+  } catch (error) {
+    console.warn("Failed to clear volatile backups while clearing local storage.", error);
+  }
   currentState = createDefaultState();
   currentCatalog = createDefaultCatalogState();
 }
@@ -1546,9 +1918,31 @@ function getCharacterAccountSelectionSignature(selectedCharacterAccountIds = [])
 function getCreatorProfileSelectionSignature(selectedCreatorProfileIds = []) {
   const selectedIds = [...new Set(Array.isArray(selectedCreatorProfileIds) ? selectedCreatorProfileIds : [])]
     .filter((value) => typeof value === "string" && value)
+    .sort((left, right) => left.localeCompare(right));
+  return `${CREATOR_SOURCE_SELECTION_SIGNATURE_VERSION}:${selectedIds.join("|")}`;
+}
+
+function getCreatorProfileSelectionPreferenceSignature(creatorProfiles, selectedCreatorProfileIds = []) {
+  const profileMap = new Map(
+    normalizeCreatorProfiles(creatorProfiles).map((profile) => [profile.profileId, profile]),
+  );
+  const selectedIds = normalizeSelectedCreatorProfileIds(
+    creatorProfiles,
+    selectedCreatorProfileIds,
+    [],
+    { allowEmpty: true },
+  );
+
+  const signature = selectedIds
+    .map((profileId) => {
+      const profile = profileMap.get(profileId);
+      const preferences = normalizeCreatorFetchPreferences(profile);
+      return `${profileId}:${preferences.includeOfficialPosts ? "1" : "0"}:${preferences.includeCommunityPosts ? "1" : "0"}`;
+    })
     .sort((left, right) => left.localeCompare(right))
     .join("|");
-  return `${CREATOR_SOURCE_SELECTION_SIGNATURE_VERSION}:${selectedIds}`;
+
+  return `${CREATOR_SOURCE_SELECTION_SIGNATURE_VERSION}:${signature}`;
 }
 
 function getSourceSelectionSignature(source, options = {}) {
@@ -1557,7 +1951,10 @@ function getSourceSelectionSignature(source, options = {}) {
   }
 
   if (source === "creators") {
-    return getCreatorProfileSelectionSignature(options.selectedCreatorProfileIds);
+    return getCreatorProfileSelectionPreferenceSignature(
+      options.creatorProfiles,
+      options.selectedCreatorProfileIds,
+    );
   }
 
   return "";
@@ -1601,7 +1998,7 @@ function getExpectedCreatorSelectionCount(creatorProfiles, selectedCreatorProfil
       continue;
     }
 
-    expectedCount += getCreatorProfileExpectedPostCount(profile);
+    expectedCount += getCreatorProfileExpectedItemCount(profile);
   }
 
   return expectedCount;
@@ -1615,6 +2012,22 @@ function getCreatorFeedPageCap(creatorProfile) {
 
   const expectedPages =
     Math.ceil(expectedCount / Math.max(1, CREATOR_PROFILE_FEED_LIMIT)) +
+    CREATOR_PROFILE_FEED_PAGE_BUFFER;
+
+  return Math.min(
+    CREATOR_PROFILE_FEED_MAX_PAGE_CAP,
+    Math.max(CREATOR_PROFILE_FEED_MIN_PAGE_CAP, expectedPages),
+  );
+}
+
+function getProfileFeedPageCap(expectedCount) {
+  const numericExpectedCount = Number(expectedCount);
+  if (!Number.isFinite(numericExpectedCount) || numericExpectedCount <= 0) {
+    return CREATOR_PROFILE_FEED_MIN_PAGE_CAP;
+  }
+
+  const expectedPages =
+    Math.ceil(numericExpectedCount / Math.max(1, CREATOR_PROFILE_FEED_LIMIT)) +
     CREATOR_PROFILE_FEED_PAGE_BUFFER;
 
   return Math.min(
@@ -1681,6 +2094,9 @@ function shouldRunFullSourceRefresh(source, options = {}) {
   }
 
   const syncEntry = getCatalogSyncEntryForSource(source);
+  if (syncEntry.usesVolatileBackup === true) {
+    return true;
+  }
   const selectionSignature =
     getSourceSelectionSignature(source, options);
   if (!syncEntry.lastFullSyncAt) {
@@ -1696,7 +2112,8 @@ function shouldRunFullSourceRefresh(source, options = {}) {
       options.creatorProfiles,
       options.selectedCreatorProfileIds,
     );
-    if (expectedCreatorCount > 0 && existingKeys.size < expectedCreatorCount) {
+    const availableCount = Math.max(existingKeys.size, Number(syncEntry.backupItemCount) || 0);
+    if (expectedCreatorCount > 0 && availableCount < expectedCreatorCount) {
       return true;
     }
   }
@@ -1825,6 +2242,10 @@ function buildUpdatedCatalogSourceSync(sourceResults) {
         typeof sourceResult.selectionSignature === "string"
           ? sourceResult.selectionSignature
           : nextSourceSync[sourceResult.source].selectionSignature,
+      backupItemCount: Number.isFinite(Number(sourceResult.backupItemCount))
+        ? Math.max(0, Number(sourceResult.backupItemCount))
+        : 0,
+      usesVolatileBackup: sourceResult.usesVolatileBackup === true,
     };
   }
 
@@ -2437,16 +2858,33 @@ async function startScan(requestedSources, requestedSearchQuery = "") {
     await ensureCharacterAccountsLoaded();
   }
 
-  if (sources.includes("creators")) {
-    await refreshWeakCreatorProfiles();
+  activeVolatileBackupSessionKey = "";
+  if (sources.includes("creators") && !searchQuery) {
+    activeVolatileBackupSessionKey = createVolatileBackupSessionKey();
+    try {
+      await clearVolatileBackups();
+      await writeVolatileBackupMeta(activeVolatileBackupSessionKey, {
+        startedAt: new Date().toISOString(),
+        source: "creators",
+        status: "running",
+      });
+    } catch (error) {
+      console.warn("Could not initialize the volatile backup store.", error);
+      activeVolatileBackupSessionKey = "";
+    }
   }
 
+  setKeepAwakeEnabled(true);
   activeRun = scanSources(sources, searchQuery);
   try {
     await activeRun;
   } finally {
     activeRun = null;
-    await cleanupHiddenTab();
+    try {
+      await cleanupHiddenTab();
+    } finally {
+      setKeepAwakeEnabled(false);
+    }
   }
 }
 
@@ -2539,6 +2977,7 @@ async function scanSources(sources, searchQuery = "") {
       catalogItems: currentCatalog.items,
       selectedCharacterAccountIds,
       selectedCreatorProfileIds,
+      enableVolatileBackup: !searchQuery,
     });
     const mergedCatalogItems = mergeCatalogItemsWithSourceResults(
       currentCatalog.items,
@@ -2560,7 +2999,8 @@ async function scanSources(sources, searchQuery = "") {
     );
     await setState({
       message: `Processing ${workingItems.length} item(s)...`,
-      fetchedCount: workingItems.length,
+      fetchedCount: workingItems.length + (Number(collected.backedUpItemCount) || 0),
+      backedUpItemCount: Number(collected.backedUpItemCount) || 0,
       fetchProgress: getNextFetchProgress({
         stage: "processing",
         stageLabel: "Processing fetched videos",
@@ -2568,7 +3008,7 @@ async function scanSources(sources, searchQuery = "") {
           ? `Applying your search to ${workingItems.length} item(s)...`
           : `Preparing ${workingItems.length} item(s) for review...`,
         progressRatio: getFetchProcessingProgressRatio(0, 0),
-        itemsFound: workingItems.length,
+        itemsFound: workingItems.length + (Number(collected.backedUpItemCount) || 0),
         processedCount: 0,
         totalCount: workingItems.length,
       }),
@@ -2578,7 +3018,8 @@ async function scanSources(sources, searchQuery = "") {
     const filteredItems = await filterItemsBySearchQueryWithProgress(workingItems, searchQuery, {
       onProgress: async ({ processedCount, totalCount, matchedCount }) => {
         await setState({
-          fetchedCount: matchedCount,
+          fetchedCount: matchedCount + (Number(collected.backedUpItemCount) || 0),
+          backedUpItemCount: Number(collected.backedUpItemCount) || 0,
           message: searchQuery
             ? `Filtering results... ${processedCount} of ${totalCount}`
             : `Processing results... ${processedCount} of ${totalCount}`,
@@ -2592,7 +3033,7 @@ async function scanSources(sources, searchQuery = "") {
               0,
               totalCount > 0 ? processedCount / totalCount : 1,
             ),
-            itemsFound: matchedCount,
+            itemsFound: matchedCount + (Number(collected.backedUpItemCount) || 0),
             processedCount,
             totalCount,
           }),
@@ -2602,13 +3043,14 @@ async function scanSources(sources, searchQuery = "") {
 
     await setState({
       message: `Finalizing ${filteredItems.length} item(s)...`,
-      fetchedCount: filteredItems.length,
+      fetchedCount: filteredItems.length + (Number(collected.backedUpItemCount) || 0),
+      backedUpItemCount: Number(collected.backedUpItemCount) || 0,
       fetchProgress: getNextFetchProgress({
         stage: "finalizing",
         stageLabel: "Finalizing results",
         detail: `Building the review list for ${filteredItems.length} item(s)...`,
         progressRatio: getFetchProcessingProgressRatio(1, 0),
-        itemsFound: filteredItems.length,
+        itemsFound: filteredItems.length + (Number(collected.backedUpItemCount) || 0),
         processedCount: 0,
         totalCount: filteredItems.length,
       }),
@@ -2644,7 +3086,8 @@ async function scanSources(sources, searchQuery = "") {
       characterIds: filteredSourceIds.characterIds,
       creatorIds: filteredSourceIds.creatorIds,
       items: filteredItems,
-      fetchedCount: filteredItems.length,
+      fetchedCount: filteredItems.length + (Number(collected.backedUpItemCount) || 0),
+      backedUpItemCount: Number(collected.backedUpItemCount) || 0,
       selectedKeys,
       titleOverrides: pruneLegacyTitleOverrides(filteredItems, currentState.titleOverrides),
       pendingItems: [],
@@ -2661,6 +3104,14 @@ async function scanSources(sources, searchQuery = "") {
 
     if (!filteredItems.length) {
       requestedControlAction = null;
+      if (activeVolatileBackupSessionKey && Number(collected.backedUpItemCount) > 0) {
+        void writeVolatileBackupMeta(activeVolatileBackupSessionKey, {
+          status: "completed",
+          fetchedCount: Number(collected.backedUpItemCount) || 0,
+        }).catch((error) => {
+          console.warn("Failed to finalize the volatile backup metadata.", error);
+        });
+      }
       await setState({
         ...baseState,
         phase: "complete",
@@ -2673,6 +3124,15 @@ async function scanSources(sources, searchQuery = "") {
     }
 
     requestedControlAction = null;
+    if (activeVolatileBackupSessionKey && Number(collected.backedUpItemCount) > 0) {
+      void writeVolatileBackupMeta(activeVolatileBackupSessionKey, {
+        status: "completed",
+        fetchedCount: filteredItems.length + (Number(collected.backedUpItemCount) || 0),
+        previewCount: filteredItems.length,
+      }).catch((error) => {
+        console.warn("Failed to finalize the volatile backup metadata.", error);
+      });
+    }
     await setState({
       ...baseState,
       phase: "ready",
@@ -2691,17 +3151,34 @@ async function scanSources(sources, searchQuery = "") {
           ? "Fetch canceled. Showing your current results."
           : "Fetch canceled. Start another fetch when you're ready.",
         currentSource: null,
-        fetchedCount: activeItems.length,
+        fetchedCount: activeItems.length + (Number(currentState.backedUpItemCount) || 0),
         selectedKeys: nextSelectedKeys,
         queued: nextSelectedKeys.length,
         fetchProgress: createDefaultFetchProgress(),
         lastError: "",
         finishedAt: new Date().toISOString(),
       });
+      if (activeVolatileBackupSessionKey && Number(currentState.backedUpItemCount) > 0) {
+        void writeVolatileBackupMeta(activeVolatileBackupSessionKey, {
+          status: "aborted",
+          fetchedCount: activeItems.length + (Number(currentState.backedUpItemCount) || 0),
+          previewCount: activeItems.length,
+        }).catch((metaError) => {
+          console.warn("Failed to mark the volatile backup as aborted.", metaError);
+        });
+      }
       return;
     }
 
     requestedControlAction = null;
+    if (activeVolatileBackupSessionKey) {
+      void writeVolatileBackupMeta(activeVolatileBackupSessionKey, {
+        status: "error",
+        error: getErrorMessage(error),
+      }).catch((metaError) => {
+        console.warn("Failed to mark the volatile backup as failed.", metaError);
+      });
+    }
     await setState({
       phase: "error",
       message: "The fetch run stopped.",
@@ -2746,6 +3223,7 @@ function normalizeCharacterAccounts(value) {
           : typeof account.username === "string" && account.username
             ? account.username
             : account.userId,
+      postCount: Number.isFinite(Number(account.postCount)) ? Number(account.postCount) : 0,
       cameoCount: Number.isFinite(Number(account.cameoCount)) ? Number(account.cameoCount) : 0,
       permalink: typeof account.permalink === "string" ? account.permalink : null,
       profilePictureUrl:
@@ -2854,6 +3332,56 @@ function normalizeCreatorDisplayName(value, fallbackUsername = "") {
   return normalizeCreatorUsername(fallbackUsername);
 }
 
+function getDefaultCreatorFetchPreferences(profile) {
+  const sourceProfile = profile && typeof profile === "object" ? profile : {};
+  const profileData =
+    sourceProfile.profileData && typeof sourceProfile.profileData === "object"
+      ? sourceProfile.profileData
+      : null;
+  const characterUserId =
+    typeof sourceProfile.characterUserId === "string" && isCharacterAccountUserId(sourceProfile.characterUserId)
+      ? sourceProfile.characterUserId
+      : profileData && typeof profileData.user_id === "string" && isCharacterAccountUserId(profileData.user_id)
+        ? profileData.user_id
+        : profileData && typeof profileData.userId === "string" && isCharacterAccountUserId(profileData.userId)
+          ? profileData.userId
+          : "";
+
+  return {
+    includeOfficialPosts: true,
+    includeCommunityPosts: true,
+  };
+}
+
+function normalizeCreatorFetchPreferences(profile) {
+  const defaults = getDefaultCreatorFetchPreferences(profile);
+  const sourceProfile = profile && typeof profile === "object" ? profile : {};
+  const hasCustomFetchPreferences = sourceProfile.hasCustomFetchPreferences === true;
+  const hasExplicitOfficialPreference = typeof sourceProfile.includeOfficialPosts === "boolean";
+  const hasExplicitCommunityPreference = typeof sourceProfile.includeCommunityPosts === "boolean";
+
+  if (
+    !hasCustomFetchPreferences &&
+    hasExplicitOfficialPreference &&
+    hasExplicitCommunityPreference &&
+    ((sourceProfile.includeOfficialPosts === true &&
+      sourceProfile.includeCommunityPosts === false) ||
+      (sourceProfile.includeOfficialPosts === false &&
+        sourceProfile.includeCommunityPosts === true))
+  ) {
+    return { ...defaults };
+  }
+
+  return {
+    includeOfficialPosts: hasExplicitOfficialPreference
+      ? sourceProfile.includeOfficialPosts
+      : defaults.includeOfficialPosts,
+    includeCommunityPosts: hasExplicitCommunityPreference
+      ? sourceProfile.includeCommunityPosts
+      : defaults.includeCommunityPosts,
+  };
+}
+
 function normalizeCreatorProfiles(value) {
   return (Array.isArray(value) ? value : [])
     .filter(
@@ -2865,6 +3393,20 @@ function normalizeCreatorProfiles(value) {
     .map((profile) => {
       const profileId = profile.profileId;
       const userId = typeof profile.userId === "string" ? profile.userId : "";
+      const profileData =
+        profile.profileData && typeof profile.profileData === "object"
+          ? profile.profileData
+          : null;
+      const ownerUserId =
+        typeof profile.ownerUserId === "string" && profile.ownerUserId
+          ? profile.ownerUserId
+          : userId;
+      const characterUserId =
+        typeof profile.characterUserId === "string" && isCharacterAccountUserId(profile.characterUserId)
+          ? profile.characterUserId
+          : "";
+      const ownerUsername =
+        typeof profile.ownerUsername === "string" ? normalizeCreatorUsername(profile.ownerUsername) : "";
       const permalink =
         typeof profile.permalink === "string" && profile.permalink ? profile.permalink : null;
       const username =
@@ -2872,10 +3414,14 @@ function normalizeCreatorProfiles(value) {
         getCreatorUsernameFromUrl(permalink) ||
         (/[/:@]/.test(profileId) ? getCreatorUsernameFromUrl(profileId) : "");
       const displayName =
-        normalizeCreatorDisplayName(profile.displayName, username) ||
+        normalizeCreatorDisplayName(
+          profileData && typeof profileData.display_name === "string" ? profileData.display_name : profile.displayName,
+          username,
+        ) ||
         username ||
         userId ||
         profileId;
+      const fetchPreferences = normalizeCreatorFetchPreferences(profile);
 
       return {
         profileId,
@@ -2885,14 +3431,17 @@ function normalizeCreatorProfiles(value) {
         permalink,
         profilePictureUrl:
           typeof profile.profilePictureUrl === "string" ? profile.profilePictureUrl : null,
+        ownerUserId,
+        ownerUsername: ownerUsername || "",
+        characterUserId,
         profileFetchedAt:
           typeof profile.profileFetchedAt === "string" && profile.profileFetchedAt
             ? profile.profileFetchedAt
             : null,
-        profileData:
-          profile.profileData && typeof profile.profileData === "object"
-            ? profile.profileData
-            : null,
+        profileData,
+        hasCustomFetchPreferences: profile.hasCustomFetchPreferences === true,
+        includeOfficialPosts: fetchPreferences.includeOfficialPosts,
+        includeCommunityPosts: fetchPreferences.includeCommunityPosts,
       };
     });
 }
@@ -3035,6 +3584,51 @@ async function setSelectedCreatorProfileIds(requestedIds) {
   });
 }
 
+async function setCreatorProfilePreferences(creatorProfileId, requestedPreferences) {
+  if (activeRun) {
+    throw new Error("Wait until the current fetch or download run finishes.");
+  }
+
+  const creatorProfiles = normalizeResolvedCreatorProfiles(currentState.creatorProfiles);
+  const profileIndex = creatorProfiles.findIndex((profile) => profile.profileId === creatorProfileId);
+  if (profileIndex === -1) {
+    throw new Error("That creator profile is no longer in your saved list.");
+  }
+
+  const currentProfile = creatorProfiles[profileIndex];
+  const normalizedPreferences = normalizeCreatorFetchPreferences({
+    ...currentProfile,
+    ...(requestedPreferences && typeof requestedPreferences === "object" ? requestedPreferences : {}),
+  });
+  const nextProfile = normalizeCreatorProfiles([
+    {
+      ...currentProfile,
+      hasCustomFetchPreferences: true,
+      ...normalizedPreferences,
+    },
+  ])[0];
+
+  if (!nextProfile) {
+    throw new Error("Could not update that creator profile.");
+  }
+
+  const nextCreatorProfiles = [...creatorProfiles];
+  nextCreatorProfiles.splice(profileIndex, 1, nextProfile);
+
+  await setState({
+    creatorProfiles: nextCreatorProfiles,
+    selectedCreatorProfileIds: normalizeSelectedCreatorProfileIds(
+      nextCreatorProfiles,
+      currentState.selectedCreatorProfileIds,
+      [],
+      { allowEmpty: true },
+    ),
+    hasExplicitCreatorProfileSelection: true,
+  });
+
+  return nextProfile;
+}
+
 function normalizeCreatorProfileUrl(profileUrl) {
   if (typeof profileUrl !== "string" || !profileUrl.trim()) {
     throw new Error("Paste a valid Sora creator username or profile link.");
@@ -3157,7 +3751,18 @@ async function enrichCreatorProfile(profile) {
 
 function findMatchingCreatorProfileKey(creatorMap, creatorProfile) {
   for (const [profileId, existingProfile] of creatorMap.entries()) {
+    const candidateCharacterUserId = getCreatorProfileCharacterUserId(creatorProfile);
+    const existingCharacterUserId = getCreatorProfileCharacterUserId(existingProfile);
+
     if (
+      candidateCharacterUserId &&
+      existingCharacterUserId &&
+      candidateCharacterUserId === existingCharacterUserId
+    ) {
+      return profileId;
+    }
+
+    if (!candidateCharacterUserId && !existingCharacterUserId &&
       creatorProfile.userId &&
       existingProfile &&
       typeof existingProfile.userId === "string" &&
@@ -3195,8 +3800,8 @@ async function resolveCreatorProfile(profileUrl) {
   });
   const creatorProfile = normalizeCreatorProfiles([
     {
-      ...(response && response.profile && typeof response.profile === "object" ? response.profile : {}),
       permalink: normalizedUrl,
+      ...(response && response.profile && typeof response.profile === "object" ? response.profile : {}),
     },
   ])[0];
 
@@ -3211,63 +3816,6 @@ async function resolveCreatorProfile(profileUrl) {
   }
 
   return enrichCreatorProfile(creatorProfile);
-}
-
-async function refreshWeakCreatorProfiles() {
-  if (activeRun) {
-    return;
-  }
-
-  const creatorProfiles = normalizeCreatorProfiles(currentState.creatorProfiles);
-  if (!creatorProfiles.length) {
-    return;
-  }
-
-  let didChange = false;
-  const nextProfiles = [];
-
-  for (const creatorProfile of creatorProfiles) {
-    if (
-      !shouldRefreshCreatorProfileMetadata(creatorProfile) ||
-      typeof creatorProfile.permalink !== "string" ||
-      !creatorProfile.permalink
-    ) {
-      nextProfiles.push(creatorProfile);
-      continue;
-    }
-
-    try {
-      const refreshedProfile = await resolveCreatorProfile(creatorProfile.permalink);
-      const mergedProfile = normalizeCreatorProfiles([
-        {
-          ...creatorProfile,
-          ...refreshedProfile,
-          profileId: creatorProfile.profileId,
-        },
-      ])[0];
-
-      nextProfiles.push(mergedProfile || creatorProfile);
-      didChange =
-        didChange ||
-        JSON.stringify(mergedProfile || creatorProfile) !== JSON.stringify(creatorProfile);
-    } catch (_error) {
-      nextProfiles.push(creatorProfile);
-    }
-  }
-
-  if (!didChange) {
-    return;
-  }
-
-  await setState({
-    creatorProfiles: nextProfiles,
-    selectedCreatorProfileIds: normalizeSelectedCreatorProfileIds(
-      nextProfiles,
-      currentState.selectedCreatorProfileIds,
-      [],
-      { allowEmpty: true },
-    ),
-  });
 }
 
 async function addCreatorProfile(profileUrl) {
@@ -3643,6 +4191,7 @@ async function downloadSelected() {
     throw new Error("Select at least one video before downloading.");
   }
 
+  setKeepAwakeEnabled(true);
   activeRun = (async () => {
     try {
       await performArchiveDownloadRun(selectedItems, {
@@ -3657,7 +4206,11 @@ async function downloadSelected() {
             : `Saved a ZIP archive with ${completed} item(s) and ${failed} skipped item(s).`,
       });
     } finally {
-      await cleanupHiddenTab();
+      try {
+        await cleanupHiddenTab();
+      } finally {
+        setKeepAwakeEnabled(false);
+      }
     }
   })();
 
@@ -3697,6 +4250,7 @@ async function beginSelectedDownload() {
     message: `Building a ZIP archive for ${selectedItems.length} selected item(s)...`,
   });
 
+  setKeepAwakeEnabled(true);
   activeRun = (async () => {
     try {
       await performArchiveDownloadRun(selectedItems, {
@@ -3712,7 +4266,11 @@ async function beginSelectedDownload() {
             : `Saved a ZIP archive with ${completed} item(s) and ${failed} skipped item(s).`,
       });
     } finally {
-      await cleanupHiddenTab();
+      try {
+        await cleanupHiddenTab();
+      } finally {
+        setKeepAwakeEnabled(false);
+      }
     }
   })();
 
@@ -3742,6 +4300,7 @@ async function resumeDownloads() {
       (Number(currentState.completed) || 0) +
       (Array.isArray(currentState.failedItems) ? currentState.failedItems.length : 0);
 
+  setKeepAwakeEnabled(true);
   activeRun = (async () => {
     try {
       await performDownloadRun(pendingItems, {
@@ -3775,7 +4334,11 @@ async function resumeDownloads() {
                   : `Finished with ${completed} success(es) and ${failed} failure(s).`,
       });
     } finally {
-      await cleanupHiddenTab();
+      try {
+        await cleanupHiddenTab();
+      } finally {
+        setKeepAwakeEnabled(false);
+      }
     }
   })();
 
@@ -3800,6 +4363,7 @@ async function retryFailed() {
     throw new Error("There are no failed downloads to retry.");
   }
 
+  setKeepAwakeEnabled(true);
   activeRun = (async () => {
     try {
       await performArchiveDownloadRun(retryItems, {
@@ -3814,7 +4378,11 @@ async function retryFailed() {
             : `Saved a recovery ZIP archive with ${failed} remaining failure(s).`,
       });
     } finally {
-      await cleanupHiddenTab();
+      try {
+        await cleanupHiddenTab();
+      } finally {
+        setKeepAwakeEnabled(false);
+      }
     }
   })();
 
@@ -4217,7 +4785,9 @@ async function collectItems(sources, maxVideos, options = {}) {
   const selectedCreatorProfileIds = Array.isArray(options.selectedCreatorProfileIds)
     ? options.selectedCreatorProfileIds
     : currentState.selectedCreatorProfileIds;
+  const enableVolatileBackup = options.enableVolatileBackup === true;
   let partialWarning = "";
+  let backedUpItemCount = 0;
 
   for (let sourceIndex = 0; sourceIndex < sources.length; sourceIndex += 1) {
     throwIfFetchAbortRequested();
@@ -4424,6 +4994,7 @@ async function collectItems(sources, maxVideos, options = {}) {
                   creatorProfiles: currentState.creatorProfiles,
                   selectedCreatorProfileIds,
                   knownItemKeys,
+                  enableVolatileBackup,
                   onProgress: async ({ count, pageNumber, message }) => {
                     await setState({
                       fetchedCount: itemMap.size + count,
@@ -4452,12 +5023,20 @@ async function collectItems(sources, maxVideos, options = {}) {
       items: sourceResult.items,
       syncMode,
       isExhaustive: sourceResult.isExhaustive === true,
+      backupItemCount: Number.isFinite(Number(sourceResult.backedUpItemCount))
+        ? Math.max(0, Number(sourceResult.backedUpItemCount))
+        : 0,
+      usesVolatileBackup: sourceResult.usesVolatileBackup === true,
       selectionSignature:
         getSourceSelectionSignature(source, {
+          creatorProfiles: currentState.creatorProfiles,
           selectedCharacterAccountIds,
           selectedCreatorProfileIds,
         }),
     });
+    backedUpItemCount += Number.isFinite(Number(sourceResult.backedUpItemCount))
+      ? Math.max(0, Number(sourceResult.backedUpItemCount))
+      : 0;
 
     for (const item of sourceResult.items) {
       const key = getItemKey(item);
@@ -4490,17 +5069,18 @@ async function collectItems(sources, maxVideos, options = {}) {
     }
 
     await setState({
-      fetchedCount: itemMap.size,
+      fetchedCount: itemMap.size + backedUpItemCount,
+      backedUpItemCount,
       fetchProgress: getNextFetchProgress({
         stage: "fetching-source",
         stageLabel: `Loaded ${sourceLabel}`,
-        detail: `${itemMap.size} item(s) found so far.`,
+        detail: `${(itemMap.size + backedUpItemCount).toLocaleString()} item(s) found so far.`,
         progressRatio: getFetchSourceCompleteRatio(sourceIndex, sources.length),
         currentSource: source,
         currentSourceLabel: sourceLabel,
         currentSourceIndex: sourceIndex + 1,
         totalSources: sources.length,
-        itemsFound: itemMap.size,
+        itemsFound: itemMap.size + backedUpItemCount,
         processedCount: sourceIndex + 1,
         totalCount: sources.length,
       }),
@@ -4518,6 +5098,7 @@ async function collectItems(sources, maxVideos, options = {}) {
     creatorIds: [...creatorIds],
     partialWarning,
     sourceResults,
+    backedUpItemCount,
   };
 }
 
@@ -4578,6 +5159,43 @@ function didPageContainOnlyKnownItems(items, knownItemKeys) {
   return pageItems.every((item) => knownKeys.has(item.key || getItemKey(item)));
 }
 
+function buildCreatedAtCursorFromItems(items, cursorKind = "sv2_created_at") {
+  const pageItems = Array.isArray(items) ? items : [];
+  for (let index = pageItems.length - 1; index >= 0; index -= 1) {
+    const item = pageItems[index];
+    const timestampMs = getComparableItemTimestamp(item);
+    if (!Number.isFinite(timestampMs) || timestampMs <= 0) {
+      continue;
+    }
+
+    try {
+      return btoa(JSON.stringify({
+        kind: cursorKind,
+        created_at: timestampMs / 1000,
+      }));
+    } catch (_error) {
+      return "";
+    }
+  }
+
+  return "";
+}
+
+function resolveNextProfileFeedCursor(page, items, cursor, previousCursor, cursorKind = "sv2_created_at") {
+  const explicitCursor =
+    page && typeof page.nextCursor === "string" && page.nextCursor ? page.nextCursor : "";
+  if (explicitCursor && explicitCursor !== cursor && explicitCursor !== previousCursor) {
+    return explicitCursor;
+  }
+
+  const derivedCursor = buildCreatedAtCursorFromItems(items, cursorKind);
+  if (derivedCursor && derivedCursor !== cursor && derivedCursor !== previousCursor) {
+    return derivedCursor;
+  }
+
+  return "";
+}
+
 async function fetchAllProfileItems(options = {}) {
   const ids = new Set();
   const items = [];
@@ -4618,7 +5236,9 @@ async function fetchAllProfileItems(options = {}) {
       break;
     }
 
-    if (page.rowCount === 0 || !page.nextCursor || page.nextCursor === previousCursor) {
+    const nextCursor = resolveNextProfileFeedCursor(page, page.items, cursor, previousCursor);
+
+    if (page.rowCount === 0 || !nextCursor) {
       isExhaustive = !(maxItems && items.length >= maxItems);
       break;
     }
@@ -4628,7 +5248,7 @@ async function fetchAllProfileItems(options = {}) {
     }
 
     previousCursor = cursor;
-    cursor = page.nextCursor;
+    cursor = nextCursor;
   }
 
   return {
@@ -4775,7 +5395,9 @@ async function fetchAllLikesItems(options = {}) {
       break;
     }
 
-    if (page.rowCount === 0 || !page.nextCursor || page.nextCursor === previousCursor) {
+    const nextCursor = resolveNextProfileFeedCursor(page, page.items, cursor, previousCursor);
+
+    if (page.rowCount === 0 || !nextCursor) {
       isExhaustive = !(maxItems && items.length >= maxItems);
       break;
     }
@@ -4785,7 +5407,7 @@ async function fetchAllLikesItems(options = {}) {
     }
 
     previousCursor = cursor;
-    cursor = page.nextCursor;
+    cursor = nextCursor;
   }
 
   return {
@@ -4801,14 +5423,15 @@ async function fetchAllCharacterAppearanceItems(options = {}) {
   const items = [];
   const maxItems = getMaxVideosSetting({ maxVideos: options.maxItems });
   const knownItemKeys = options.knownItemKeys instanceof Set ? options.knownItemKeys : null;
+  const maxPageCount = CREATOR_PROFILE_FEED_MAX_PAGE_CAP;
   let isExhaustive = false;
   let cursor = null;
   let previousCursor = null;
 
-  for (let pageNumber = 0; pageNumber < 250; pageNumber += 1) {
+  for (let pageNumber = 0; pageNumber < maxPageCount; pageNumber += 1) {
     throwIfFetchAbortRequested();
     const page = await fetchSourceDataFromTab("characters", {
-      limit: CHARACTERS_BATCH_LIMIT,
+      limit: CREATOR_PROFILE_FEED_LIMIT,
       cursor,
     });
 
@@ -4834,7 +5457,9 @@ async function fetchAllCharacterAppearanceItems(options = {}) {
       break;
     }
 
-    if (page.rowCount === 0 || !page.nextCursor || page.nextCursor === previousCursor) {
+    const nextCursor = resolveNextProfileFeedCursor(page, page.items, cursor, previousCursor);
+
+    if (page.rowCount === 0 || !nextCursor) {
       isExhaustive = !(maxItems && items.length >= maxItems);
       break;
     }
@@ -4844,7 +5469,7 @@ async function fetchAllCharacterAppearanceItems(options = {}) {
     }
 
     previousCursor = cursor;
-    cursor = page.nextCursor;
+    cursor = nextCursor;
   }
 
   return {
@@ -5059,6 +5684,36 @@ function isCanonicalCreatorUserId(value) {
   return typeof value === "string" && /^user-[A-Za-z0-9_-]+$/.test(value);
 }
 
+function isCharacterAccountUserId(value) {
+  return typeof value === "string" && /^ch_[A-Za-z0-9_-]+$/.test(value);
+}
+
+function getCreatorProfileCharacterUserId(profile) {
+  if (!profile || typeof profile !== "object") {
+    return "";
+  }
+
+  if (isCharacterAccountUserId(profile.characterUserId)) {
+    return profile.characterUserId;
+  }
+
+  const profileData =
+    profile.profileData && typeof profile.profileData === "object" ? profile.profileData : null;
+  const candidate = profileData
+    ? typeof profileData.user_id === "string"
+      ? profileData.user_id
+      : typeof profileData.userId === "string"
+        ? profileData.userId
+        : ""
+    : "";
+
+  return isCharacterAccountUserId(candidate) ? candidate : "";
+}
+
+function isCharacterCreatorProfile(profile) {
+  return Boolean(getCreatorProfileCharacterUserId(profile));
+}
+
 function getCreatorLookupId(creatorProfile) {
   if (!creatorProfile || typeof creatorProfile !== "object") {
     return "";
@@ -5083,6 +5738,69 @@ function getCreatorLookupId(creatorProfile) {
   }
 
   return "";
+}
+
+function getCreatorProfileExpectedCameoCount(profile) {
+  const profileData =
+    profile && profile.profileData && typeof profile.profileData === "object"
+      ? profile.profileData
+      : null;
+  const candidates = [
+    profileData && profileData.cameo_count,
+    profileData && profileData.cameoCount,
+    profileData && profileData.appearance_count,
+    profileData && profileData.appearanceCount,
+  ];
+
+  for (const candidate of candidates) {
+    if (typeof candidate === "number" && Number.isFinite(candidate) && candidate > 0) {
+      return Math.floor(candidate);
+    }
+  }
+
+  return 0;
+}
+
+function shouldFetchCreatorOfficialPosts(profile) {
+  return normalizeCreatorFetchPreferences(profile).includeOfficialPosts === true;
+}
+
+function shouldFetchCreatorCommunityPosts(profile) {
+  return normalizeCreatorFetchPreferences(profile).includeCommunityPosts === true;
+}
+
+function getCreatorProfileExpectedItemCount(profile) {
+  let expectedCount = 0;
+
+  if (shouldFetchCreatorOfficialPosts(profile)) {
+    expectedCount += getCreatorProfileExpectedPostCount(profile);
+  }
+
+  if (shouldFetchCreatorCommunityPosts(profile)) {
+    expectedCount += getCreatorProfileExpectedCameoCount(profile);
+  }
+
+  return expectedCount;
+}
+
+function createCharacterAccountFromCreatorProfile(profile) {
+  const characterUserId = getCreatorProfileCharacterUserId(profile);
+  if (!characterUserId) {
+    return null;
+  }
+
+  return normalizeCharacterAccounts([
+    {
+      userId: characterUserId,
+      username: typeof profile.username === "string" ? profile.username : "",
+      displayName: typeof profile.displayName === "string" ? profile.displayName : "",
+      postCount: getCreatorProfileExpectedPostCount(profile),
+      cameoCount: getCreatorProfileExpectedCameoCount(profile),
+      permalink: typeof profile.permalink === "string" ? profile.permalink : null,
+      profilePictureUrl:
+        typeof profile.profilePictureUrl === "string" ? profile.profilePictureUrl : null,
+    },
+  ])[0] || null;
 }
 
 async function ensureCreatorProfileReadyForFetch(creatorProfile) {
@@ -5135,6 +5853,7 @@ async function fetchAllCreatorFeedItems(creatorProfile, options = {}) {
   const maxItems = getMaxVideosSetting({ maxVideos: options.maxItems });
   const knownItemKeys = options.knownItemKeys instanceof Set ? options.knownItemKeys : null;
   const maxPageCount = getCreatorFeedPageCap(creatorProfile);
+  const includeCommunityRows = options.includeCommunityRows === true;
   let isExhaustive = false;
   let cursor = null;
   let previousCursor = null;
@@ -5164,6 +5883,7 @@ async function fetchAllCreatorFeedItems(creatorProfile, options = {}) {
       ids.add(id);
     }
 
+    const allPageItems = [];
     const pageItems = [];
     for (const item of page.items) {
       const mappedItem = appendCreatorProfileContext(item, creatorProfile, {
@@ -5172,6 +5892,12 @@ async function fetchAllCreatorFeedItems(creatorProfile, options = {}) {
             ? "Creator Cast In"
             : "Creator Posts",
       });
+      allPageItems.push(mappedItem);
+
+      if (!includeCommunityRows && mappedItem.sourcePage === "creatorCameos") {
+        continue;
+      }
+
       pageItems.push(mappedItem);
 
       const itemKey = getCreatorFeedItemKey(mappedItem);
@@ -5205,12 +5931,9 @@ async function fetchAllCreatorFeedItems(creatorProfile, options = {}) {
       break;
     }
 
-    if (
-      page.rowCount === 0 ||
-      !page.nextCursor ||
-      page.nextCursor === cursor ||
-      page.nextCursor === previousCursor
-    ) {
+    const nextCursor = resolveNextProfileFeedCursor(page, allPageItems, cursor, previousCursor);
+
+    if (page.rowCount === 0 || !nextCursor) {
       isExhaustive = !(maxItems && itemMap.size >= maxItems);
       break;
     }
@@ -5220,7 +5943,7 @@ async function fetchAllCreatorFeedItems(creatorProfile, options = {}) {
     }
 
     previousCursor = cursor;
-    cursor = page.nextCursor;
+    cursor = nextCursor;
   }
 
   return {
@@ -5236,16 +5959,17 @@ async function fetchAllCreatorCameoItems(creatorProfile, options = {}) {
   const items = [];
   const maxItems = getMaxVideosSetting({ maxVideos: options.maxItems });
   const knownItemKeys = options.knownItemKeys instanceof Set ? options.knownItemKeys : null;
+  const maxPageCount = getProfileFeedPageCap(getCreatorProfileExpectedCameoCount(creatorProfile));
   let isExhaustive = false;
   let cursor = null;
   let previousCursor = null;
 
-  for (let pageNumber = 0; pageNumber < 250; pageNumber += 1) {
+  for (let pageNumber = 0; pageNumber < maxPageCount; pageNumber += 1) {
     throwIfFetchAbortRequested();
     const page = await fetchSourceDataFromTab("creatorCameos", {
       routeUrl: getCreatorRouteUrl(creatorProfile),
       creatorId: getCreatorLookupId(creatorProfile),
-      limit: CHARACTERS_BATCH_LIMIT,
+      limit: CREATOR_PROFILE_FEED_LIMIT,
       cursor,
     });
 
@@ -5280,7 +6004,9 @@ async function fetchAllCreatorCameoItems(creatorProfile, options = {}) {
       break;
     }
 
-    if (page.rowCount === 0 || !page.nextCursor || page.nextCursor === previousCursor) {
+    const nextCursor = resolveNextProfileFeedCursor(page, pageItems, cursor, previousCursor);
+
+    if (page.rowCount === 0 || !nextCursor) {
       isExhaustive = !(maxItems && items.length >= maxItems);
       break;
     }
@@ -5290,7 +6016,7 @@ async function fetchAllCreatorCameoItems(creatorProfile, options = {}) {
     }
 
     previousCursor = cursor;
-    cursor = page.nextCursor;
+    cursor = nextCursor;
   }
 
   return {
@@ -5298,6 +6024,178 @@ async function fetchAllCreatorCameoItems(creatorProfile, options = {}) {
     items,
     partialWarning: "",
     isExhaustive,
+  };
+}
+
+async function fetchAllCreatorCharacterPublishedItems(creatorProfile, options = {}) {
+  const characterAccount = createCharacterAccountFromCreatorProfile(creatorProfile);
+  if (!characterAccount || characterAccount.postCount <= 0) {
+    return {
+      ids: [],
+      items: [],
+      partialWarning: "",
+      isExhaustive: true,
+    };
+  }
+
+  const result = await fetchAllCharacterAccountPublishedItems(characterAccount, {
+    ...options,
+    knownItemKeys: null,
+  });
+
+  return {
+    ...result,
+    items: result.items.map((item) =>
+      appendCreatorProfileContext(
+        {
+          ...item,
+          sourcePage: "creatorCharacters",
+          sourceLabel: "Creator Character",
+        },
+        creatorProfile,
+        {
+          sourcePage: "creatorCharacters",
+          categoryLabel: "Character Posts",
+        },
+      ),
+    ),
+  };
+}
+
+async function fetchAllCreatorCharacterCameoItems(creatorProfile, options = {}) {
+  const characterAccount = createCharacterAccountFromCreatorProfile(creatorProfile);
+  if (!characterAccount) {
+    return {
+      ids: [],
+      items: [],
+      partialWarning: "",
+      isExhaustive: true,
+    };
+  }
+
+  const ids = new Set();
+  const items = [];
+  const maxItems = getMaxVideosSetting({ maxVideos: options.maxItems });
+  const previewLimit = Math.max(
+    1,
+    maxItems ? Math.min(maxItems, VOLATILE_SOURCE_PREVIEW_LIMIT) : VOLATILE_SOURCE_PREVIEW_LIMIT,
+  );
+  const knownItemKeys = options.knownItemKeys instanceof Set ? options.knownItemKeys : null;
+  const maxPageCount = getProfileFeedPageCap(characterAccount.cameoCount);
+  const backupSessionKey =
+    typeof options.volatileBackupSessionKey === "string" ? options.volatileBackupSessionKey : "";
+  const shouldBackupVolatileItems = Boolean(backupSessionKey);
+  let isExhaustive = false;
+  let cursor = null;
+  let previousCursor = null;
+  let totalItemCount = 0;
+  let backedUpItemCount = 0;
+  let usesVolatileBackup = false;
+
+  for (let pageNumber = 0; pageNumber < maxPageCount; pageNumber += 1) {
+    throwIfFetchAbortRequested();
+    const page = await fetchSourceDataFromTab("characterAccountAppearances", {
+      routeUrl: getCreatorRouteUrl(creatorProfile),
+      characterId: characterAccount.userId,
+      limit: CREATOR_PROFILE_FEED_LIMIT,
+      cursor,
+    });
+
+    for (const id of page.ids) {
+      ids.add(id);
+    }
+
+    const pageItems = [];
+    for (const item of page.items) {
+      const mappedItem = appendCreatorProfileContext(
+        {
+          ...item,
+          sourcePage: "creatorCharacterCameos",
+          sourceLabel: "Character Cameo",
+        },
+        creatorProfile,
+        {
+          sourcePage: "creatorCharacterCameos",
+          categoryLabel: "Character Cameos",
+        },
+      );
+      pageItems.push(mappedItem);
+      totalItemCount += 1;
+      if (items.length < previewLimit) {
+        items.push(mappedItem);
+      } else if (shouldBackupVolatileItems) {
+        backedUpItemCount += 1;
+      }
+    }
+
+    if (shouldBackupVolatileItems && pageItems.length > 0) {
+      try {
+        const storedCount = await appendVolatileBackupItems(
+          backupSessionKey,
+          pageItems,
+          {
+            source: "creators",
+            sourcePage: "creatorCharacterCameos",
+            creatorProfileId: creatorProfile.profileId,
+            creatorProfileUsername: creatorProfile.username,
+            characterAccountId: characterAccount.userId,
+            characterAccountUsername: characterAccount.username,
+          },
+        );
+        if (storedCount > 0) {
+          usesVolatileBackup = true;
+        }
+      } catch (error) {
+        console.warn("Failed to persist creator-character cameo backup items.", error);
+      }
+    }
+
+    if (maxItems && totalItemCount > maxItems) {
+      totalItemCount = maxItems;
+      if (items.length > maxItems) {
+        items.length = maxItems;
+      }
+    }
+
+    if (typeof options.onProgress === "function") {
+      await options.onProgress({
+        count: totalItemCount,
+        pageNumber: pageNumber + 1,
+      });
+    }
+
+    throwIfFetchAbortRequested();
+
+    if (didPageContainOnlyKnownItems(pageItems, knownItemKeys)) {
+      break;
+    }
+
+    const nextCursor = resolveNextProfileFeedCursor(page, pageItems, cursor, previousCursor);
+
+    if (page.rowCount === 0 || !nextCursor) {
+      isExhaustive = !(maxItems && totalItemCount >= maxItems);
+      break;
+    }
+
+    if (maxItems && totalItemCount >= maxItems) {
+      break;
+    }
+
+    previousCursor = cursor;
+    cursor = nextCursor;
+  }
+
+  return {
+    ids: [...ids],
+    items,
+    partialWarning:
+      usesVolatileBackup && backedUpItemCount > 0
+        ? `Saved ${backedUpItemCount.toLocaleString()} additional creator-character cameo items to the local backup so the crawl can continue without exhausting Chrome memory. The popup shows a preview.`
+        : "",
+    isExhaustive,
+    totalItemCount,
+    backedUpItemCount,
+    usesVolatileBackup,
   };
 }
 
@@ -5343,7 +6241,9 @@ async function fetchAllCharacterAccountPublishedItems(characterAccount, options 
       break;
     }
 
-    if (page.rowCount === 0 || !page.nextCursor || page.nextCursor === previousCursor) {
+    const nextCursor = resolveNextProfileFeedCursor(page, page.items, cursor, previousCursor);
+
+    if (page.rowCount === 0 || !nextCursor) {
       isExhaustive = !(maxItems && items.length >= maxItems);
       break;
     }
@@ -5353,7 +6253,7 @@ async function fetchAllCharacterAccountPublishedItems(characterAccount, options 
     }
 
     previousCursor = cursor;
-    cursor = page.nextCursor;
+    cursor = nextCursor;
   }
 
   return {
@@ -5447,6 +6347,8 @@ async function fetchAllCharacterItems(options = {}) {
   const partialWarnings = [];
   let totalCount = 0;
   let isExhaustive = true;
+  let backedUpItemCount = 0;
+  let usesVolatileBackup = false;
 
   const mergeResult = (result) => {
     for (const id of result.ids) {
@@ -5459,6 +6361,11 @@ async function fetchAllCharacterItems(options = {}) {
         itemMap.set(key, item);
       }
     }
+
+    backedUpItemCount += Number.isFinite(Number(result.backedUpItemCount))
+      ? Math.max(0, Number(result.backedUpItemCount))
+      : 0;
+    usesVolatileBackup = usesVolatileBackup || result.usesVolatileBackup === true;
   };
 
   const reportProgress = async (messagePrefix) => {
@@ -5555,8 +6462,14 @@ async function fetchAllCreatorItems(options = {}) {
   const partialWarnings = [];
   let totalCount = 0;
   let isExhaustive = true;
+  let backedUpItemCount = 0;
+  let usesVolatileBackup = false;
 
   const mergeResult = (result) => {
+    if (!result || typeof result !== "object") {
+      return;
+    }
+
     for (const id of result.ids) {
       ids.add(id);
     }
@@ -5567,6 +6480,15 @@ async function fetchAllCreatorItems(options = {}) {
         itemMap.set(key, item);
       }
     }
+
+    if (typeof result.partialWarning === "string" && result.partialWarning) {
+      partialWarnings.push(result.partialWarning);
+    }
+
+    backedUpItemCount += Number.isFinite(Number(result.backedUpItemCount))
+      ? Math.max(0, Number(result.backedUpItemCount))
+      : 0;
+    usesVolatileBackup = usesVolatileBackup || result.usesVolatileBackup === true;
   };
 
   const reportProgress = async (messagePrefix) => {
@@ -5584,6 +6506,81 @@ async function fetchAllCreatorItems(options = {}) {
   for (const creatorProfile of selectedCreatorProfiles) {
     throwIfFetchAbortRequested();
     const creatorProfileForFetch = await ensureCreatorProfileReadyForFetch(creatorProfile);
+    const characterAccount = createCharacterAccountFromCreatorProfile(creatorProfileForFetch);
+    const includeOfficialPosts = shouldFetchCreatorOfficialPosts(creatorProfileForFetch);
+    const includeCommunityPosts = shouldFetchCreatorCommunityPosts(creatorProfileForFetch);
+    const creatorEffectiveBaseCount = itemMap.size + backedUpItemCount;
+
+    if (!includeOfficialPosts && !includeCommunityPosts) {
+      continue;
+    }
+
+    if (characterAccount) {
+      try {
+        if (includeOfficialPosts) {
+          const characterBaseCount = creatorEffectiveBaseCount;
+          const characterPublishedMaxRemaining = getRemainingFetchCapacity(characterBaseCount, maxItems);
+          if (characterPublishedMaxRemaining === 0) {
+            isExhaustive = false;
+            break;
+          }
+
+          const creatorCharacterResult = await fetchAllCreatorCharacterPublishedItems(
+            creatorProfileForFetch,
+            {
+              maxItems: characterPublishedMaxRemaining,
+              knownItemKeys,
+              onProgress: async ({ count }) => {
+                totalCount = maxItems
+                  ? Math.min(maxItems, characterBaseCount + count)
+                  : characterBaseCount + count;
+                await reportProgress(`Fetching ${creatorProfileForFetch.displayName} official character posts...`);
+              },
+            },
+          );
+          mergeResult(creatorCharacterResult);
+          isExhaustive = isExhaustive && creatorCharacterResult.isExhaustive === true;
+        }
+
+        if (includeCommunityPosts) {
+          const characterCameoBaseCount = itemMap.size + backedUpItemCount;
+          const characterCameoMaxRemaining = getRemainingFetchCapacity(characterCameoBaseCount, maxItems);
+          if (characterCameoMaxRemaining === 0) {
+            isExhaustive = false;
+            break;
+          }
+
+          const creatorCharacterCameoResult = await fetchAllCreatorCharacterCameoItems(
+            creatorProfileForFetch,
+            {
+              maxItems: characterCameoMaxRemaining,
+              knownItemKeys,
+              volatileBackupSessionKey:
+                options.enableVolatileBackup === true ? activeVolatileBackupSessionKey : "",
+              onProgress: async ({ count }) => {
+                totalCount = maxItems
+                  ? Math.min(maxItems, characterCameoBaseCount + count)
+                  : characterCameoBaseCount + count;
+                await reportProgress(`Fetching ${creatorProfileForFetch.displayName} community character cameos...`);
+              },
+            },
+          );
+          mergeResult(creatorCharacterCameoResult);
+          isExhaustive = isExhaustive && creatorCharacterCameoResult.isExhaustive === true;
+        }
+        continue;
+      } catch (error) {
+        if (isControlError(error, "abort")) {
+          throw error;
+        }
+
+        partialWarnings.push(
+          `${creatorProfileForFetch.displayName}: ${getErrorMessage(error)}`,
+        );
+        continue;
+      }
+    }
+
     const creatorLookupId = isCanonicalCreatorUserId(creatorProfileForFetch.userId)
       ? creatorProfileForFetch.userId
       : "";
@@ -5596,28 +6593,56 @@ async function fetchAllCreatorItems(options = {}) {
     }
 
     try {
-      const publishedBaseCount = itemMap.size;
-      const maxRemaining = getRemainingFetchCapacity(publishedBaseCount, maxItems);
-      if (maxRemaining === 0) {
-        isExhaustive = false;
-        break;
+      if (includeOfficialPosts) {
+        const publishedBaseCount = itemMap.size + backedUpItemCount;
+        const maxRemaining = getRemainingFetchCapacity(publishedBaseCount, maxItems);
+        if (maxRemaining === 0) {
+          isExhaustive = false;
+          break;
+        }
+
+        const creatorFeedResult = await fetchAllCreatorFeedItems(
+          creatorProfileForFetch,
+          {
+            maxItems: maxRemaining,
+            knownItemKeys,
+            includeCommunityRows: false,
+            onProgress: async ({ count }) => {
+              totalCount = maxItems
+                ? Math.min(maxItems, publishedBaseCount + count)
+                : publishedBaseCount + count;
+              await reportProgress(`Fetching ${creatorProfileForFetch.displayName} official posts...`);
+            },
+          },
+        );
+        mergeResult(creatorFeedResult);
+        isExhaustive = isExhaustive && creatorFeedResult.isExhaustive === true;
       }
 
-      const creatorFeedResult = await fetchAllCreatorFeedItems(
-        creatorProfileForFetch,
-        {
-          maxItems: maxRemaining,
-          knownItemKeys,
-          onProgress: async ({ count }) => {
-            totalCount = maxItems
-              ? Math.min(maxItems, publishedBaseCount + count)
-              : publishedBaseCount + count;
-            await reportProgress(`Fetching ${creatorProfileForFetch.displayName} creator feed...`);
+      if (includeCommunityPosts) {
+        const cameoBaseCount = itemMap.size + backedUpItemCount;
+        const cameoMaxRemaining = getRemainingFetchCapacity(cameoBaseCount, maxItems);
+        if (cameoMaxRemaining === 0) {
+          isExhaustive = false;
+          break;
+        }
+
+        const creatorCameoResult = await fetchAllCreatorCameoItems(
+          creatorProfileForFetch,
+          {
+            maxItems: cameoMaxRemaining,
+            knownItemKeys,
+            onProgress: async ({ count }) => {
+              totalCount = maxItems
+                ? Math.min(maxItems, cameoBaseCount + count)
+                : cameoBaseCount + count;
+              await reportProgress(`Fetching ${creatorProfileForFetch.displayName} community cameo posts...`);
+            },
           },
-        },
-      );
-      mergeResult(creatorFeedResult);
-      isExhaustive = isExhaustive && creatorFeedResult.isExhaustive === true;
+        );
+        mergeResult(creatorCameoResult);
+        isExhaustive = isExhaustive && creatorCameoResult.isExhaustive === true;
+      }
     } catch (error) {
       if (isControlError(error, "abort")) {
         throw error;
@@ -5639,6 +6664,8 @@ async function fetchAllCreatorItems(options = {}) {
     items,
     partialWarning: joinPartialWarnings(partialWarnings),
     isExhaustive,
+    backedUpItemCount,
+    usesVolatileBackup,
   };
 }
 
@@ -5783,6 +6810,8 @@ async function fetchSourceDataFromTab(source, options) {
               ? "character account"
               : source === "characterAccountPosts"
                 ? "character account post"
+                : source === "characterAccountAppearances"
+                  ? "character account appearances"
                 : source === "creatorPublished"
                   ? "creator posts"
                   : source === "creatorCameos"
@@ -6913,20 +7942,61 @@ function injectedFetchSource(config) {
       return typeof value === "string" && /^user-[A-Za-z0-9_-]+$/.test(value);
     }
 
+    function isCharacterAccountUserId(value) {
+      return typeof value === "string" && /^ch_[A-Za-z0-9_-]+$/.test(value);
+    }
+
     function normalizeCreatorProfilePayload(payload, fallbackUsername = "", fallbackPermalink = null) {
       if (!payload || typeof payload !== "object") {
         return null;
       }
 
-      const userId = pickFirstString([
+      const ownerProfile =
+        payload.owner_profile && typeof payload.owner_profile === "object"
+          ? payload.owner_profile
+          : payload.ownerProfile && typeof payload.ownerProfile === "object"
+            ? payload.ownerProfile
+            : null;
+      const ownerUserId = pickFirstString([
+        ownerProfile && ownerProfile.user_id,
+        ownerProfile && ownerProfile.userId,
+      ]);
+      const topLevelUserId = pickFirstString([
         payload.user_id,
         payload.userId,
-        payload.owner_profile && payload.owner_profile.user_id,
-        payload.owner_profile && payload.owner_profile.userId,
       ]);
+      const canonicalUserId = pickFirstString([
+        ownerProfile && isCanonicalCreatorUserId(ownerUserId) ? ownerUserId : "",
+        isCanonicalCreatorUserId(topLevelUserId) ? topLevelUserId : "",
+      ]);
+      const characterUserId = isCharacterAccountUserId(topLevelUserId) ? topLevelUserId : "";
+      const visibleProfile = payload;
+      const canonicalProfile =
+        ownerProfile && isCanonicalCreatorUserId(ownerUserId) ? ownerProfile : payload;
+      const userId = pickFirstString([
+        canonicalUserId,
+        canonicalProfile && canonicalProfile.user_id,
+        canonicalProfile && canonicalProfile.userId,
+      ]);
+      const ownerUsername = normalizeCreatorUsername(
+        pickFirstString([
+          ownerProfile && ownerProfile.username,
+          ownerProfile && ownerProfile.user_name,
+          ownerProfile && ownerProfile.userName,
+          ownerProfile && ownerProfile.handle,
+        ]),
+      );
       const username =
         normalizeCreatorUsername(
           pickFirstString([
+            visibleProfile && visibleProfile.username,
+            visibleProfile && visibleProfile.user_name,
+            visibleProfile && visibleProfile.userName,
+            visibleProfile && visibleProfile.handle,
+            canonicalProfile && canonicalProfile.username,
+            canonicalProfile && canonicalProfile.user_name,
+            canonicalProfile && canonicalProfile.userName,
+            canonicalProfile && canonicalProfile.handle,
             payload.username,
             payload.user_name,
             payload.userName,
@@ -6937,6 +8007,14 @@ function injectedFetchSource(config) {
       const permalink =
         normalizeAbsoluteUrl(
           pickFirstString([
+            visibleProfile && visibleProfile.permalink,
+            visibleProfile && visibleProfile.url,
+            visibleProfile && visibleProfile.profile_url,
+            visibleProfile && visibleProfile.profileUrl,
+            canonicalProfile && canonicalProfile.permalink,
+            canonicalProfile && canonicalProfile.url,
+            canonicalProfile && canonicalProfile.profile_url,
+            canonicalProfile && canonicalProfile.profileUrl,
             payload.permalink,
             payload.url,
             payload.profile_url,
@@ -6947,6 +8025,18 @@ function injectedFetchSource(config) {
       const displayName =
         normalizeCreatorDisplayName(
           pickFirstString([
+            visibleProfile && visibleProfile.display_name,
+            visibleProfile && visibleProfile.displayName,
+            visibleProfile && visibleProfile.public_figure_name,
+            visibleProfile && visibleProfile.full_name,
+            visibleProfile && visibleProfile.fullName,
+            visibleProfile && visibleProfile.name,
+            canonicalProfile && canonicalProfile.display_name,
+            canonicalProfile && canonicalProfile.displayName,
+            canonicalProfile && canonicalProfile.public_figure_name,
+            canonicalProfile && canonicalProfile.full_name,
+            canonicalProfile && canonicalProfile.fullName,
+            canonicalProfile && canonicalProfile.name,
             payload.display_name,
             payload.displayName,
             payload.public_figure_name,
@@ -6959,8 +8049,11 @@ function injectedFetchSource(config) {
         username ||
         userId ||
         "";
-      const profilePictureUrl = getProfilePictureUrl(payload);
-      const profileId = userId || username || permalink || "";
+      const profilePictureUrl =
+        getProfilePictureUrl(visibleProfile) ||
+        getProfilePictureUrl(canonicalProfile) ||
+        getProfilePictureUrl(payload);
+      const profileId = characterUserId || userId || username || permalink || "";
 
       if (!profileId) {
         return null;
@@ -6969,6 +8062,9 @@ function injectedFetchSource(config) {
       return {
         profileId,
         userId: userId || "",
+        ownerUserId: userId || "",
+        ownerUsername: ownerUsername || "",
+        characterUserId,
         username,
         displayName,
         permalink,
@@ -7612,6 +8708,22 @@ function injectedFetchSource(config) {
         payload && payload.data,
         payload && payload.results,
         payload && payload.drafts,
+      ]);
+    }
+
+    function getPostListingRows(payload) {
+      if (Array.isArray(payload)) {
+        return payload;
+      }
+
+      return pickFirstArray([
+        payload && payload.items,
+        payload && payload.data,
+        payload && payload.results,
+        payload && payload.posts,
+        payload && payload.entries,
+        payload && payload.feed,
+        payload && payload.nodes,
       ]);
     }
 
@@ -8288,7 +9400,7 @@ function injectedFetchSource(config) {
     }
 
     function normalizePostListingResponse(payload, config = {}) {
-      const rows = Array.isArray(payload && payload.items) ? payload.items : [];
+      const rows = getPostListingRows(payload);
       const ids = [];
       const items = [];
       const unresolvedPosts = [];
@@ -8580,6 +9692,66 @@ function injectedFetchSource(config) {
         } catch (error) {
           lastError = error;
         }
+      }
+
+      throw lastError || new Error("Sora did not return a valid response.");
+    }
+
+    async function fetchPreferredNormalizedResult(urls, normalizePayload) {
+      let firstSuccessfulResult = null;
+      let bestResult = null;
+      let bestScore = -1;
+      let bestPaginatedResult = null;
+      let bestPaginatedScore = -1;
+      let lastError = null;
+
+      for (const url of urls) {
+        try {
+          const payload = await fetchJson(url);
+          const normalizedResult =
+            typeof normalizePayload === "function" ? normalizePayload(payload) : payload;
+
+          if (!firstSuccessfulResult) {
+            firstSuccessfulResult = normalizedResult;
+          }
+
+          const itemCount = Array.isArray(normalizedResult && normalizedResult.items)
+            ? normalizedResult.items.length
+            : 0;
+          const rowCount = Number.isFinite(Number(normalizedResult && normalizedResult.rowCount))
+            ? Number(normalizedResult.rowCount)
+            : 0;
+          const score = Math.max(itemCount, rowCount);
+          const hasNextCursor = Boolean(
+            normalizedResult &&
+              typeof normalizedResult.nextCursor === "string" &&
+              normalizedResult.nextCursor,
+          );
+
+          if (score > bestScore) {
+            bestScore = score;
+            bestResult = normalizedResult;
+          }
+
+          if (hasNextCursor && score > 0 && score > bestPaginatedScore) {
+            bestPaginatedScore = score;
+            bestPaginatedResult = normalizedResult;
+          }
+        } catch (error) {
+          lastError = error;
+        }
+      }
+
+      if (bestPaginatedResult) {
+        return bestPaginatedResult;
+      }
+
+      if (bestResult) {
+        return bestResult;
+      }
+
+      if (firstSuccessfulResult) {
+        return firstSuccessfulResult;
       }
 
       throw lastError || new Error("Sora did not return a valid response.");
@@ -9119,12 +10291,92 @@ function injectedFetchSource(config) {
         }
         candidateUrls.push(feedUrl.toString());
 
-        const payload = await fetchFirstSuccessfulJson(candidateUrls);
-        return normalizePostListingResponse(payload, {
-          sourcePage: "characters",
-          sourceLabel: "Character",
-          requireOwner: false,
-        });
+        const normalized = await fetchPreferredNormalizedResult(candidateUrls, (payload) =>
+          normalizePostListingResponse(payload, {
+            sourcePage: "characters",
+            sourceLabel: "Character",
+            requireOwner: false,
+            collectUnresolvedPosts: true,
+            cursorKind: "sv2_created_at",
+            requestCursor: typeof options.cursor === "string" ? options.cursor : "",
+          }),
+        );
+        if (Array.isArray(normalized.unresolvedPosts) && normalized.unresolvedPosts.length) {
+          const recoveredItems = await resolveMissingPostItemsFromDetails(normalized.unresolvedPosts);
+          if (recoveredItems.length) {
+            const recoveredKeys = new Set(
+              normalized.items.map((item) =>
+                `${item.id}:${item.downloadUrl || item.detailUrl || item.attachmentIndex}`,
+              ),
+            );
+            for (const item of recoveredItems) {
+              const itemKey = `${item.id}:${item.downloadUrl || item.detailUrl || item.attachmentIndex}`;
+              if (recoveredKeys.has(itemKey)) {
+                continue;
+              }
+              recoveredKeys.add(itemKey);
+              normalized.items.push(item);
+            }
+            normalized.ids = [...new Set([...normalized.ids, ...recoveredItems.map((item) => item.id)])];
+          }
+        }
+        delete normalized.unresolvedPosts;
+        return normalized;
+      }
+
+      if (source === "characterAccountAppearances") {
+        const characterId =
+          typeof options.characterId === "string" && options.characterId ? options.characterId : "";
+        if (!characterId) {
+          throw new Error("A character account id is required to fetch proxy-account appearances.");
+        }
+
+        const limit = Number(options.limit) || 100;
+        const candidateUrls = [];
+        for (const cut of ["appearances", "nf2"]) {
+          const url = new URL(
+            `/backend/project_y/profile_feed/${encodeURIComponent(characterId)}`,
+            window.location.origin,
+          );
+          url.searchParams.set("limit", String(limit));
+          url.searchParams.set("cut", cut);
+          if (typeof options.cursor === "string" && options.cursor) {
+            url.searchParams.set("cursor", options.cursor);
+          }
+          candidateUrls.push(url.toString());
+        }
+
+        const normalized = await fetchPreferredNormalizedResult(candidateUrls, (payload) =>
+          normalizePostListingResponse(payload, {
+            sourcePage: "creatorCharacterCameos",
+            sourceLabel: "Character Cameo",
+            requireOwner: false,
+            collectUnresolvedPosts: true,
+            cursorKind: "sv2_created_at",
+            requestCursor: typeof options.cursor === "string" ? options.cursor : "",
+          }),
+        );
+        if (Array.isArray(normalized.unresolvedPosts) && normalized.unresolvedPosts.length) {
+          const recoveredItems = await resolveMissingPostItemsFromDetails(normalized.unresolvedPosts);
+          if (recoveredItems.length) {
+            const recoveredKeys = new Set(
+              normalized.items.map((item) =>
+                `${item.id}:${item.downloadUrl || item.detailUrl || item.attachmentIndex}`,
+              ),
+            );
+            for (const item of recoveredItems) {
+              const itemKey = `${item.id}:${item.downloadUrl || item.detailUrl || item.attachmentIndex}`;
+              if (recoveredKeys.has(itemKey)) {
+                continue;
+              }
+              recoveredKeys.add(itemKey);
+              normalized.items.push(item);
+            }
+            normalized.ids = [...new Set([...normalized.ids, ...recoveredItems.map((item) => item.id)])];
+          }
+        }
+        delete normalized.unresolvedPosts;
+        return normalized;
       }
 
       if (source === "characterAccountDrafts") {

@@ -1,0 +1,6 @@
+[     279ms] [ERROR] Failed to load resource: the server responded with a status of 404 (File not found) @ http://127.0.0.1:4187/favicon.ico:0
+[     398ms] [ERROR] Failed to initialize the Save Sora popup. TypeError: Cannot read properties of undefined (reading 'getManifest')
+    at syncAppVersionLabel (http://127.0.0.1:4187/popup/index.js:22:35)
+    at initPopupApp (http://127.0.0.1:4187/popup/index.js:10:3)
+    at http://127.0.0.1:4187/popup.js:10:5 @ http://127.0.0.1:4187/popup.js:12
+[   93725ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_CLOSED @ https://via.placeholder.com/192:0

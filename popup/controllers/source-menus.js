@@ -3,6 +3,7 @@ import {
   addCreatorProfiles,
   removeCreatorProfile,
   requestCharacterAccounts,
+  saveCreatorProfilePreferences,
   saveCharacterSelection,
   saveCreatorSelection,
 } from "../runtime.js";
@@ -16,6 +17,7 @@ import { renderCurrentItems } from "../ui/render.js";
 import { handleSettingsChange } from "./settings.js";
 import {
   closeCreatorDetailsDialog,
+  getCreatorProfileById,
   getSelectionScreenActionState,
   openCreatorDetailsDialog,
   setActiveSourceSelectionTab,
@@ -221,9 +223,61 @@ export function handleCreatorDetailsCancelEvent() {
   closeCreatorDetailsDialog();
 }
 
+export function handleCreatorDetailsChange(event) {
+  const target = event.target;
+  if (!(target instanceof HTMLInputElement) || target.type !== "checkbox") {
+    return;
+  }
+
+  const creatorProfileId =
+    typeof target.dataset.creatorProfileId === "string" ? target.dataset.creatorProfileId : "";
+  const preferenceKey =
+    typeof target.dataset.creatorPreferenceKey === "string"
+      ? target.dataset.creatorPreferenceKey
+      : "";
+
+  if (
+    !creatorProfileId ||
+    (preferenceKey !== "includeOfficialPosts" && preferenceKey !== "includeCommunityPosts")
+  ) {
+    return;
+  }
+
+  void handleCreatorPreferenceChange(creatorProfileId, preferenceKey, target.checked);
+}
+
 export function handleCreatorDialogSubmit(event) {
   event.preventDefault();
   void submitCreatorDialog();
+}
+
+export function handleExportMenuButtonClick(event) {
+  event.preventDefault();
+  toggleExportMenu();
+}
+
+export function handleExportMenuClick(event) {
+  const target = event.target;
+  if (!(target instanceof Element)) {
+    return;
+  }
+
+  const optionButton = target.closest("[data-export-type]");
+  if (!(optionButton instanceof HTMLButtonElement)) {
+    return;
+  }
+
+  event.preventDefault();
+
+  const nextType =
+    typeof optionButton.dataset.exportType === "string" ? optionButton.dataset.exportType : "";
+  if (nextType !== "prompts" && nextType !== "urls") {
+    return;
+  }
+
+  popupState.preferredExportType = nextType;
+  syncExportMenu();
+  closeExportMenu();
 }
 
 export function handleSourceMenuDocumentClick(event) {
@@ -236,6 +290,13 @@ export function handleSourceMenuDocumentClick(event) {
   if (
     target instanceof Element &&
     (target.closest("[data-creator-menu-id]") || target.closest(".selection-option-popover"))
+  ) {
+    return;
+  }
+
+  if (
+    dom.exportControl instanceof HTMLElement &&
+    dom.exportControl.contains(target)
   ) {
     return;
   }
@@ -262,6 +323,7 @@ export function handleSourceMenuDocumentKeydown(event) {
 
 export function closeAllSourceMenus() {
   const closedCreatorActionMenu = closeCreatorActionMenu(false);
+  closeExportMenu();
 
   for (const groupKey of ["overview", "settings", "characterAccounts"]) {
     const group = getSourceMenuGroup(groupKey);
@@ -282,6 +344,35 @@ export function closeAllSourceMenus() {
 export function syncSourceMenuLabels() {
   updateSourceMenuLabel("overview");
   updateSourceMenuLabel("settings");
+}
+
+export function syncExportMenu() {
+  if (dom.exportButtonLabel instanceof HTMLElement) {
+    dom.exportButtonLabel.textContent =
+      popupState.preferredExportType === "urls" ? "Export as URLs" : "Export as Prompts";
+  }
+
+  if (dom.exportMenuButton instanceof HTMLButtonElement) {
+    dom.exportMenuButton.setAttribute("aria-expanded", popupState.exportMenuOpen ? "true" : "false");
+  }
+
+  if (dom.exportControl instanceof HTMLElement) {
+    dom.exportControl.classList.toggle("is-open", popupState.exportMenuOpen);
+  }
+
+  if (dom.exportMenu instanceof HTMLElement) {
+    dom.exportMenu.classList.toggle("hidden", !popupState.exportMenuOpen);
+  }
+
+  for (const option of dom.exportMenuOptions) {
+    if (!(option instanceof HTMLButtonElement)) {
+      continue;
+    }
+
+    const isActive = option.dataset.exportType === popupState.preferredExportType;
+    option.classList.toggle("is-active", isActive);
+    option.setAttribute("aria-pressed", String(isActive));
+  }
 }
 
 export function syncCharacterMenu() {
@@ -387,6 +478,28 @@ function closeCharacterMenu() {
   group.menu.classList.add("hidden");
 }
 
+function toggleExportMenu() {
+  if (!(dom.exportMenuButton instanceof HTMLButtonElement) || dom.exportMenuButton.disabled) {
+    return;
+  }
+
+  const shouldOpen = !popupState.exportMenuOpen;
+  closeAllSourceMenus();
+
+  popupState.exportMenuOpen = shouldOpen;
+  syncExportMenu();
+}
+
+function closeExportMenu() {
+  if (!popupState.exportMenuOpen) {
+    return false;
+  }
+
+  popupState.exportMenuOpen = false;
+  syncExportMenu();
+  return true;
+}
+
 function toggleCreatorActionMenu(creatorProfileId) {
   const validIds = normalizeCreatorProfiles(popupState.creatorProfiles).map(
     (profile) => profile.profileId,
@@ -481,21 +594,64 @@ function normalizeCreatorProfiles(profiles) {
         typeof profile.userId === "string" &&
         /^user-[A-Za-z0-9_-]+$/.test(profile.userId),
     )
-    .map((profile) => ({
-      profileId: profile.profileId,
-      userId: typeof profile.userId === "string" ? profile.userId : "",
-      username: typeof profile.username === "string" ? profile.username : "",
-      displayName:
-        typeof profile.displayName === "string" && profile.displayName
-          ? profile.displayName
-          : typeof profile.username === "string" && profile.username
-            ? profile.username
-            : profile.profileId,
-      profilePictureUrl:
-        typeof profile.profilePictureUrl === "string" && profile.profilePictureUrl
-          ? profile.profilePictureUrl
-          : null,
-    }));
+    .map((profile) => {
+      const profileData =
+        profile.profileData && typeof profile.profileData === "object"
+          ? profile.profileData
+          : null;
+      const characterUserId =
+        typeof profile.characterUserId === "string" && profile.characterUserId.startsWith("ch_")
+          ? profile.characterUserId
+          : typeof profileData?.user_id === "string" && profileData.user_id.startsWith("ch_")
+            ? profileData.user_id
+            : typeof profileData?.userId === "string" && profileData.userId.startsWith("ch_")
+              ? profileData.userId
+              : "";
+      const defaultPreferences = {
+        includeOfficialPosts: true,
+        includeCommunityPosts: true,
+      };
+      const hasCustomFetchPreferences = profile.hasCustomFetchPreferences === true;
+      const hasExplicitOfficialPreference = typeof profile.includeOfficialPosts === "boolean";
+      const hasExplicitCommunityPreference = typeof profile.includeCommunityPosts === "boolean";
+      const useLegacyPreferenceMigration =
+        !hasCustomFetchPreferences &&
+        hasExplicitOfficialPreference &&
+        hasExplicitCommunityPreference &&
+        ((profile.includeOfficialPosts === true && profile.includeCommunityPosts === false) ||
+          (profile.includeOfficialPosts === false && profile.includeCommunityPosts === true));
+
+      return {
+        profileId: profile.profileId,
+        userId: typeof profile.userId === "string" ? profile.userId : "",
+        username: typeof profile.username === "string" ? profile.username : "",
+        displayName:
+          typeof profileData?.display_name === "string" && profileData.display_name
+            ? profileData.display_name
+            : typeof profile.displayName === "string" && profile.displayName
+            ? profile.displayName
+            : typeof profile.username === "string" && profile.username
+              ? profile.username
+              : profile.profileId,
+        profilePictureUrl:
+          typeof profile.profilePictureUrl === "string" && profile.profilePictureUrl
+            ? profile.profilePictureUrl
+            : null,
+        hasCustomFetchPreferences,
+        includeOfficialPosts:
+          useLegacyPreferenceMigration
+            ? defaultPreferences.includeOfficialPosts
+            : typeof profile.includeOfficialPosts === "boolean"
+            ? profile.includeOfficialPosts
+            : defaultPreferences.includeOfficialPosts,
+        includeCommunityPosts:
+          useLegacyPreferenceMigration
+            ? defaultPreferences.includeCommunityPosts
+            : typeof profile.includeCommunityPosts === "boolean"
+            ? profile.includeCommunityPosts
+            : defaultPreferences.includeCommunityPosts,
+      };
+    });
 }
 
 function renderCharacterMenuOptions(accounts) {
@@ -817,6 +973,44 @@ async function handleCreatorRemoval(creatorProfileId) {
     renderCurrentItems();
   } catch (error) {
     showNotice(dom.errorBox, error instanceof Error ? error.message : String(error));
+  }
+}
+
+async function handleCreatorPreferenceChange(creatorProfileId, preferenceKey, nextValue) {
+  const currentProfile = getCreatorProfileById(creatorProfileId);
+  if (!currentProfile) {
+    return;
+  }
+
+  const previousProfiles = popupState.creatorProfiles;
+  popupState.creatorPreferenceSavingProfileId = creatorProfileId;
+  popupState.creatorProfiles = normalizeCreatorProfiles(popupState.creatorProfiles).map((profile) =>
+    profile.profileId === creatorProfileId
+      ? {
+          ...profile,
+          [preferenceKey]: nextValue === true,
+        }
+      : profile,
+  );
+  openCreatorDetailsDialog(creatorProfileId);
+
+  try {
+    const response = await saveCreatorProfilePreferences(creatorProfileId, {
+      [preferenceKey]: nextValue === true,
+    });
+    popupState.creatorProfiles = Array.isArray(response.state && response.state.creatorProfiles)
+      ? response.state.creatorProfiles
+      : popupState.creatorProfiles;
+    openCreatorDetailsDialog(creatorProfileId);
+  } catch (error) {
+    popupState.creatorProfiles = previousProfiles;
+    openCreatorDetailsDialog(creatorProfileId);
+    showNotice(dom.errorBox, error instanceof Error ? error.message : String(error));
+  } finally {
+    popupState.creatorPreferenceSavingProfileId = "";
+    if (popupState.creatorDetailsProfileId === creatorProfileId) {
+      openCreatorDetailsDialog(creatorProfileId);
+    }
   }
 }
 

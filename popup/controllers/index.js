@@ -5,7 +5,7 @@ import {
   handleClearSelectionClick,
   handleDownloadButtonClick,
   handleDownloadOverlayCancel,
-  handleExportUrlsButtonClick,
+  handleExportButtonClick,
   handleRunFormSubmit,
   handleSelectAllClick,
 } from "./actions.js";
@@ -32,9 +32,12 @@ import {
   handleCharacterSelectionClick,
   handleCreatorDialogCancelClick,
   handleCreatorDialogCancelEvent,
+  handleCreatorDetailsChange,
   handleCreatorDetailsCancelEvent,
   handleCreatorDetailsCloseClick,
   handleCreatorDialogSubmit,
+  handleExportMenuButtonClick,
+  handleExportMenuClick,
   handleCharacterMenuTriggerClick,
   handleOverviewSourceMenuChange,
   handleOverviewSourceTriggerClick,
@@ -42,6 +45,7 @@ import {
   handleSettingsSourceTriggerClick,
   handleSourceMenuDocumentClick,
   handleSourceMenuDocumentKeydown,
+  syncExportMenu,
   syncSourceMenuLabels,
 } from "./source-menus.js";
 
@@ -54,7 +58,9 @@ import {
 export function initializeEventHandlers() {
   dom.runForm?.addEventListener("submit", handleRunFormSubmit);
   dom.downloadButton?.addEventListener("click", handleDownloadButtonClick);
-  dom.exportUrlsButton?.addEventListener("click", handleExportUrlsButtonClick);
+  dom.exportButton?.addEventListener("click", handleExportButtonClick);
+  dom.exportMenuButton?.addEventListener("click", handleExportMenuButtonClick);
+  dom.exportMenu?.addEventListener("click", handleExportMenuClick);
   dom.fetchProgressAction?.addEventListener("click", handleFetchProgressActionClick);
   dom.downloadOverlayCancel?.addEventListener("click", handleDownloadOverlayCancel);
   dom.selectAllButton?.addEventListener("click", handleSelectAllClick);
@@ -78,6 +84,7 @@ export function initializeEventHandlers() {
   dom.creatorDialog?.addEventListener("cancel", handleCreatorDialogCancelEvent);
   dom.creatorDetailsClose?.addEventListener("click", handleCreatorDetailsCloseClick);
   dom.creatorDetailsDialog?.addEventListener("cancel", handleCreatorDetailsCancelEvent);
+  dom.creatorDetailsDialog?.addEventListener("change", handleCreatorDetailsChange);
   dom.maxVideosInput?.addEventListener("input", handleMaxVideosInput);
   dom.maxVideosInput?.addEventListener("blur", handleSettingsBlur);
   dom.defaultSourceButton?.addEventListener("click", handleSettingsSourceTriggerClick);
@@ -99,6 +106,7 @@ export function initializeEventHandlers() {
   dom.backToTopButton?.addEventListener("click", handleBackToTopClick);
 
   syncSourceMenuLabels();
+  syncExportMenu();
 }
 
 /**

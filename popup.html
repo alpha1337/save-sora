@@ -145,9 +145,30 @@
                 <button id="download-button" type="button" class="secondary accent hidden">
                   Download Selected
                 </button>
-                <button id="export-urls-button" type="button" class="secondary hidden">
-                  Export CSV
-                </button>
+                <div id="export-control" class="export-split hidden">
+                  <button id="export-button" type="button" class="secondary">
+                    <span id="export-button-label">Export as Prompts</span>
+                  </button>
+                  <button
+                    id="export-menu-button"
+                    type="button"
+                    class="secondary export-split-caret"
+                    aria-label="Choose export type"
+                    aria-haspopup="menu"
+                    aria-expanded="false"
+                    aria-controls="export-menu"
+                  >
+                    <span class="multi-select-caret" aria-hidden="true">▾</span>
+                  </button>
+                  <div id="export-menu" class="export-split-menu hidden" role="menu" aria-label="Export types">
+                    <button type="button" class="export-split-option is-active" data-export-type="prompts" aria-pressed="true" role="menuitemradio">
+                      Prompts
+                    </button>
+                    <button type="button" class="export-split-option" data-export-type="urls" aria-pressed="false" role="menuitemradio">
+                      URLs
+                    </button>
+                  </div>
+                </div>
               </section>
 
               <section class="messages">
@@ -468,8 +489,14 @@
             </button>
           </div>
 
-          <section id="creator-details-profile" class="creator-details-profile" aria-label="Creator profile"></section>
-          <div id="creator-details-stats" class="creator-details-stats"></div>
+          <section id="creator-details-profile" class="creator-details-profile" aria-label="Creator profile">
+            <div id="creator-details-stats" class="creator-details-stats"></div>
+          </section>
+          <section
+            id="creator-details-preferences"
+            class="creator-details-preferences"
+            aria-label="Creator fetch preferences"
+          ></section>
         </div>
       </dialog>
 
