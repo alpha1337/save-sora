@@ -43,8 +43,15 @@ export function syncFetchProgressPanel(state) {
     "aria-expanded",
     isVisible && popupState.fetchDrawerExpanded ? "true" : "false",
   );
-  dom.fetchProgressToggle.textContent =
-    isVisible && popupState.fetchDrawerExpanded ? "Hide Queue" : "View Queue";
+  dom.fetchProgressToggle.setAttribute(
+    "aria-label",
+    isVisible && popupState.fetchDrawerExpanded
+      ? "Collapse background fetch queue"
+      : "Expand background fetch queue",
+  );
+  dom.fetchProgressToggle.title =
+    isVisible && popupState.fetchDrawerExpanded ? "Collapse queue" : "Expand queue";
+  dom.fetchProgressToggle.textContent = "";
 
   if (!isVisible) {
     dom.fetchProgressFill.style.width = "0%";
@@ -100,7 +107,7 @@ export function syncFetchProgressPanel(state) {
         : "Cancel Fetch";
 
   renderQueue(queueLabels, currentSourceIndex);
-  setFooterHeight(dom.fetchProgressPanel.offsetHeight || 0);
+  setFooterHeight(0);
 }
 
 function renderQueue(queueLabels, currentSourceIndex) {

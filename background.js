@@ -2952,6 +2952,7 @@ async function restoreState() {
         currentState.items,
         currentState.titleOverrides,
       );
+      currentState = normalizeRestoredTransientState(currentState);
     }
 
     if (stored && stored[CATALOG_STORAGE_KEY]) {
@@ -2983,6 +2984,33 @@ async function restoreState() {
   } catch (error) {
     console.warn("Failed to restore extension state.", error);
   }
+}
+
+function normalizeRestoredTransientState(state) {
+  const nextState = state && typeof state === "object" ? { ...state } : createDefaultState();
+  const phase = typeof nextState.phase === "string" ? nextState.phase : "idle";
+
+  if (phase !== "fetching" && phase !== "fetch-paused") {
+    return nextState;
+  }
+
+  const restoredItems = normalizeCatalogItems(nextState.items);
+  const restoredSelectedKeys = normalizeSelectedKeys(restoredItems, nextState.selectedKeys);
+  const hasRecoveredPreview = restoredItems.length > 0;
+
+  return {
+    ...nextState,
+    phase: hasRecoveredPreview ? "ready" : "idle",
+    message: hasRecoveredPreview
+      ? buildReadyMessage(restoredSelectedKeys.length)
+      : createDefaultState().message,
+    currentSource: null,
+    selectedKeys: restoredSelectedKeys,
+    queued: restoredSelectedKeys.length,
+    fetchProgress: createDefaultFetchProgress(),
+    startedAt: null,
+    finishedAt: hasRecoveredPreview ? new Date().toISOString() : null,
+  };
 }
 
 async function persistState(state = currentState) {

@@ -145,17 +145,10 @@ export function renderState(state) {
   const hasResults = items.length > 0;
 
   if (phase === "fetch-paused" && previousPhase !== "fetch-paused" && !popupState.fetchDrawerUserToggled) {
-    popupState.fetchDrawerExpanded = true;
-  } else if (phase === "fetching" && previousPhase !== "fetching") {
-    popupState.fetchDrawerExpanded = items.length === 0;
-    popupState.fetchDrawerUserToggled = false;
-  } else if (
-    phase === "fetching" &&
-    !popupState.fetchDrawerUserToggled &&
-    previousItemCount === 0 &&
-    items.length > 0
-  ) {
     popupState.fetchDrawerExpanded = false;
+  } else if (phase === "fetching" && previousPhase !== "fetching") {
+    popupState.fetchDrawerExpanded = false;
+    popupState.fetchDrawerUserToggled = false;
   } else if (phase !== "fetching" && phase !== "fetch-paused") {
     popupState.fetchDrawerExpanded = false;
     popupState.fetchDrawerUserToggled = false;
