@@ -30,69 +30,43 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Resolve release bump type
-        id: bump
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          ZERO_SHA="0000000000000000000000000000000000000000"
-          RANGE_START="${{ github.event.before }}"
-
-          if [[ -z "$RANGE_START" || "$RANGE_START" == "$ZERO_SHA" ]]; then
-            COMMIT_MESSAGES="$(git log --format=%B -n 1 "$GITHUB_SHA")"
-          else
-            COMMIT_MESSAGES="$(git log --format=%B "$RANGE_START..$GITHUB_SHA")"
-          fi
-
-          BUMP_TYPE="patch"
-
-          if printf '%s\n' "$COMMIT_MESSAGES" | grep -Eiq '(^|\n)(breaking change|major:|release-major|#major)'; then
-            BUMP_TYPE="major"
-          elif printf '%s\n' "$COMMIT_MESSAGES" | grep -Eiq '(^|\n)(feat(\(.+\))?:|feature:|release-minor|#minor)'; then
-            BUMP_TYPE="minor"
-          fi
-
-          echo "type=$BUMP_TYPE" >> "$GITHUB_OUTPUT"
-          echo "Resolved bump type: $BUMP_TYPE"
-
-      - name: Bump version files
+      - name: Resolve release metadata
         id: version
         shell: bash
         run: |
           set -euo pipefail
 
-          node scripts/bump-version.mjs "${{ steps.bump.outputs.type }}"
-
           MANIFEST_VERSION="$(jq -r '.version' manifest.json)"
           PACKAGE_VERSION="$(jq -r '.version' package.json)"
 
           if [[ -z "$MANIFEST_VERSION" || "$MANIFEST_VERSION" == "null" ]]; then
-            echo "manifest.json is missing a valid version after bump." >&2
+            echo "manifest.json is missing a valid version." >&2
             exit 1
           fi
 
           if [[ "$MANIFEST_VERSION" != "$PACKAGE_VERSION" ]]; then
-            echo "manifest.json ($MANIFEST_VERSION) and package.json ($PACKAGE_VERSION) must stay aligned after bump." >&2
+            echo "manifest.json ($MANIFEST_VERSION) and package.json ($PACKAGE_VERSION) must stay aligned." >&2
             exit 1
+          fi
+
+          RAW_SUBJECT="$(git log --format=%s -n 1 "$GITHUB_SHA")"
+          SUMMARY="$(printf '%s' "$RAW_SUBJECT" | sed -E 's/^[A-Za-z]+(\([^)]+\))?:[[:space:]]*//' | sed -E 's/[[:space:]]+$//' | sed -E 's/[.]$//')"
+          if [[ -z "$SUMMARY" ]]; then
+            SUMMARY="This release updates Save Sora."
+          else
+            FIRST_CHAR="$(printf '%s' "$SUMMARY" | cut -c1 | tr '[:lower:]' '[:upper:]')"
+            REST_CHARS="$(printf '%s' "$SUMMARY" | cut -c2-)"
+            SUMMARY="$FIRST_CHAR$REST_CHARS."
           fi
 
           echo "version=$MANIFEST_VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=v$MANIFEST_VERSION" >> "$GITHUB_OUTPUT"
           echo "zip_name=save-sora-v$MANIFEST_VERSION.zip" >> "$GITHUB_OUTPUT"
-
-      - name: Commit and push version bump
-        id: release_commit
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add manifest.json package.json
-          git commit -m "chore(release): v${{ steps.version.outputs.version }} [skip release]"
-          git push origin HEAD:main
-          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          {
+            echo "notes<<EOF"
+            echo "$SUMMARY"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Build release assets
         run: node scripts/build-dist.mjs
@@ -100,9 +74,9 @@ jobs:
       - name: Publish or repair GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_VERSION: ${{ steps.version.outputs.version }}
           RELEASE_TAG: ${{ steps.version.outputs.tag }}
           RELEASE_ZIP_NAME: ${{ steps.version.outputs.zip_name }}
+          RELEASE_NOTES: ${{ steps.version.outputs.notes }}
         shell: bash
         run: |
           set -euo pipefail
@@ -126,6 +100,8 @@ jobs:
             HAS_ZIP="$(jq -r --arg name "$RELEASE_ZIP_NAME" '[.assets[]? | select(.name == $name)] | length > 0' <<<"$EXISTING_RELEASE_JSON")"
             HAS_MANIFEST="$(jq -r --arg name "save-sora-update-manifest.json" '[.assets[]? | select(.name == $name)] | length > 0' <<<"$EXISTING_RELEASE_JSON")"
 
+            gh release edit "$RELEASE_TAG" --notes "$RELEASE_NOTES" --latest
+
             if [[ "$HAS_ZIP" == "true" && "$HAS_MANIFEST" == "true" ]]; then
               echo "Release $RELEASE_TAG already exists with the required assets. Skipping publish."
               exit 0
@@ -138,6 +114,6 @@ jobs:
 
           gh release create "$RELEASE_TAG" "$ZIP_PATH" "$MANIFEST_PATH" \
             --title "$RELEASE_TAG" \
-            --target "${{ steps.release_commit.outputs.sha }}" \
-            --generate-notes \
+            --target "$GITHUB_SHA" \
+            --notes "$RELEASE_NOTES" \
             --latest
