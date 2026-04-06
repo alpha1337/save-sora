@@ -112,6 +112,8 @@ let linkedInstallFolderRecordCache = null;
 let updaterReadyPromise = null;
 let zipLibraryLoaded = false;
 
+initializeZipLibrary();
+
 void initializeBackgroundRuntime();
 
 chrome.runtime.onInstalled.addListener(() => {
@@ -1451,13 +1453,21 @@ async function digestSha256Hex(arrayBuffer) {
   return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, "0")).join("");
 }
 
+function initializeZipLibrary() {
+  if (globalThis.zip && globalThis.zip.ZipReader) {
+    zipLibraryLoaded = true;
+    return;
+  }
+  importScripts(chrome.runtime.getURL("vendor/zip-core.min.js"));
+  zipLibraryLoaded = Boolean(globalThis.zip && globalThis.zip.ZipReader);
+}
+
 function ensureZipLibraryLoaded() {
   if (zipLibraryLoaded && globalThis.zip && globalThis.zip.ZipReader) {
     return;
   }
 
-  importScripts(chrome.runtime.getURL("vendor/zip-core.min.js"));
-  zipLibraryLoaded = true;
+  throw new Error("Save Sora could not initialize the bundled zip library during startup.");
 }
 
 async function extractManagedFilesFromZip(arrayBuffer, managedFiles) {
