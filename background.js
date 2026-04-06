@@ -1257,6 +1257,11 @@ async function getLinkedInstallFolderRecord() {
   return record;
 }
 
+async function getStoredInstallFolderRecord() {
+  const record = await readUpdaterRecord(UPDATE_FOLDER_RECORD_KEY);
+  return hasStoredInstallFolderHandle(record) ? record : null;
+}
+
 async function validateInstallFolderHandle(handle) {
   if (!handle || handle.kind !== "directory") {
     throw new Error("Select the unpacked Save Sora extension folder.");
@@ -1721,6 +1726,8 @@ async function installPendingUpdate(options = {}) {
     return buildUpdateStatusSnapshot();
   }
 
+  const storedInstallRecord = await getStoredInstallFolderRecord();
+  const installFolderLinked = hasStoredInstallFolderHandle(storedInstallRecord);
   const installRecord = await getLinkedInstallFolderRecord();
   if (!installRecord || !installRecord.handle) {
     await setUpdateState({
@@ -1738,9 +1745,14 @@ async function installPendingUpdate(options = {}) {
       pendingManagedFiles: Array.isArray(pendingUpdate.managedFiles) ? pendingUpdate.managedFiles : [],
       changelogMarkdown:
         typeof pendingUpdate.changelogMarkdown === "string" ? pendingUpdate.changelogMarkdown : "",
+      installFolderLinked,
       pendingUpdateReady: true,
-      message: "Link the Save Sora install folder to enable self-updates.",
-      detail: "Choose the unpacked extension folder once so Save Sora can apply future GitHub releases automatically.",
+      message: installFolderLinked
+        ? "Grant Save Sora access to the linked install folder."
+        : "Link the Save Sora install folder to enable self-updates.",
+      detail: installFolderLinked
+        ? "Chrome needs you to confirm access to the linked unpacked extension folder before this update can be installed."
+        : "Choose the unpacked extension folder once so Save Sora can apply future GitHub releases automatically.",
       error: "",
     });
     return buildUpdateStatusSnapshot();
@@ -1956,6 +1968,7 @@ async function runUpdateCheck(options = {}) {
   try {
     const latestRelease = await fetchLatestReleaseManifest();
     const installFolderLinked = currentUpdateState.installFolderLinked === true;
+    const installFolderAccessible = Boolean(await getLinkedInstallFolderRecord());
     const updateAvailable = compareSemver(latestRelease.version, CURRENT_EXTENSION_VERSION) > 0;
     const lastCheckedAt = new Date().toISOString();
 
@@ -1996,7 +2009,7 @@ async function runUpdateCheck(options = {}) {
     };
     await storePendingUpdate(pendingUpdate);
     await setUpdateState({
-      phase: !installFolderLinked ? "awaiting-folder" : "update-available",
+      phase: !installFolderAccessible ? "awaiting-folder" : "update-available",
       latestVersion: latestRelease.version,
       latestGitHubVersion: latestRelease.version || latestRelease.releaseVersion || "",
       latestManifestDetected: latestRelease.manifestDetected === true,
@@ -2013,21 +2026,25 @@ async function runUpdateCheck(options = {}) {
       changelogMarkdown: latestRelease.changelogMarkdown || "",
       pendingDeferred: false,
       pendingUpdateReady: true,
-      message: !installFolderLinked
-        ? "Link the Save Sora install folder to install the latest update."
+      message: !installFolderAccessible
+        ? installFolderLinked
+          ? "Grant Save Sora access to the linked install folder."
+          : "Link the Save Sora install folder to install the latest update."
         : automaticUpdatesEnabled
           ? `Save Sora ${latestRelease.version} is ready to install.`
           : `Save Sora ${latestRelease.version} is ready to install.`,
-      detail: !installFolderLinked
-        ? "Choose the unpacked extension folder once so Save Sora can update itself from GitHub."
+      detail: !installFolderAccessible
+        ? installFolderLinked
+          ? "Chrome needs you to confirm access to the linked unpacked extension folder before this update can be installed."
+          : "Choose the unpacked extension folder once so Save Sora can update itself from GitHub."
         : automaticUpdatesEnabled
           ? "Review the latest release notes before Save Sora installs the update automatically."
           : "Automatic updates are turned off. Install the latest GitHub release when you are ready.",
-      progress: installFolderLinked ? 0.34 : 0.28,
+      progress: installFolderAccessible ? 0.34 : 0.28,
       error: "",
     });
 
-    if (!installFolderLinked || !automaticUpdatesEnabled || options.applyIfAvailable === false) {
+    if (!installFolderAccessible || !automaticUpdatesEnabled || options.applyIfAvailable === false) {
       return buildUpdateStatusSnapshot();
     }
 

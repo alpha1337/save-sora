@@ -170,16 +170,7 @@ async function linkInstallFolderFromUserGesture() {
 
   try {
     popupState.updateGateHidden = false;
-    const handle = await window.showDirectoryPicker({
-      mode: "readwrite",
-    });
-    if (typeof handle.requestPermission === "function") {
-      const permission = await handle.requestPermission({ mode: "readwrite" });
-      if (permission !== "granted") {
-        throw new Error("Save Sora needs read and write access to that folder to install future updates.");
-      }
-    }
-    const folderInfo = await validateSelectedInstallFolder(handle);
+    const { handle, folderInfo } = await requestInstallFolderHandleFromUserGesture();
     await persistLinkedInstallFolderRecord(handle, folderInfo);
     let updateStatus = await awaitUpdateOperation(
       requestUpdateCheck({
@@ -200,6 +191,49 @@ async function linkInstallFolderFromUserGesture() {
     showNotice(dom.errorBox, message);
   } finally {
     await refreshStatus();
+  }
+}
+
+async function requestInstallFolderHandleFromUserGesture() {
+  const storedRecord = await readStoredInstallFolderRecord();
+  if (hasStoredInstallFolderHandle(storedRecord)) {
+    try {
+      await ensureWritableInstallFolderPermission(storedRecord.handle);
+      const folderInfo = await validateSelectedInstallFolder(storedRecord.handle);
+      return {
+        handle: storedRecord.handle,
+        folderInfo,
+      };
+    } catch (_error) {
+      // Fall through to the directory picker if the stored handle is stale or permission is no longer usable.
+    }
+  }
+
+  const handle = await window.showDirectoryPicker({
+    mode: "readwrite",
+  });
+  await ensureWritableInstallFolderPermission(handle);
+  const folderInfo = await validateSelectedInstallFolder(handle);
+  return {
+    handle,
+    folderInfo,
+  };
+}
+
+async function ensureWritableInstallFolderPermission(handle) {
+  if (typeof handle.requestPermission === "function") {
+    const permission = await handle.requestPermission({ mode: "readwrite" });
+    if (permission !== "granted") {
+      throw new Error("Save Sora needs read and write access to that folder to install future updates.");
+    }
+    return;
+  }
+
+  if (typeof handle.queryPermission === "function") {
+    const permission = await handle.queryPermission({ mode: "readwrite" });
+    if (permission !== "granted") {
+      throw new Error("Save Sora needs read and write access to that folder to install future updates.");
+    }
   }
 }
 
@@ -285,6 +319,24 @@ async function persistLinkedInstallFolderRecord(handle, folderInfo) {
     getRequest.onerror = () =>
       reject(getRequest.error || new Error("Could not read the existing updater folder link."));
   });
+}
+
+function hasStoredInstallFolderHandle(record) {
+  return Boolean(record && record.handle && record.handle.kind === "directory");
+}
+
+async function readStoredInstallFolderRecord() {
+  const db = await openUpdaterDb();
+  const transaction = db.transaction([VOLATILE_BACKUP_UPDATER_STORE], "readonly");
+  const store = transaction.objectStore(VOLATILE_BACKUP_UPDATER_STORE);
+  const record = await new Promise((resolve, reject) => {
+    const request = store.get(UPDATE_FOLDER_RECORD_KEY);
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () =>
+      reject(request.error || new Error("Could not read the saved updater folder link."));
+  });
+
+  return record && typeof record === "object" ? record : null;
 }
 
 function setBootGateStep({ step, progress, title, message }) {
