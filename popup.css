@@ -2421,7 +2421,7 @@ body[data-theme="light"] .creator-dialog-input {
   gap: 1rem;
   align-items: flex-start;
   justify-content: flex-start;
-  align-content: flex-start;
+  align-content: center;
   height: 100%;
   min-width: 0;
   flex-wrap: wrap;
