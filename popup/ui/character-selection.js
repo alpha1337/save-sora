@@ -14,7 +14,8 @@ export function shouldShowSourceSelectionScreen(phase, items) {
     selectedSources.includes("creators") || selectedSources.includes("characterAccounts");
 
   const hasItems = Array.isArray(items) && items.length > 0;
-  const isBlockedByActiveRun = phase === "fetching" || phase === "downloading";
+  const isBlockedByActiveRun =
+    phase === "fetching" || phase === "fetch-paused" || phase === "downloading";
 
   return shouldShowScopedPicker && !isBlockedByActiveRun && !hasItems;
 }

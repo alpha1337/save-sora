@@ -14,14 +14,14 @@ import {
 /**
  * Updates the primary button states after a render.
  *
- * @param {{isBusy:boolean,isPaused:boolean,isFetching:boolean,hasResults:boolean}} context
+ * @param {{isBusy:boolean,isPaused:boolean,isFetching:boolean,isFetchPaused:boolean,hasResults:boolean}} context
  */
-export function syncPrimaryControls({ isBusy, isPaused, isFetching, hasResults }) {
+export function syncPrimaryControls({ isBusy, isPaused, isFetching, isFetchPaused, hasResults }) {
   const hasSelectedSources = getSelectedSourceValues(dom.sourceSelectInputs).length > 0;
   const isResetMode = hasResults && !isFetching;
 
   if (dom.fetchButton) {
-    dom.fetchButton.disabled = isBusy || (!isResetMode && !hasSelectedSources);
+    dom.fetchButton.disabled = isBusy || isFetchPaused || (!isResetMode && !hasSelectedSources);
     dom.fetchButton.dataset.mode = isResetMode ? "reset" : "scan";
     dom.fetchButton.dataset.loading = String(isFetching);
     dom.fetchButton.classList.toggle("is-danger", isResetMode);
@@ -35,13 +35,13 @@ export function syncPrimaryControls({ isBusy, isPaused, isFetching, hasResults }
         : "Fetch Videos";
   }
 
-  setSourceControlDisabled(dom.sourceSelectButton, dom.sourceSelectInputs, isBusy || isPaused);
+  setSourceControlDisabled(dom.sourceSelectButton, dom.sourceSelectInputs, isBusy || isPaused || isFetchPaused);
   if (dom.maxVideosInput) {
-    dom.maxVideosInput.disabled = isBusy || isPaused;
+    dom.maxVideosInput.disabled = isBusy || isPaused || isFetchPaused;
   }
-  setSourceControlDisabled(dom.defaultSourceButton, dom.defaultSourceInputs, isBusy || isPaused);
+  setSourceControlDisabled(dom.defaultSourceButton, dom.defaultSourceInputs, isBusy || isPaused || isFetchPaused);
   if (dom.defaultSortInput) {
-    dom.defaultSortInput.disabled = isBusy || isPaused;
+    dom.defaultSortInput.disabled = isBusy || isPaused || isFetchPaused;
   }
 
   applyCurrentSelectionUi();
@@ -51,7 +51,7 @@ export function syncPrimaryControls({ isBusy, isPaused, isFetching, hasResults }
 
   if (dom.selectAllButton) {
     dom.selectAllButton.disabled =
-      isBusy || isPaused || (
+      isBusy || isPaused || isFetchPaused || (
         isSourceSelectionVisible
           ? selectionScreenState.visibleCount === 0 ||
             selectionScreenState.visibleSelectedCount === selectionScreenState.visibleCount
@@ -61,7 +61,7 @@ export function syncPrimaryControls({ isBusy, isPaused, isFetching, hasResults }
 
   if (dom.clearSelectionButton) {
     dom.clearSelectionButton.disabled =
-      isBusy || isPaused || (
+      isBusy || isPaused || isFetchPaused || (
         isSourceSelectionVisible
           ? selectionScreenState.visibleSelectedCount === 0
           : getSelectedKeysFromDom({ visibleOnly: true }).length === 0

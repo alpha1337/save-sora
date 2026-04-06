@@ -1,6 +1,8 @@
 import { dom } from "../dom.js";
 import {
   requestAbortScan,
+  requestPauseScan,
+  requestResumeScan,
   requestAbortDownloads,
   requestDownloadSelected,
   requestResetState,
@@ -221,6 +223,29 @@ export async function handleFetchProgressActionClick() {
 
   try {
     await requestAbortScan();
+  } catch (error) {
+    showNotice(dom.errorBox, error instanceof Error ? error.message : String(error));
+  } finally {
+    await refreshStatus();
+  }
+}
+
+/**
+ * Pauses or resumes the active fetch without discarding the current preview.
+ */
+export async function handleFetchProgressPauseActionClick() {
+  hideNotice(dom.errorBox);
+
+  if (dom.fetchProgressPauseAction instanceof HTMLButtonElement) {
+    dom.fetchProgressPauseAction.disabled = true;
+  }
+
+  try {
+    if (popupState.latestRenderState.phase === "fetch-paused") {
+      await requestResumeScan();
+    } else {
+      await requestPauseScan();
+    }
   } catch (error) {
     showNotice(dom.errorBox, error instanceof Error ? error.message : String(error));
   } finally {

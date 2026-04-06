@@ -31,6 +31,7 @@ export const dom = {
   fetchProgressDetail: document.getElementById("fetch-progress-detail"),
   fetchProgressPercent: document.getElementById("fetch-progress-percent"),
   fetchProgressFill: document.getElementById("fetch-progress-fill"),
+  fetchProgressPauseAction: document.getElementById("fetch-progress-pause-action"),
   fetchProgressAction: document.getElementById("fetch-progress-action"),
   fetchProgressSource: document.getElementById("fetch-progress-source"),
   fetchProgressCount: document.getElementById("fetch-progress-count"),

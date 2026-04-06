@@ -128,6 +128,7 @@ export function renderState(state) {
     hideNotice(dom.errorBox);
   }
 
+  const isFetchPaused = phase === "fetch-paused";
   const isBusy = phase === "fetching" || phase === "downloading";
   const isPaused = phase === "paused";
   const isFetching = phase === "fetching";
@@ -166,7 +167,7 @@ export function renderState(state) {
 
   updateAppScrollLock();
   updateBackToTopVisibility();
-  syncPrimaryControls({ isBusy, isPaused, isFetching, hasResults });
+  syncPrimaryControls({ isBusy, isPaused, isFetching, isFetchPaused, hasResults });
 }
 
 /**

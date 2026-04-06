@@ -82,6 +82,30 @@ export async function requestAbortScan() {
 }
 
 /**
+ * Requests that the active fetch be paused.
+ *
+ * @returns {Promise<object>}
+ */
+export async function requestPauseScan() {
+  return sendPopupMessage(
+    { type: "PAUSE_SCAN" },
+    "Could not pause the active fetch.",
+  );
+}
+
+/**
+ * Requests that the last paused fetch be resumed.
+ *
+ * @returns {Promise<object>}
+ */
+export async function requestResumeScan() {
+  return sendPopupMessage(
+    { type: "RESUME_SCAN" },
+    "Could not resume the paused fetch.",
+  );
+}
+
+/**
  * Resets the current working set in the background worker.
  *
  * @returns {Promise<object>}

@@ -166,6 +166,14 @@ export function updateSelectionSummary({
     return;
   }
 
+  if (phase === "fetch-paused") {
+    dom.selectionSummary.textContent =
+      totalCount > 0
+        ? `Fetch paused • ${formatWholeNumber(totalCount)} found so far.`
+        : "Fetch paused. Resume when you're ready.";
+    return;
+  }
+
   if (isSourceSelectionMode) {
     setSourceSelectionSummary();
     return;
@@ -214,10 +222,12 @@ export function syncSelectionControls(totalCount, selectedCount, visibleCount = 
   const hasSourceSelection =
     isSourceSelectionScreenVisible() && selectionScreenState.totalCount > 0;
   const isFetching = phase === "fetching";
+  const isFetchPaused = phase === "fetch-paused";
   const showDownloadButton =
-    hasLoadedResults && selectedCount > 0 && !popupState.latestBusy && !popupState.latestPaused && !isFetching;
+    hasLoadedResults && selectedCount > 0 && !popupState.latestBusy && !popupState.latestPaused && !isFetching && !isFetchPaused;
   const showBatchActions =
     !isFetching &&
+    !isFetchPaused &&
     ((hasLoadedResults && visibleCount > 0) || hasSourceSelection);
   const showBrowseTools = hasLoadedResults;
   const showSummaryPanel = hasLoadedResults && !isFetching;

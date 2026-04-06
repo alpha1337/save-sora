@@ -14,6 +14,7 @@ export function syncFetchProgressPanel(state) {
     !(dom.fetchProgressDetail instanceof HTMLElement) ||
     !(dom.fetchProgressPercent instanceof HTMLElement) ||
     !(dom.fetchProgressFill instanceof HTMLElement) ||
+    !(dom.fetchProgressPauseAction instanceof HTMLButtonElement) ||
     !(dom.fetchProgressAction instanceof HTMLButtonElement) ||
     !(dom.fetchProgressSource instanceof HTMLElement) ||
     !(dom.fetchProgressCount instanceof HTMLElement) ||
@@ -27,12 +28,15 @@ export function syncFetchProgressPanel(state) {
     state && state.fetchProgress && typeof state.fetchProgress === "object"
       ? state.fetchProgress
       : null;
-  const isVisible = phase === "fetching";
+  const isPaused = phase === "fetch-paused";
+  const isVisible = phase === "fetching" || isPaused;
 
   dom.fetchProgressPanel.classList.toggle("hidden", !isVisible);
   dom.fetchProgressActions.classList.toggle("hidden", !isVisible);
   if (!isVisible) {
     dom.fetchProgressFill.style.width = "0%";
+    dom.fetchProgressPauseAction.disabled = false;
+    dom.fetchProgressPauseAction.textContent = "Pause Fetch";
     dom.fetchProgressAction.disabled = false;
     dom.fetchProgressAction.textContent = "Cancel and Start Over";
     return;
@@ -66,10 +70,18 @@ export function syncFetchProgressPanel(state) {
   dom.fetchProgressSource.textContent = `${toTitleCase(currentSourceLabel)} • ${currentSourceIndex} of ${totalSources}`;
   dom.fetchProgressCount.textContent =
     itemsFound > 0 ? `${formatCompactCount(itemsFound)} found` : "Searching...";
-  dom.fetchProgressEta.textContent = getFetchEtaLabel(state, progressRatio);
-  dom.fetchProgressAction.disabled = progress && progress.stage === "aborting";
+  dom.fetchProgressEta.textContent = isPaused ? "Paused" : getFetchEtaLabel(state, progressRatio);
+  dom.fetchProgressPauseAction.disabled =
+    Boolean(progress && (progress.stage === "aborting" || progress.stage === "pausing"));
+  dom.fetchProgressPauseAction.textContent = isPaused ? "Resume Fetch" : "Pause Fetch";
+  dom.fetchProgressAction.disabled =
+    Boolean(progress && (progress.stage === "aborting" || progress.stage === "pausing"));
   dom.fetchProgressAction.textContent =
-    progress && progress.stage === "aborting" ? "Stopping..." : "Cancel and Start Over";
+    progress && progress.stage === "aborting"
+      ? "Stopping..."
+      : progress && progress.stage === "pausing"
+        ? "Pausing..."
+        : "Cancel and Start Over";
 }
 
 function clampProgressRatio(value) {
