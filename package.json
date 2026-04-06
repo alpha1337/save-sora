@@ -1,9 +1,19 @@
 {
   "name": "save-sora",
-  "version": "1.17.9",
+  "version": "1.17.11",
   "private": true,
   "description": "Build helpers for the Save Sora Chrome extension.",
   "scripts": {
-    "build:dist": "node scripts/build-dist.mjs"
+    "build:dist": "node scripts/build-dist.mjs",
+    "version:patch": "node scripts/bump-version.mjs patch",
+    "version:minor": "node scripts/bump-version.mjs minor",
+    "version:major": "node scripts/bump-version.mjs major",
+    "version:set": "node scripts/bump-version.mjs",
+    "release:patch": "npm run version:patch && npm run build:dist",
+    "release:minor": "npm run version:minor && npm run build:dist",
+    "release:major": "npm run version:major && npm run build:dist",
+    "ship": "node scripts/ship-release.mjs patch",
+    "ship:minor": "node scripts/ship-release.mjs minor",
+    "ship:major": "node scripts/ship-release.mjs major"
   }
 }

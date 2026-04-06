@@ -3382,54 +3382,55 @@ body[data-theme="light"] .back-to-top {
 .settings-panel {
   display: grid;
   align-content: start;
-  gap: 18px;
+  gap: 12px;
   height: 100%;
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  padding-right: 10px;
+  padding-right: 6px;
+  padding-bottom: 2px;
   scrollbar-gutter: stable;
 }
 
 .settings-head {
   display: grid;
-  gap: 6px;
-  max-width: 720px;
+  gap: 4px;
+  max-width: 680px;
 }
 
 .settings-head h2 {
   margin: 0;
   color: var(--heading);
-  font-size: 28px;
-  line-height: 1.04;
+  font-size: 24px;
+  line-height: 1.06;
   letter-spacing: -0.04em;
 }
 
 .settings-intro {
   margin: 0;
   color: var(--muted);
-  font-size: 13px;
-  line-height: 1.55;
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .settings-layout {
   display: grid;
   grid-template-columns: minmax(0, 1.3fr) minmax(280px, 0.9fr);
-  gap: 16px;
+  gap: 12px;
   align-items: start;
 }
 
 .settings-rail {
   display: grid;
-  gap: 16px;
+  gap: 12px;
   align-content: start;
 }
 
 .settings-section {
   display: grid;
   align-content: start;
-  gap: 16px;
-  padding: 16px;
+  gap: 12px;
+  padding: 12px;
   border: 1px solid var(--border);
   background:
     radial-gradient(circle at top left, rgba(131, 165, 152, 0.08) 0%, rgba(131, 165, 152, 0) 34%),
@@ -3445,42 +3446,42 @@ body[data-theme="light"] .back-to-top {
 
 .settings-section-head {
   display: grid;
-  gap: 6px;
+  gap: 4px;
 }
 
 .settings-section-head h3 {
   margin: 0;
   color: var(--heading);
-  font-size: 21px;
-  line-height: 1.08;
+  font-size: 18px;
+  line-height: 1.1;
   letter-spacing: -0.03em;
 }
 
 .settings-section-intro {
   margin: 0;
   color: var(--muted);
-  font-size: 12px;
-  line-height: 1.55;
-  max-width: 54ch;
+  font-size: 11px;
+  line-height: 1.45;
+  max-width: 48ch;
 }
 
 .settings-stack,
 .settings-grid {
   display: grid;
-  gap: 12px;
+  gap: 10px;
 }
 
 .settings-grid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px 14px;
+  gap: 10px 12px;
 }
 
 .settings-group {
   display: grid;
   align-content: start;
-  gap: 8px;
+  gap: 6px;
   min-width: 0;
-  padding: 12px;
+  padding: 10px;
   border: 1px solid rgba(131, 165, 152, 0.18);
   background: rgba(24, 26, 27, 0.52);
 }
@@ -3491,7 +3492,7 @@ body[data-theme="light"] .back-to-top {
 
 .settings-label {
   color: var(--text);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -3499,24 +3500,24 @@ body[data-theme="light"] .back-to-top {
 
 .settings-input {
   background: rgba(19, 21, 22, 0.86);
-  min-height: 42px;
+  min-height: 38px;
 }
 
 .settings-help,
 .settings-status {
   margin: 0;
   color: var(--muted);
-  font-size: 11px;
-  line-height: 1.5;
+  font-size: 10px;
+  line-height: 1.4;
 }
 
 .settings-status {
-  padding-top: 2px;
-  padding-bottom: 2px;
+  padding-top: 0;
+  padding-bottom: 0;
 }
 
 .settings-panel .multi-select-trigger {
-  min-height: 42px;
+  min-height: 38px;
   background: rgba(19, 21, 22, 0.86);
 }
 
@@ -3533,8 +3534,8 @@ body[data-theme="light"] .back-to-top {
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
-  min-height: 56px;
-  padding: 12px 14px;
+  min-height: 0;
+  padding: 10px 12px;
   border: 1px solid rgba(131, 165, 152, 0.18);
   background: rgba(19, 21, 22, 0.74);
 }
@@ -3543,8 +3544,8 @@ body[data-theme="light"] .back-to-top {
   flex: 1 1 auto;
   min-width: 0;
   color: var(--text);
-  font-size: 12px;
-  line-height: 1.45;
+  font-size: 11px;
+  line-height: 1.4;
 }
 
 .settings-switch-input {
@@ -3589,31 +3590,31 @@ body[data-theme="light"] .back-to-top {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: start;
-  gap: 12px;
-  padding: 14px;
+  gap: 10px;
+  padding: 12px;
   border: 1px solid rgba(131, 165, 152, 0.18);
   background: rgba(19, 21, 22, 0.68);
 }
 
 .updater-status-copy {
   display: grid;
-  gap: 6px;
+  gap: 4px;
   min-width: 0;
 }
 
 .updater-status-summary {
   margin: 0;
   color: var(--text);
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 700;
-  line-height: 1.45;
+  line-height: 1.35;
 }
 
 .updater-status-diagnostics {
-  margin: 4px 0 0;
+  margin: 2px 0 0;
   color: #aeb7a2;
-  font-size: 11px;
-  line-height: 1.45;
+  font-size: 10px;
+  line-height: 1.35;
 }
 
 .updater-status-actions {
@@ -3621,7 +3622,7 @@ body[data-theme="light"] .back-to-top {
   flex-wrap: wrap;
   align-items: flex-start;
   justify-content: flex-end;
-  gap: 8px;
+  gap: 6px;
 }
 
 @media (max-width: 840px) {

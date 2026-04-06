@@ -28,7 +28,7 @@ const UPDATE_ALARM_NAME = "saveSoraCheckForUpdates";
 const UPDATE_CHECK_INTERVAL_MINUTES = 30;
 const GITHUB_OWNER = "alpha1337";
 const GITHUB_REPO = "save-sora";
-const GITHUB_LATEST_RELEASE_URL = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/releases/latest`;
+const GITHUB_RELEASES_URL = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/releases?per_page=12`;
 const UPDATE_MANIFEST_ASSET_NAME = "save-sora-update-manifest.json";
 const UPDATE_FOLDER_RECORD_KEY = "install-folder";
 const UPDATE_META_RECORD_KEY = "updater-meta";
@@ -1328,6 +1328,11 @@ async function fetchJson(url) {
   return response.json();
 }
 
+async function fetchGitHubReleases() {
+  const releases = await fetchJson(GITHUB_RELEASES_URL);
+  return Array.isArray(releases) ? releases : [];
+}
+
 function extractGitHubReleaseVersion(release) {
   const rawValue =
     release && typeof release.tag_name === "string" && release.tag_name
@@ -1341,7 +1346,25 @@ function extractGitHubReleaseVersion(release) {
 }
 
 async function fetchLatestReleaseManifest() {
-  const release = await fetchJson(GITHUB_LATEST_RELEASE_URL);
+  const releases = await fetchGitHubReleases();
+  const release = releases
+    .filter((candidate) => candidate && candidate.draft !== true && candidate.prerelease !== true)
+    .map((candidate) => ({
+      release: candidate,
+      version: extractGitHubReleaseVersion(candidate),
+    }))
+    .filter((candidate) => candidate.version)
+    .sort((leftCandidate, rightCandidate) =>
+      compareSemver(rightCandidate.version, leftCandidate.version),
+    )[0]?.release;
+
+  if (!release) {
+    const error = new Error("No published GitHub releases are available yet.");
+    error.code = "NO_PUBLISHED_RELEASES";
+    error.url = GITHUB_RELEASES_URL;
+    throw error;
+  }
+
   const assets = Array.isArray(release && release.assets) ? release.assets : [];
   const releaseVersion = extractGitHubReleaseVersion(release);
   const manifestAsset = assets.find(
@@ -1990,8 +2013,8 @@ async function runUpdateCheck(options = {}) {
       compareSemver(releaseVersion || CURRENT_EXTENSION_VERSION, CURRENT_EXTENSION_VERSION) <= 0;
     const noPublishedReleaseYet =
       error &&
-      error.status === 404 &&
-      error.url === GITHUB_LATEST_RELEASE_URL;
+      ((error.code === "NO_PUBLISHED_RELEASES" && error.url === GITHUB_RELEASES_URL) ||
+        (error.status === 404 && error.url === GITHUB_RELEASES_URL));
 
     if (missingManifestForOlderOrCurrentRelease || noPublishedReleaseYet) {
       const installFolderLinked = currentUpdateState.installFolderLinked === true;
