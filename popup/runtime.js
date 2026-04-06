@@ -67,9 +67,12 @@ export async function linkRuntimeInstallFolder(handle) {
   return response.updateStatus;
 }
 
-export async function installPendingRuntimeUpdate() {
+export async function installPendingRuntimeUpdate(options = {}) {
   const response = await sendPopupMessage(
-    { type: "INSTALL_PENDING_UPDATE" },
+    {
+      type: "INSTALL_PENDING_UPDATE",
+      forceApply: options.forceApply === true,
+    },
     "Could not install the pending update.",
   );
   return response.updateStatus;

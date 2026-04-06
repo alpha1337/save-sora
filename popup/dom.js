@@ -14,6 +14,7 @@ export const dom = {
   updateGateProgressFill: document.getElementById("update-gate-progress-fill"),
   updateGateProgressLabel: document.getElementById("update-gate-progress-label"),
   updateGateChangelog: document.getElementById("update-gate-changelog"),
+  updateGateChangelogLabel: document.getElementById("update-gate-changelog-label"),
   updateGateChangelogBody: document.getElementById("update-gate-changelog-body"),
   updateGateActions: document.getElementById("update-gate-actions"),
   updateGateLinkButton: document.getElementById("update-gate-link-button"),

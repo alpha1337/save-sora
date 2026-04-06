@@ -30,6 +30,7 @@ const BOOT_UPDATE_GATE_STEPS = 3;
 export async function bootstrapUpdaterGate() {
   popupState.updateGateHidden = false;
   popupState.skippedUpdateVersion = "";
+  const updatedVersionNotice = consumeUpdatedVersionNotice();
 
   try {
     await dom.updateGateVideo?.play?.();
@@ -77,6 +78,12 @@ export async function bootstrapUpdaterGate() {
     });
     await waitForMs(140);
     await refreshStatus();
+    if (updatedVersionNotice) {
+      showNotice(
+        dom.warningBox,
+        `Save Sora updated to v${updatedVersionNotice} and reopened automatically.`,
+      );
+    }
   } catch (error) {
     showNotice(dom.errorBox, error instanceof Error ? error.message : String(error));
     await refreshStatus();
@@ -155,7 +162,9 @@ async function installPendingUpdateFromUi() {
   try {
     popupState.updateGateHidden = false;
     popupState.skippedUpdateVersion = "";
-    const updateStatus = await awaitUpdateOperation(installPendingRuntimeUpdate());
+    const updateStatus = await awaitUpdateOperation(
+      installPendingRuntimeUpdate({ forceApply: true }),
+    );
     await maybeFinalizeReloadingUpdate(updateStatus);
   } catch (error) {
     showNotice(dom.errorBox, error instanceof Error ? error.message : String(error));
@@ -496,4 +505,19 @@ function waitForMs(durationMs) {
   return new Promise((resolve) => {
     window.setTimeout(resolve, durationMs);
   });
+}
+
+function consumeUpdatedVersionNotice() {
+  try {
+    const url = new URL(window.location.href);
+    const updatedVersion = url.searchParams.get("updated");
+    if (!updatedVersion) {
+      return "";
+    }
+    url.searchParams.delete("updated");
+    window.history.replaceState({}, "", url.toString());
+    return updatedVersion;
+  } catch (_error) {
+    return "";
+  }
 }

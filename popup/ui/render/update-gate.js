@@ -120,13 +120,24 @@ function syncUpdateGate(updateStatus) {
     typeof updateStatus.changelogMarkdown === "string" &&
     updateStatus.changelogMarkdown.trim().length > 0;
   dom.updateGateChangelog?.classList.toggle("hidden", !shouldShowChangelog);
+  if (dom.updateGateChangelogLabel instanceof HTMLElement) {
+    const changelogVersion =
+      updateStatus.pendingUpdateVersion ||
+      updateStatus.latestVersion ||
+      updateStatus.latestGitHubVersion ||
+      updateStatus.currentVersion;
+    dom.updateGateChangelogLabel.textContent = changelogVersion
+      ? `What's new in ${changelogVersion}`
+      : "What's new";
+  }
   if (dom.updateGateChangelogBody instanceof HTMLElement) {
     renderMarkdownLite(dom.updateGateChangelogBody, updateStatus.changelogMarkdown);
   }
 
   const showLinkButton = updateStatus.phase === "awaiting-folder";
   const showInstallButton =
-    updateStatus.phase === "update-available" || updateStatus.phase === "deferred";
+    updateStatus.phase === "deferred" ||
+    (updateStatus.phase === "update-available" && updateStatus.automaticUpdatesEnabled === false);
   const showSkipButton =
     updateStatus.phase === "update-available" || updateStatus.phase === "deferred";
   const showRetryButton = updateStatus.phase === "error";
@@ -138,6 +149,10 @@ function syncUpdateGate(updateStatus) {
     "hidden",
     !(showLinkButton || showInstallButton || showSkipButton || showRetryButton || showContinueButton),
   );
+  dom.updateGateActions?.classList.toggle(
+    "is-inline-decision",
+    updateStatus.phase === "awaiting-folder" || updateStatus.phase === "update-available" || updateStatus.phase === "deferred",
+  );
   dom.updateGateLinkButton?.classList.toggle("hidden", !showLinkButton);
   dom.updateGateInstallButton?.classList.toggle("hidden", !showInstallButton);
   dom.updateGateSkipButton?.classList.toggle("hidden", !showSkipButton);
@@ -145,12 +160,18 @@ function syncUpdateGate(updateStatus) {
   dom.updateGateContinueButton?.classList.toggle("hidden", !showContinueButton);
   if (dom.updateGateLinkButton instanceof HTMLButtonElement) {
     dom.updateGateLinkButton.textContent =
-      updateStatus.installFolderLinked ? "Grant folder access" : "Link folder";
+      updateStatus.installFolderLinked ? "Confirm access" : "Choose folder";
+  }
+  if (dom.updateGateInstallButton instanceof HTMLButtonElement) {
+    dom.updateGateInstallButton.textContent = "Install update";
+  }
+  if (dom.updateGateSkipButton instanceof HTMLButtonElement) {
+    dom.updateGateSkipButton.textContent = "Skip for now";
   }
   if (dom.updateGateContinueButton instanceof HTMLButtonElement) {
     dom.updateGateContinueButton.textContent =
       updateStatus.phase === "awaiting-folder" && updateStatus.automaticUpdatesEnabled
-        ? "Continue without auto-updates"
+        ? "Not now"
         : "Continue without updating";
   }
 }
@@ -185,8 +206,8 @@ function syncUpdaterStatusRow(updateStatus) {
 function getUpdateGateTitle(updateStatus) {
   if (updateStatus.phase === "awaiting-folder") {
     return updateStatus.installFolderLinked
-      ? "Confirm linked folder access"
-      : "Finish automatic update setup";
+      ? "Confirm folder access"
+      : "Enable automatic updates";
   }
   if (updateStatus.phase === "update-available" || updateStatus.phase === "deferred") {
     return `Save Sora ${updateStatus.pendingUpdateVersion || updateStatus.latestVersion} is ready`;
@@ -213,13 +234,13 @@ function getUpdateGateMessage(updateStatus) {
 
   if (updateStatus.phase === "awaiting-folder") {
     return updateStatus.installFolderLinked
-      ? "Save Sora remembers your linked install folder, but Chrome needs you to confirm access before this update can be installed."
-      : "Choose the unpacked Save Sora folder once so future GitHub releases can install automatically. If you prefer, you can continue without auto-updates for now.";
+      ? "Save Sora already remembers the linked install folder. Chrome still needs a quick confirmation before Save Sora can write this update into that folder."
+      : "Choose the unpacked Save Sora folder once to turn on automatic updates. Save Sora will remember that folder for future releases, although Chrome may occasionally ask you to confirm access again.";
   }
   if (updateStatus.phase === "update-available") {
     return updateStatus.automaticUpdatesEnabled
-      ? "A newer GitHub release is available. Review the changelog below while Save Sora prepares to install it automatically."
-      : "A newer GitHub release is available. Review the changelog below and install it now or skip this session.";
+      ? "A newer GitHub release is ready. Review what changed below while Save Sora prepares the install."
+      : "A newer GitHub release is ready. Review what changed below and choose whether to install it now.";
   }
   if (updateStatus.phase === "deferred") {
     return "The update is ready, but Save Sora is busy right now. Install it now when you are ready or resume later.";
@@ -236,8 +257,8 @@ function getUpdaterStatusDetail(updateStatus) {
   }
   if (updateStatus.phase === "awaiting-folder") {
     return updateStatus.installFolderLinked
-      ? "Save Sora remembers the linked unpacked folder, but Chrome needs you to confirm access before this update can be installed."
-      : "Chrome requires one-time access to the unpacked extension folder before automatic GitHub updates can be installed.";
+      ? "The linked folder is already saved. Chrome is only asking you to confirm write access for this install."
+      : "The unpacked extension folder needs to be linked once before Save Sora can install GitHub updates automatically.";
   }
   if (updateStatus.phase === "error") {
     return updateStatus.error || "The last update check failed.";

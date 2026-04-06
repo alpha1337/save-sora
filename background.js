@@ -34,6 +34,7 @@ const UPDATE_FOLDER_RECORD_KEY = "install-folder";
 const UPDATE_META_RECORD_KEY = "updater-meta";
 const UPDATE_PENDING_RECORD_KEY = "pending-update";
 const UPDATE_ROLLBACK_RECORD_KEY = "rollback-snapshot";
+const UPDATE_REOPEN_RECORD_KEY = "post-update-reopen";
 const UPDATE_MANAGED_ROOT_ENTRIES = [
   "assets",
   "background.js",
@@ -452,7 +453,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message.type === "INSTALL_PENDING_UPDATE") {
-    void installPendingUpdate()
+    void installPendingUpdate({
+      forceApply: message.forceApply === true,
+    })
       .then((updateStatus) => {
         sendResponse({ ok: true, updateStatus });
       })
@@ -920,6 +923,7 @@ function initializeBackgroundRuntime() {
     await restoreState();
     await restoreUpdaterState();
     await scheduleUpdateAlarm();
+    await maybeReopenUpdatedAppShell();
   })().catch((error) => {
     console.warn("Failed to initialize the Save Sora background runtime.", error);
   });
@@ -1223,6 +1227,33 @@ async function restoreUpdaterState() {
   });
 
   await persistUpdateMeta();
+}
+
+async function maybeReopenUpdatedAppShell() {
+  const reopenRecord = await readUpdaterRecord(UPDATE_REOPEN_RECORD_KEY);
+  if (!reopenRecord || typeof reopenRecord !== "object") {
+    return;
+  }
+
+  const targetVersion =
+    typeof reopenRecord.version === "string" && reopenRecord.version
+      ? reopenRecord.version
+      : CURRENT_EXTENSION_VERSION;
+
+  if (compareSemver(CURRENT_EXTENSION_VERSION, targetVersion) < 0) {
+    return;
+  }
+
+  try {
+    await chrome.tabs.create({
+      url: chrome.runtime.getURL(`popup.html?updated=${encodeURIComponent(targetVersion)}`),
+      active: true,
+    });
+  } catch (error) {
+    console.warn("Failed to reopen Save Sora after update.", error);
+  } finally {
+    await deleteUpdaterRecord(UPDATE_REOPEN_RECORD_KEY);
+  }
 }
 
 async function scheduleUpdateAlarm() {
@@ -1601,8 +1632,13 @@ function isUpdaterBusyPhase() {
   );
 }
 
-function isUpdaterApplyBlocked() {
-  return Boolean(activeRun) || currentState.phase === "fetch-paused" || currentState.phase === "paused";
+function isUpdaterApplyBlocked(options = {}) {
+  const allowPausedOverride = options && options.allowPausedOverride === true;
+  return (
+    Boolean(activeRun) ||
+    (!allowPausedOverride &&
+      (currentState.phase === "fetch-paused" || currentState.phase === "paused"))
+  );
 }
 
 async function readManagedFileBytes(rootHandle, relativePath) {
@@ -1792,7 +1828,9 @@ async function installPendingUpdate(options = {}) {
     return buildUpdateStatusSnapshot();
   }
 
-  if (isUpdaterApplyBlocked()) {
+  const allowPausedOverride = options && options.forceApply === true;
+
+  if (isUpdaterApplyBlocked({ allowPausedOverride })) {
     await storePendingUpdate({
       ...pendingUpdate,
       pendingDeferred: true,
@@ -1920,6 +1958,10 @@ async function installPendingUpdate(options = {}) {
     });
 
     await deleteUpdaterRecord(UPDATE_PENDING_RECORD_KEY);
+    await writeUpdaterRecord(UPDATE_REOPEN_RECORD_KEY, {
+      version: pendingUpdate.version,
+      createdAt: new Date().toISOString(),
+    });
     await writeUpdaterRecord(UPDATE_META_RECORD_KEY, {
       lastSuccessfulUpdateAt: new Date().toISOString(),
       lastSuccessfulUpdateVersion: pendingUpdate.version,
