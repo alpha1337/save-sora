@@ -2113,7 +2113,7 @@ async function readVolatileBackupMeta(sessionKey) {
   const transaction = db.transaction([VOLATILE_BACKUP_META_STORE], "readonly");
   const store = transaction.objectStore(VOLATILE_BACKUP_META_STORE);
   const record = await createIndexedDbRequestPromise(store.get(sessionKey));
-  return record && typeof record === "object" ? record : null;
+  return normalizeVolatileBackupMetaRecord(record);
 }
 
 async function listVolatileBackupMetas() {
@@ -2121,7 +2121,9 @@ async function listVolatileBackupMetas() {
   const transaction = db.transaction([VOLATILE_BACKUP_META_STORE], "readonly");
   const store = transaction.objectStore(VOLATILE_BACKUP_META_STORE);
   const records = await createIndexedDbRequestPromise(store.getAll());
-  return Array.isArray(records) ? records : [];
+  return (Array.isArray(records) ? records : [])
+    .map((record) => normalizeVolatileBackupMetaRecord(record))
+    .filter(Boolean);
 }
 
 async function loadVolatileBackupItemsByProgressKey(
@@ -2167,6 +2169,59 @@ function buildVolatileBackupItemRecord(sessionKey, item, progressKey = "") {
   };
 }
 
+function normalizeVolatileBackupProgressEntry(entry) {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+    return null;
+  }
+
+  return {
+    ...entry,
+    cursor: typeof entry.cursor === "string" ? entry.cursor : "",
+    previousCursor: typeof entry.previousCursor === "string" ? entry.previousCursor : "",
+    totalItemCount: Number.isFinite(Number(entry.totalItemCount))
+      ? Math.max(0, Number(entry.totalItemCount))
+      : 0,
+    backedUpItemCount: Number.isFinite(Number(entry.backedUpItemCount))
+      ? Math.max(0, Number(entry.backedUpItemCount))
+      : 0,
+    previewCount: Number.isFinite(Number(entry.previewCount))
+      ? Math.max(0, Number(entry.previewCount))
+      : 0,
+    isComplete: entry.isComplete === true,
+  };
+}
+
+function normalizeVolatileBackupProgressMap(progressByKey) {
+  if (!progressByKey || typeof progressByKey !== "object" || Array.isArray(progressByKey)) {
+    return {};
+  }
+
+  const nextProgressMap = {};
+  for (const [key, value] of Object.entries(progressByKey)) {
+    if (typeof key !== "string" || !key) {
+      continue;
+    }
+
+    const normalizedEntry = normalizeVolatileBackupProgressEntry(value);
+    if (normalizedEntry) {
+      nextProgressMap[key] = normalizedEntry;
+    }
+  }
+
+  return nextProgressMap;
+}
+
+function normalizeVolatileBackupMetaRecord(record) {
+  if (!record || typeof record !== "object" || Array.isArray(record)) {
+    return null;
+  }
+
+  return {
+    ...record,
+    progressByKey: normalizeVolatileBackupProgressMap(record.progressByKey),
+  };
+}
+
 async function writeVolatileBackupMeta(sessionKey, meta = {}, options = {}) {
   if (!sessionKey) {
     return null;
@@ -2174,12 +2229,12 @@ async function writeVolatileBackupMeta(sessionKey, meta = {}, options = {}) {
 
   const existingMeta =
     options && options.merge === false ? null : await readVolatileBackupMeta(sessionKey);
-  const nextMeta = {
+  const nextMeta = normalizeVolatileBackupMetaRecord({
     ...(existingMeta && typeof existingMeta === "object" ? existingMeta : {}),
     ...(meta && typeof meta === "object" ? meta : {}),
     sessionKey,
     updatedAt: new Date().toISOString(),
-  };
+  });
 
   const db = await openVolatileBackupDb();
   await new Promise((resolve, reject) => {
@@ -2205,18 +2260,18 @@ async function updateVolatileBackupProgress(sessionKey, progressKey, patch = {})
   }
 
   const existingMeta = await readVolatileBackupMeta(sessionKey);
-  const existingProgressMap =
-    existingMeta && existingMeta.progressByKey && typeof existingMeta.progressByKey === "object"
-      ? existingMeta.progressByKey
-      : {};
+  const existingProgressMap = normalizeVolatileBackupProgressMap(
+    existingMeta && existingMeta.progressByKey,
+  );
+  const nextProgressEntry = normalizeVolatileBackupProgressEntry({
+    ...(existingProgressMap[progressKey] && typeof existingProgressMap[progressKey] === "object"
+      ? existingProgressMap[progressKey]
+      : {}),
+    ...(patch && typeof patch === "object" ? patch : {}),
+  });
   const nextProgressMap = {
     ...existingProgressMap,
-    [progressKey]: {
-      ...(existingProgressMap[progressKey] && typeof existingProgressMap[progressKey] === "object"
-        ? existingProgressMap[progressKey]
-        : {}),
-      ...(patch && typeof patch === "object" ? patch : {}),
-    },
+    [progressKey]: nextProgressEntry,
   };
 
   return writeVolatileBackupMeta(sessionKey, {
@@ -7835,10 +7890,7 @@ async function fetchAllCreatorCharacterCameoItems(creatorProfile, options = {}) 
     "creatorCharacterCameos",
     creatorProfile.profileId,
   );
-  const resumeState =
-    options && options.resumeState && typeof options.resumeState === "object"
-      ? options.resumeState
-      : null;
+  const resumeState = normalizeVolatileBackupProgressEntry(options && options.resumeState);
   let isExhaustive = false;
   let cursor =
     resumeState && typeof resumeState.cursor === "string" && resumeState.cursor
@@ -8297,14 +8349,11 @@ async function fetchAllCreatorItems(options = {}) {
   let usesVolatileBackup = false;
   const volatileBackupResumeMeta =
     options && options.volatileBackupResumeMeta && typeof options.volatileBackupResumeMeta === "object"
-      ? options.volatileBackupResumeMeta
+      ? normalizeVolatileBackupMetaRecord(options.volatileBackupResumeMeta)
       : null;
-  const volatileBackupProgressByKey =
-    volatileBackupResumeMeta &&
-    volatileBackupResumeMeta.progressByKey &&
-    typeof volatileBackupResumeMeta.progressByKey === "object"
-      ? volatileBackupResumeMeta.progressByKey
-      : {};
+  const volatileBackupProgressByKey = normalizeVolatileBackupProgressMap(
+    volatileBackupResumeMeta && volatileBackupResumeMeta.progressByKey,
+  );
 
   const mergeResult = (result) => {
     if (!result || typeof result !== "object") {
