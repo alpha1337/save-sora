@@ -124,7 +124,7 @@ chrome.runtime.onInstalled.addListener(() => {
 chrome.runtime.onStartup.addListener(() => {
   void scheduleUpdateAlarm();
   void restoreUpdaterState();
-  void runUpdateCheck({ trigger: "startup", interactive: false }).catch((error) => {
+  void runUpdateCheck({ trigger: "startup", interactive: false, applyIfAvailable: false }).catch((error) => {
     console.warn("Failed to check for updates during startup.", error);
   });
 });
@@ -134,7 +134,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     return;
   }
 
-  void runUpdateCheck({ trigger: "alarm", interactive: false }).catch((error) => {
+  void runUpdateCheck({ trigger: "alarm", interactive: false, applyIfAvailable: false }).catch((error) => {
     console.warn("Failed to check for updates from the scheduled alarm.", error);
   });
 });
@@ -726,6 +726,9 @@ function createDefaultUpdateState(overrides = {}) {
     phase: "idle",
     currentVersion: CURRENT_EXTENSION_VERSION,
     latestVersion: CURRENT_EXTENSION_VERSION,
+    latestGitHubVersion: "",
+    latestManifestDetected: false,
+    latestZipDetected: false,
     message: "",
     detail: "",
     progress: 0,
@@ -740,6 +743,7 @@ function createDefaultUpdateState(overrides = {}) {
     pendingManagedFiles: [],
     changelogMarkdown: "",
     pendingDeferred: false,
+    pendingUpdateReady: false,
     error: "",
     ...overrides,
   };
@@ -1029,6 +1033,9 @@ function buildUpdateStatusSnapshot() {
     phase: source.phase,
     currentVersion: source.currentVersion,
     latestVersion: source.latestVersion,
+    latestGitHubVersion: source.latestGitHubVersion || "",
+    latestManifestDetected: source.latestManifestDetected === true,
+    latestZipDetected: source.latestZipDetected === true,
     message: source.message,
     detail: source.detail,
     progress: clampFetchProgressRatio(source.progress),
@@ -1038,6 +1045,7 @@ function buildUpdateStatusSnapshot() {
     updateAvailable: source.updateAvailable === true,
     pendingUpdateVersion: source.pendingUpdateVersion || "",
     pendingDeferred: source.pendingDeferred === true,
+    pendingUpdateReady: source.pendingUpdateReady === true,
     changelogMarkdown: typeof source.changelogMarkdown === "string" ? source.changelogMarkdown : "",
     error: source.error || "",
   };
@@ -1047,12 +1055,19 @@ function normalizeAutomaticUpdatesEnabled(value) {
   return value !== false;
 }
 
+function hasStoredInstallFolderHandle(record) {
+  return Boolean(record && record.handle && record.handle.kind === "directory");
+}
+
 async function persistUpdateMeta() {
   const snapshot = buildUpdateStatusSnapshot();
   await writeUpdaterRecord(UPDATE_META_RECORD_KEY, {
     phase: snapshot.phase,
     currentVersion: snapshot.currentVersion,
     latestVersion: snapshot.latestVersion,
+    latestGitHubVersion: snapshot.latestGitHubVersion,
+    latestManifestDetected: snapshot.latestManifestDetected,
+    latestZipDetected: snapshot.latestZipDetected,
     message: snapshot.message,
     detail: snapshot.detail,
     progress: snapshot.progress,
@@ -1062,6 +1077,7 @@ async function persistUpdateMeta() {
     updateAvailable: snapshot.updateAvailable,
     pendingUpdateVersion: snapshot.pendingUpdateVersion,
     pendingDeferred: snapshot.pendingDeferred,
+    pendingUpdateReady: snapshot.pendingUpdateReady,
     changelogMarkdown: snapshot.changelogMarkdown,
     error: snapshot.error,
   });
@@ -1092,7 +1108,7 @@ async function restoreUpdaterState() {
   const installRecord = await readUpdaterRecord(UPDATE_FOLDER_RECORD_KEY);
   const pendingRecord = await readUpdaterRecord(UPDATE_PENDING_RECORD_KEY);
   const metaRecord = await readUpdaterRecord(UPDATE_META_RECORD_KEY);
-  const installFolderLinked = await hasStoredInstallFolderAccess(installRecord);
+  const installFolderLinked = hasStoredInstallFolderHandle(installRecord);
   const automaticUpdatesEnabled = normalizeAutomaticUpdatesEnabled(
     currentState &&
       currentState.settings &&
@@ -1111,6 +1127,20 @@ async function restoreUpdaterState() {
         : metaRecord && typeof metaRecord.latestVersion === "string" && metaRecord.latestVersion
           ? metaRecord.latestVersion
           : CURRENT_EXTENSION_VERSION,
+    latestGitHubVersion:
+      pendingRecord && typeof pendingRecord.version === "string" && pendingRecord.version
+        ? pendingRecord.version
+        : metaRecord && typeof metaRecord.latestGitHubVersion === "string" && metaRecord.latestGitHubVersion
+          ? metaRecord.latestGitHubVersion
+          : "",
+    latestManifestDetected:
+      pendingRecord && typeof pendingRecord.version === "string"
+        ? pendingRecord.manifestDetected !== false
+        : metaRecord && metaRecord.latestManifestDetected === true,
+    latestZipDetected:
+      pendingRecord && typeof pendingRecord.version === "string"
+        ? pendingRecord.zipDetected !== false
+        : metaRecord && metaRecord.latestZipDetected === true,
     pendingUpdateVersion:
       pendingRecord && typeof pendingRecord.version === "string" ? pendingRecord.version : "",
     pendingUpdateUrl:
@@ -1133,6 +1163,10 @@ async function restoreUpdaterState() {
       pendingRecord && typeof pendingRecord.version === "string"
         ? compareSemver(pendingRecord.version, CURRENT_EXTENSION_VERSION) > 0
         : metaRecord && metaRecord.updateAvailable === true,
+    pendingUpdateReady:
+      pendingRecord && typeof pendingRecord.version === "string"
+        ? compareSemver(pendingRecord.version, CURRENT_EXTENSION_VERSION) > 0
+        : metaRecord && metaRecord.pendingUpdateReady === true,
     phase:
       pendingRecord &&
       typeof pendingRecord.version === "string" &&
@@ -1315,6 +1349,8 @@ async function fetchLatestReleaseManifest() {
     const error = new Error("The latest GitHub release is missing the update manifest asset.");
     error.code = "MISSING_UPDATE_MANIFEST";
     error.releaseVersion = releaseVersion;
+    error.manifestDetected = false;
+    error.zipDetected = false;
     throw error;
   }
 
@@ -1329,7 +1365,12 @@ async function fetchLatestReleaseManifest() {
     (asset) => asset && asset.name === zipFileName && asset.browser_download_url,
   );
   if (!zipAsset) {
-    throw new Error("The latest GitHub release is missing the packaged update zip.");
+    const error = new Error("The latest GitHub release is missing the packaged update zip.");
+    error.code = "MISSING_UPDATE_ZIP";
+    error.releaseVersion = typeof manifest.version === "string" && manifest.version ? manifest.version : releaseVersion;
+    error.manifestDetected = true;
+    error.zipDetected = false;
+    throw error;
   }
 
   const managedFiles = Array.isArray(manifest.managedFiles)
@@ -1341,6 +1382,7 @@ async function fetchLatestReleaseManifest() {
   return {
     version:
       typeof manifest.version === "string" && manifest.version ? manifest.version : releaseVersion,
+    releaseVersion,
     zipUrl: zipAsset.browser_download_url,
     zipSha256: typeof manifest.zipSha256 === "string" ? manifest.zipSha256.toLowerCase() : "",
     manifestUrl: manifestAsset.browser_download_url,
@@ -1349,6 +1391,8 @@ async function fetchLatestReleaseManifest() {
     releaseId: release && release.id ? release.id : "",
     generatedAt: typeof manifest.generatedAt === "string" ? manifest.generatedAt : "",
     changelogMarkdown: typeof release.body === "string" ? release.body : "",
+    manifestDetected: true,
+    zipDetected: true,
   };
 }
 
@@ -1592,6 +1636,8 @@ async function storePendingUpdate(updateInfo) {
     managedFiles: updateInfo.managedFiles,
     generatedAt: updateInfo.generatedAt,
     releaseId: updateInfo.releaseId,
+    manifestDetected: updateInfo.manifestDetected === true,
+    zipDetected: updateInfo.zipDetected === true,
     changelogMarkdown: updateInfo.changelogMarkdown || "",
     pendingDeferred: updateInfo.pendingDeferred === true,
   });
@@ -1610,6 +1656,7 @@ async function installPendingUpdate(options = {}) {
       pendingUpdateVersion: "",
       updateAvailable: false,
       pendingDeferred: false,
+      pendingUpdateReady: false,
       message: "",
       detail: "",
       error: "",
@@ -1622,6 +1669,9 @@ async function installPendingUpdate(options = {}) {
     await setUpdateState({
       phase: "awaiting-folder",
       latestVersion: pendingUpdate.version,
+      latestGitHubVersion: pendingUpdate.version,
+      latestManifestDetected: true,
+      latestZipDetected: true,
       updateAvailable: true,
       pendingUpdateVersion: pendingUpdate.version,
       pendingUpdateUrl: pendingUpdate.zipUrl || "",
@@ -1630,6 +1680,7 @@ async function installPendingUpdate(options = {}) {
       pendingManagedFiles: Array.isArray(pendingUpdate.managedFiles) ? pendingUpdate.managedFiles : [],
       changelogMarkdown:
         typeof pendingUpdate.changelogMarkdown === "string" ? pendingUpdate.changelogMarkdown : "",
+      pendingUpdateReady: true,
       message: "Link the Save Sora install folder to enable self-updates.",
       detail: "Choose the unpacked extension folder once so Save Sora can apply future GitHub releases automatically.",
       error: "",
@@ -1645,9 +1696,13 @@ async function installPendingUpdate(options = {}) {
     await setUpdateState({
       phase: "deferred",
       latestVersion: pendingUpdate.version,
+      latestGitHubVersion: pendingUpdate.version,
+      latestManifestDetected: true,
+      latestZipDetected: true,
       updateAvailable: true,
       pendingUpdateVersion: pendingUpdate.version,
       pendingDeferred: true,
+      pendingUpdateReady: true,
       changelogMarkdown:
         typeof pendingUpdate.changelogMarkdown === "string" ? pendingUpdate.changelogMarkdown : "",
       message: "Update ready to install.",
@@ -1661,6 +1716,9 @@ async function installPendingUpdate(options = {}) {
     {
       phase: "downloading",
       latestVersion: pendingUpdate.version,
+      latestGitHubVersion: pendingUpdate.version,
+      latestManifestDetected: true,
+      latestZipDetected: true,
       updateAvailable: true,
       pendingUpdateVersion: pendingUpdate.version,
       pendingUpdateUrl: pendingUpdate.zipUrl || "",
@@ -1670,9 +1728,10 @@ async function installPendingUpdate(options = {}) {
       changelogMarkdown:
         typeof pendingUpdate.changelogMarkdown === "string" ? pendingUpdate.changelogMarkdown : "",
       pendingDeferred: false,
+      pendingUpdateReady: true,
       message: `Downloading Save Sora ${pendingUpdate.version}…`,
-      detail: "Fetching the latest GitHub release package and verifying its checksum.",
-      progress: 0,
+      detail: "Downloading the latest GitHub release package.",
+      progress: 0.4,
       error: "",
     },
     { persist: true },
@@ -1683,11 +1742,20 @@ async function installPendingUpdate(options = {}) {
       await setUpdateState(
         {
           phase: "downloading",
-          progress: progressRatio * 0.55,
+          progress: 0.4 + progressRatio * 0.24,
         },
         { persist: false },
       );
     });
+    await setUpdateState(
+      {
+        phase: "downloading",
+        message: `Verifying Save Sora ${pendingUpdate.version}…`,
+        detail: "Checking the package checksum and preparing the release archive.",
+        progress: 0.68,
+      },
+      { persist: false },
+    );
     const actualDigest = await digestSha256Hex(packageBuffer);
     if (
       pendingUpdate.zipSha256 &&
@@ -1696,6 +1764,15 @@ async function installPendingUpdate(options = {}) {
       throw new Error("The downloaded update package failed checksum verification.");
     }
 
+    await setUpdateState(
+      {
+        phase: "applying",
+        message: `Unzipping Save Sora ${pendingUpdate.version}…`,
+        detail: "Opening the verified archive and validating the managed runtime files.",
+        progress: 0.76,
+      },
+      { persist: false },
+    );
     const extractedFiles = await extractManagedFilesFromZip(
       packageBuffer,
       pendingUpdate.managedFiles,
@@ -1720,8 +1797,8 @@ async function installPendingUpdate(options = {}) {
       {
         phase: "applying",
         message: `Installing Save Sora ${pendingUpdate.version}…`,
-        detail: "Applying the verified update into the unpacked extension folder.",
-        progress: 0.6,
+        detail: "Writing the updated runtime into the unpacked extension folder.",
+        progress: 0.82,
       },
       { persist: true },
     );
@@ -1730,7 +1807,7 @@ async function installPendingUpdate(options = {}) {
       await setUpdateState(
         {
           phase: "applying",
-          progress: 0.6 + progressRatio * 0.35,
+          progress: 0.82 + progressRatio * 0.14,
         },
         { persist: false },
       );
@@ -1741,9 +1818,13 @@ async function installPendingUpdate(options = {}) {
       lastSuccessfulUpdateAt: new Date().toISOString(),
       lastSuccessfulUpdateVersion: pendingUpdate.version,
       latestVersion: pendingUpdate.version,
+      latestGitHubVersion: pendingUpdate.version,
+      latestManifestDetected: true,
+      latestZipDetected: true,
       updateAvailable: false,
       pendingUpdateVersion: "",
       pendingDeferred: false,
+      pendingUpdateReady: false,
       error: "",
       phase: "reloading",
       progress: 1,
@@ -1771,9 +1852,13 @@ async function installPendingUpdate(options = {}) {
     await setUpdateState({
       phase: "error",
       latestVersion: pendingUpdate.version,
+      latestGitHubVersion: pendingUpdate.version,
+      latestManifestDetected: true,
+      latestZipDetected: true,
       updateAvailable: true,
       pendingUpdateVersion: pendingUpdate.version,
       pendingDeferred: false,
+      pendingUpdateReady: true,
       changelogMarkdown:
         typeof pendingUpdate.changelogMarkdown === "string" ? pendingUpdate.changelogMarkdown : "",
       message: "Could not install the latest update.",
@@ -1803,14 +1888,14 @@ async function runUpdateCheck(options = {}) {
     phase: "checking",
     message: "Checking GitHub for updates…",
     detail: "Looking for the latest Save Sora release before opening the dashboard.",
-    progress: 0,
+    progress: 0.16,
     automaticUpdatesEnabled,
     error: "",
   });
 
   try {
     const latestRelease = await fetchLatestReleaseManifest();
-    const installFolderLinked = Boolean(await getLinkedInstallFolderRecord());
+    const installFolderLinked = currentUpdateState.installFolderLinked === true;
     const updateAvailable = compareSemver(latestRelease.version, CURRENT_EXTENSION_VERSION) > 0;
     const lastCheckedAt = new Date().toISOString();
 
@@ -1820,6 +1905,9 @@ async function runUpdateCheck(options = {}) {
         phase:
           automaticUpdatesEnabled && !installFolderLinked ? "awaiting-folder" : "idle",
         latestVersion: CURRENT_EXTENSION_VERSION,
+        latestGitHubVersion: latestRelease.version || latestRelease.releaseVersion || "",
+        latestManifestDetected: latestRelease.manifestDetected === true,
+        latestZipDetected: latestRelease.zipDetected === true,
         lastCheckedAt,
         installFolderLinked,
         updateAvailable: false,
@@ -1827,6 +1915,7 @@ async function runUpdateCheck(options = {}) {
         pendingManagedFiles: [],
         changelogMarkdown: "",
         pendingDeferred: false,
+        pendingUpdateReady: false,
         message:
           automaticUpdatesEnabled && !installFolderLinked
             ? "Finish one-time update setup."
@@ -1835,7 +1924,7 @@ async function runUpdateCheck(options = {}) {
           automaticUpdatesEnabled && !installFolderLinked
             ? "Chrome requires one-time access to the unpacked Save Sora folder so future GitHub releases can install automatically."
             : "",
-        progress: 0,
+        progress: 1,
         error: "",
       });
       return buildUpdateStatusSnapshot();
@@ -1847,12 +1936,11 @@ async function runUpdateCheck(options = {}) {
     };
     await storePendingUpdate(pendingUpdate);
     await setUpdateState({
-      phase: !installFolderLinked
-        ? "awaiting-folder"
-        : automaticUpdatesEnabled
-          ? "downloading"
-          : "update-available",
+      phase: !installFolderLinked ? "awaiting-folder" : "update-available",
       latestVersion: latestRelease.version,
+      latestGitHubVersion: latestRelease.version || latestRelease.releaseVersion || "",
+      latestManifestDetected: latestRelease.manifestDetected === true,
+      latestZipDetected: latestRelease.zipDetected === true,
       lastCheckedAt,
       installFolderLinked,
       updateAvailable: true,
@@ -1863,17 +1951,18 @@ async function runUpdateCheck(options = {}) {
       pendingManagedFiles: latestRelease.managedFiles,
       changelogMarkdown: latestRelease.changelogMarkdown || "",
       pendingDeferred: false,
+      pendingUpdateReady: true,
       message: !installFolderLinked
         ? "Link the Save Sora install folder to install the latest update."
         : automaticUpdatesEnabled
-          ? `Downloading Save Sora ${latestRelease.version}…`
+          ? `Save Sora ${latestRelease.version} is ready to install.`
           : `Save Sora ${latestRelease.version} is ready to install.`,
       detail: !installFolderLinked
         ? "Choose the unpacked extension folder once so Save Sora can update itself from GitHub."
         : automaticUpdatesEnabled
-          ? "Fetching the latest GitHub release package and verifying it before install."
+          ? "Review the latest release notes before Save Sora installs the update automatically."
           : "Automatic updates are turned off. Install the latest GitHub release when you are ready.",
-      progress: 0,
+      progress: installFolderLinked ? 0.34 : 0.28,
       error: "",
     });
 
@@ -1895,12 +1984,21 @@ async function runUpdateCheck(options = {}) {
       error.url === GITHUB_LATEST_RELEASE_URL;
 
     if (missingManifestForOlderOrCurrentRelease || noPublishedReleaseYet) {
-      const installFolderLinked = Boolean(await getLinkedInstallFolderRecord());
+      const installFolderLinked = currentUpdateState.installFolderLinked === true;
       await storePendingUpdate(null);
       await setUpdateState({
         phase:
           automaticUpdatesEnabled && !installFolderLinked ? "awaiting-folder" : "idle",
         latestVersion: CURRENT_EXTENSION_VERSION,
+        latestGitHubVersion: releaseVersion || "",
+        latestManifestDetected:
+          error && Object.prototype.hasOwnProperty.call(error, "manifestDetected")
+            ? error.manifestDetected === true
+            : false,
+        latestZipDetected:
+          error && Object.prototype.hasOwnProperty.call(error, "zipDetected")
+            ? error.zipDetected === true
+            : false,
         lastCheckedAt: new Date().toISOString(),
         installFolderLinked,
         updateAvailable: false,
@@ -1908,6 +2006,7 @@ async function runUpdateCheck(options = {}) {
         pendingManagedFiles: [],
         changelogMarkdown: "",
         pendingDeferred: false,
+        pendingUpdateReady: false,
         message:
           automaticUpdatesEnabled && !installFolderLinked
             ? "Finish one-time update setup."
@@ -1916,7 +2015,7 @@ async function runUpdateCheck(options = {}) {
           automaticUpdatesEnabled && !installFolderLinked
             ? "Chrome requires one-time access to the unpacked Save Sora folder so future GitHub releases can install automatically."
             : "",
-        progress: 0,
+        progress: 1,
         error: "",
       });
       return buildUpdateStatusSnapshot();
@@ -1924,9 +2023,19 @@ async function runUpdateCheck(options = {}) {
 
     await setUpdateState({
       phase: "error",
+      latestGitHubVersion: releaseVersion || currentUpdateState.latestGitHubVersion,
+      latestManifestDetected:
+        error && Object.prototype.hasOwnProperty.call(error, "manifestDetected")
+          ? error.manifestDetected === true
+          : currentUpdateState.latestManifestDetected,
+      latestZipDetected:
+        error && Object.prototype.hasOwnProperty.call(error, "zipDetected")
+          ? error.zipDetected === true
+          : currentUpdateState.latestZipDetected,
       message: "Could not check GitHub for updates.",
       detail: getErrorMessage(error),
       progress: 0,
+      pendingUpdateReady: currentUpdateState.pendingUpdateReady,
       changelogMarkdown: currentUpdateState.changelogMarkdown,
       error: getErrorMessage(error),
     });

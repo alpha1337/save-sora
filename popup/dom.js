@@ -102,6 +102,7 @@ export const dom = {
   automaticUpdatesInput: document.getElementById("automatic-updates-input"),
   updaterStatusSummary: document.getElementById("updater-status-summary"),
   updaterStatusDetail: document.getElementById("updater-status-detail"),
+  updaterStatusDiagnostics: document.getElementById("updater-status-diagnostics"),
   updaterCheckNowButton: document.getElementById("updater-check-now-button"),
   updaterRelinkButton: document.getElementById("updater-relink-button"),
   clearStorageButton: document.getElementById("clear-storage-button"),

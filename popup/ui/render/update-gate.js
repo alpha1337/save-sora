@@ -29,6 +29,12 @@ function normalizeUpdateStatus(updateStatus) {
         : "",
     latestVersion:
       typeof source.latestVersion === "string" && source.latestVersion ? source.latestVersion : "",
+    latestGitHubVersion:
+      typeof source.latestGitHubVersion === "string" && source.latestGitHubVersion
+        ? source.latestGitHubVersion
+        : "",
+    latestManifestDetected: source.latestManifestDetected === true,
+    latestZipDetected: source.latestZipDetected === true,
     message: typeof source.message === "string" ? source.message : "",
     detail: typeof source.detail === "string" ? source.detail : "",
     progress: Number.isFinite(Number(source.progress))
@@ -41,6 +47,7 @@ function normalizeUpdateStatus(updateStatus) {
     pendingUpdateVersion:
       typeof source.pendingUpdateVersion === "string" ? source.pendingUpdateVersion : "",
     pendingDeferred: source.pendingDeferred === true,
+    pendingUpdateReady: source.pendingUpdateReady === true,
     changelogMarkdown:
       typeof source.changelogMarkdown === "string" ? source.changelogMarkdown : "",
     error: typeof source.error === "string" ? source.error : "",
@@ -92,13 +99,20 @@ function syncUpdateGate(updateStatus) {
   );
   dom.updateGateSpinner?.classList.toggle("hidden", !showSpinner);
 
-  const showProgress = updateStatus.phase === "downloading" || updateStatus.phase === "applying";
+  const showProgress = [
+    "checking",
+    "update-available",
+    "downloading",
+    "applying",
+    "reloading",
+    "deferred",
+  ].includes(updateStatus.phase);
   dom.updateGateProgress?.classList.toggle("hidden", !showProgress);
   if (dom.updateGateProgressFill instanceof HTMLElement) {
     dom.updateGateProgressFill.style.width = `${Math.round(updateStatus.progress * 100)}%`;
   }
   if (dom.updateGateProgressLabel instanceof HTMLElement) {
-    dom.updateGateProgressLabel.textContent = `${Math.round(updateStatus.progress * 100)}%`;
+    dom.updateGateProgressLabel.textContent = getUpdateGateProgressLabel(updateStatus);
   }
 
   const shouldShowChangelog =
@@ -148,6 +162,9 @@ function syncUpdaterStatusRow(updateStatus) {
 
   dom.updaterStatusSummary.textContent = `Version ${currentVersion} · ${lastChecked} · ${folderStatus}`;
   dom.updaterStatusDetail.textContent = getUpdaterStatusDetail(updateStatus);
+  if (dom.updaterStatusDiagnostics instanceof HTMLElement) {
+    dom.updaterStatusDiagnostics.textContent = getUpdaterDiagnosticsText(updateStatus);
+  }
   if (dom.updaterRelinkButton instanceof HTMLButtonElement) {
     dom.updaterRelinkButton.textContent = updateStatus.installFolderLinked ? "Relink folder" : "Link folder";
   }
@@ -188,7 +205,9 @@ function getUpdateGateMessage(updateStatus) {
     return "Choose the unpacked Save Sora folder once so future GitHub releases can install automatically. If you prefer, you can continue without auto-updates for now.";
   }
   if (updateStatus.phase === "update-available") {
-    return "A newer GitHub release is available. Review the changelog below and install it now or skip this session.";
+    return updateStatus.automaticUpdatesEnabled
+      ? "A newer GitHub release is available. Review the changelog below while Save Sora prepares to install it automatically."
+      : "A newer GitHub release is available. Review the changelog below and install it now or skip this session.";
   }
   if (updateStatus.phase === "deferred") {
     return "The update is ready, but Save Sora is busy right now. Install it now when you are ready or resume later.";
@@ -213,6 +232,35 @@ function getUpdaterStatusDetail(updateStatus) {
     return "Save Sora checks GitHub on startup and periodically while Chrome stays open.";
   }
   return "Save Sora checks GitHub on startup and periodically while Chrome stays open.";
+}
+
+function getUpdaterDiagnosticsText(updateStatus) {
+  const latestVersion = updateStatus.latestGitHubVersion || updateStatus.latestVersion || "none";
+  const manifestState = updateStatus.latestManifestDetected ? "found" : "missing";
+  const zipState = updateStatus.latestZipDetected ? "found" : "missing";
+  const pendingState = updateStatus.pendingUpdateReady ? "ready" : "not ready";
+  return `Latest GitHub version: ${latestVersion} · Manifest: ${manifestState} · Package zip: ${zipState} · Pending update: ${pendingState}`;
+}
+
+function getUpdateGateProgressLabel(updateStatus) {
+  switch (updateStatus.phase) {
+    case "checking":
+      return "Step 1 of 5 · Checking GitHub";
+    case "update-available":
+      return updateStatus.automaticUpdatesEnabled
+        ? "Step 2 of 5 · Update found"
+        : "Step 2 of 5 · Update ready";
+    case "downloading":
+      return "Step 3 of 5 · Downloading package";
+    case "applying":
+      return "Step 4 of 5 · Verifying and installing";
+    case "reloading":
+      return "Step 5 of 5 · Reloading Save Sora";
+    case "deferred":
+      return "Step 2 of 5 · Waiting to install";
+    default:
+      return `${Math.round(updateStatus.progress * 100)}%`;
+  }
 }
 
 function formatLastChecked(lastCheckedAt) {

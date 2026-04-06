@@ -1,14 +1,18 @@
 import { dom } from "../dom.js";
 import {
+  fetchUpdateStatus,
   installPendingRuntimeUpdate,
   requestUpdateCheck,
   saveRuntimeSettings,
 } from "../runtime.js";
 import { popupState } from "../state.js";
 import { showNotice } from "../ui/layout.js";
+import { syncUpdateSurfaces } from "../ui/render/update-gate.js";
 import { refreshStatus } from "./polling.js";
 
 const UPDATE_GATE_MIN_STARTUP_DWELL_MS = 900;
+const UPDATE_GATE_AUTO_INSTALL_DWELL_MS = 3200;
+const UPDATE_GATE_POLL_INTERVAL_MS = 220;
 const VOLATILE_BACKUP_DB_NAME = "saveSoraVolatileBackup";
 const VOLATILE_BACKUP_DB_VERSION = 3;
 const VOLATILE_BACKUP_ITEM_STORE = "items";
@@ -20,31 +24,61 @@ const CURRENT_EXTENSION_NAME =
   CURRENT_EXTENSION_MANIFEST && typeof CURRENT_EXTENSION_MANIFEST.name === "string"
     ? CURRENT_EXTENSION_MANIFEST.name
     : "Save Sora: Sora Bulk Downloader";
+const BOOT_UPDATE_GATE_STEPS = 3;
 
 export async function bootstrapUpdaterGate() {
   popupState.updateGateHidden = false;
   popupState.skippedUpdateVersion = "";
 
   try {
-    await Promise.all([
-      requestUpdateCheck({
-        trigger: "startup",
-        interactive: false,
-        applyIfAvailable: true,
-      }),
-      new Promise((resolve) => {
-        window.setTimeout(resolve, UPDATE_GATE_MIN_STARTUP_DWELL_MS);
-      }),
-    ]);
+    await dom.updateGateVideo?.play?.();
+  } catch (_error) {
+    // Ignore autoplay failures; the gate still works with the static backdrop.
+  }
+
+  try {
+    setBootGateStep({
+      step: 1,
+      progress: 0.18,
+      title: "Starting Save Sora…",
+      message: "Preparing the updater and extension runtime before the dashboard opens.",
+    });
+
+    const updateCheckPromise = requestUpdateCheck({
+      trigger: "startup",
+      interactive: false,
+      applyIfAvailable: false,
+    });
+
+    setBootGateStep({
+      step: 2,
+      progress: 0.46,
+      title: "Checking GitHub for updates…",
+      message: "Looking for a newer Save Sora release and validating your updater state.",
+    });
+
+    let updateStatus = await awaitUpdateOperation(updateCheckPromise, {
+      minimumMs: UPDATE_GATE_MIN_STARTUP_DWELL_MS,
+    });
+
+    updateStatus = await maybeAutoInstallAfterReview(updateStatus);
+
+    if (shouldBlockDashboard(updateStatus)) {
+      await refreshStatus();
+      return;
+    }
+
+    setBootGateStep({
+      step: 3,
+      progress: 0.82,
+      title: "Loading your dashboard…",
+      message: "Restoring your saved settings, working set, and recent extension state.",
+    });
+    await waitForMs(140);
+    await refreshStatus();
   } catch (error) {
     showNotice(dom.errorBox, error instanceof Error ? error.message : String(error));
-  } finally {
     await refreshStatus();
-    try {
-      await dom.updateGateVideo?.play?.();
-    } catch (_error) {
-      // Ignore autoplay failures; the gate still works with the static backdrop.
-    }
   }
 }
 
@@ -83,11 +117,17 @@ async function checkForUpdatesFromUi() {
   try {
     popupState.updateGateHidden = false;
     popupState.skippedUpdateVersion = "";
-    await requestUpdateCheck({
-      trigger: "manual",
-      interactive: true,
-      applyIfAvailable: true,
-    });
+    let updateStatus = await awaitUpdateOperation(
+      requestUpdateCheck({
+        trigger: "manual",
+        interactive: true,
+        applyIfAvailable: false,
+      }),
+    );
+    updateStatus = await maybeAutoInstallAfterReview(updateStatus);
+    if (!shouldBlockDashboard(updateStatus)) {
+      popupState.updateGateHidden = true;
+    }
   } catch (error) {
     showNotice(dom.errorBox, error instanceof Error ? error.message : String(error));
   } finally {
@@ -114,7 +154,7 @@ async function installPendingUpdateFromUi() {
   try {
     popupState.updateGateHidden = false;
     popupState.skippedUpdateVersion = "";
-    await installPendingRuntimeUpdate();
+    await awaitUpdateOperation(installPendingRuntimeUpdate());
   } catch (error) {
     showNotice(dom.errorBox, error instanceof Error ? error.message : String(error));
   } finally {
@@ -141,11 +181,17 @@ async function linkInstallFolderFromUserGesture() {
     }
     const folderInfo = await validateSelectedInstallFolder(handle);
     await persistLinkedInstallFolderRecord(handle, folderInfo);
-    await requestUpdateCheck({
-      trigger: "folder-link",
-      interactive: true,
-      applyIfAvailable: true,
-    });
+    let updateStatus = await awaitUpdateOperation(
+      requestUpdateCheck({
+        trigger: "folder-link",
+        interactive: true,
+        applyIfAvailable: false,
+      }),
+    );
+    updateStatus = await maybeAutoInstallAfterReview(updateStatus);
+    if (!shouldBlockDashboard(updateStatus)) {
+      popupState.updateGateHidden = true;
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (/aborted|cancelled|canceled/i.test(message)) {
@@ -238,5 +284,140 @@ async function persistLinkedInstallFolderRecord(handle, folderInfo) {
     };
     getRequest.onerror = () =>
       reject(getRequest.error || new Error("Could not read the existing updater folder link."));
+  });
+}
+
+function setBootGateStep({ step, progress, title, message }) {
+  if (dom.updateGate instanceof HTMLElement) {
+    dom.updateGate.classList.remove("hidden");
+    dom.updateGate.setAttribute("aria-hidden", "false");
+    dom.updateGate.setAttribute("aria-busy", "true");
+  }
+  if (dom.updateGateTitle instanceof HTMLElement && typeof title === "string") {
+    dom.updateGateTitle.textContent = title;
+  }
+  if (dom.updateGateMessage instanceof HTMLElement && typeof message === "string") {
+    dom.updateGateMessage.textContent = message;
+  }
+  if (dom.updateGateSpinner instanceof HTMLElement) {
+    dom.updateGateSpinner.classList.remove("hidden");
+  }
+  if (dom.updateGateProgress instanceof HTMLElement) {
+    dom.updateGateProgress.classList.remove("hidden");
+    dom.updateGateProgress.setAttribute("aria-hidden", "false");
+  }
+  if (dom.updateGateProgressFill instanceof HTMLElement) {
+    dom.updateGateProgressFill.style.width = `${Math.round(Math.max(0, Math.min(1, progress)) * 100)}%`;
+  }
+  if (dom.updateGateProgressLabel instanceof HTMLElement) {
+    dom.updateGateProgressLabel.textContent = `Step ${step} of ${BOOT_UPDATE_GATE_STEPS}`;
+  }
+  if (dom.updateGateChangelog instanceof HTMLElement) {
+    dom.updateGateChangelog.classList.add("hidden");
+  }
+  if (dom.updateGateActions instanceof HTMLElement) {
+    dom.updateGateActions.classList.add("hidden");
+  }
+}
+
+async function awaitUpdateOperation(operationPromise, options = {}) {
+  const minimumMs = Math.max(0, Number(options.minimumMs) || 0);
+  const startedAt = Date.now();
+  let settled = false;
+  let resolvedValue;
+  let rejectedError = null;
+
+  operationPromise
+    .then((value) => {
+      settled = true;
+      resolvedValue = value;
+    })
+    .catch((error) => {
+      settled = true;
+      rejectedError = error;
+    });
+
+  while (!settled || Date.now() - startedAt < minimumMs) {
+    try {
+      const liveStatus = await fetchUpdateStatus();
+      syncUpdateSurfaces(liveStatus);
+    } catch (_error) {
+      // Ignore transient polling failures while the background updater is still working.
+    }
+
+    if (settled && Date.now() - startedAt >= minimumMs) {
+      break;
+    }
+
+    await waitForMs(UPDATE_GATE_POLL_INTERVAL_MS);
+  }
+
+  if (rejectedError) {
+    throw rejectedError;
+  }
+
+  syncUpdateSurfaces(resolvedValue);
+  return resolvedValue;
+}
+
+async function maybeAutoInstallAfterReview(updateStatus) {
+  if (!shouldAutoInstallAfterReview(updateStatus)) {
+    return updateStatus;
+  }
+
+  await waitForMs(UPDATE_GATE_AUTO_INSTALL_DWELL_MS);
+
+  const liveStatus = await fetchUpdateStatus();
+  syncUpdateSurfaces(liveStatus);
+
+  if (!shouldAutoInstallAfterReview(liveStatus) || isSkippedForSession(liveStatus)) {
+    return liveStatus;
+  }
+
+  return await awaitUpdateOperation(installPendingRuntimeUpdate());
+}
+
+function shouldAutoInstallAfterReview(updateStatus) {
+  return Boolean(
+    updateStatus &&
+      updateStatus.phase === "update-available" &&
+      updateStatus.installFolderLinked === true &&
+      updateStatus.automaticUpdatesEnabled !== false,
+  );
+}
+
+function shouldBlockDashboard(updateStatus) {
+  return isBlockingUpdatePhase(updateStatus?.phase) && !isSkippedForSession(updateStatus);
+}
+
+function isSkippedForSession(updateStatus) {
+  const pendingVersion =
+    updateStatus && typeof updateStatus.pendingUpdateVersion === "string" && updateStatus.pendingUpdateVersion
+      ? updateStatus.pendingUpdateVersion
+      : updateStatus && typeof updateStatus.latestVersion === "string"
+        ? updateStatus.latestVersion
+        : "";
+  return Boolean(
+    pendingVersion &&
+      popupState.skippedUpdateVersion &&
+      popupState.skippedUpdateVersion === pendingVersion,
+  );
+}
+
+function isBlockingUpdatePhase(phase) {
+  return [
+    "awaiting-folder",
+    "update-available",
+    "downloading",
+    "applying",
+    "reloading",
+    "deferred",
+    "error",
+  ].includes(typeof phase === "string" ? phase : "");
+}
+
+function waitForMs(durationMs) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, durationMs);
   });
 }
