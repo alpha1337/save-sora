@@ -9,9 +9,25 @@
  * @returns {string}
  */
 export function getItemKey(item) {
-  return item && typeof item.key === "string"
-    ? item.key
-    : `${item.sourcePage}:${item.id}:${item.attachmentIndex}`;
+  if (item && typeof item === "object") {
+    const sourcePage = typeof item.sourcePage === "string" ? item.sourcePage : "";
+    const sourceType =
+      typeof item.sourceType === "string" && item.sourceType ? item.sourceType : "";
+    const itemId = typeof item.id === "string" ? item.id : "";
+    const attachmentIndex = Number.isInteger(item.attachmentIndex) ? item.attachmentIndex : 0;
+
+    if (sourcePage && itemId) {
+      return sourceType
+        ? `${sourcePage}:${sourceType}:${itemId}:${attachmentIndex}`
+        : `${sourcePage}:${itemId}:${attachmentIndex}`;
+    }
+
+    if (typeof item.key === "string") {
+      return item.key;
+    }
+  }
+
+  return "";
 }
 
 /**
@@ -31,9 +47,9 @@ export function getItemSourceLabel(item) {
     case "creatorCameos":
       return "Cast In";
     case "creatorCharacters":
-      return "Creator Character";
+      return "Side Character";
     case "creatorCharacterCameos":
-      return "Character Cameo";
+      return "Side Character";
     case "cameos":
       return "Cameo";
     case "characters":
@@ -224,6 +240,28 @@ export function getSelectedBatchMetrics(items, selectedKeys) {
     selectedCount,
     totalBytes: hasKnownSize ? totalBytes : null,
   };
+}
+
+/**
+ * Returns whether the item should be presented as a draft-state result.
+ *
+ * @param {object} item
+ * @returns {boolean}
+ */
+export function isDraftVideoItem(item) {
+  if (!item || typeof item !== "object") {
+    return false;
+  }
+
+  if (item.sourceType === "draft") {
+    return true;
+  }
+
+  if (typeof item.id === "string" && item.id.startsWith("gen_")) {
+    return true;
+  }
+
+  return false;
 }
 
 /**

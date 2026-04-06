@@ -3424,7 +3424,7 @@ body[data-theme="light"] .info-panel p {
   margin-top: 0;
 }
 
-.item-aspect-badge,
+.item-state-badge,
 .item-source-badge,
 .item-count-pill {
   display: inline-flex;
@@ -3446,11 +3446,11 @@ body[data-theme="light"] .info-panel p {
   color: var(--success);
 }
 
-.item-aspect-badge {
+.item-state-badge {
   min-height: 16px;
   padding: 1px 5px;
-  border-color: rgba(131, 165, 152, 0.4);
-  color: var(--blue-deep);
+  border-color: rgba(184, 187, 38, 0.34);
+  color: var(--success);
   font-size: 9px;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -3466,7 +3466,7 @@ body[data-theme="light"] .info-panel p {
   text-transform: uppercase;
 }
 
-body[data-theme="light"] .item-aspect-badge,
+body[data-theme="light"] .item-state-badge,
 body[data-theme="light"] .item-source-badge,
 body[data-theme="light"] .item-count-pill {
   background: rgba(255, 248, 226, 0.94);

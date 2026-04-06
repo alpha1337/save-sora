@@ -4,6 +4,197 @@ import { getItemSourceLabel, resolveItemTitle } from "../utils/items.js";
 /**
  * Media-preview helpers for item cards.
  */
+let activeInlinePreview = null;
+
+function buildNoWatermarkProxyUrl(itemId) {
+  if (typeof itemId !== "string" || !/^s_[A-Za-z0-9_-]+$/.test(itemId)) {
+    return "";
+  }
+
+  return `https://soravdl.com/api/proxy/video/${encodeURIComponent(itemId)}`;
+}
+
+function getItemPlaybackUrl(item) {
+  if (!item || typeof item !== "object") {
+    return "";
+  }
+
+  const itemId = typeof item.id === "string" ? item.id : "";
+  const isDraftId = /^gen_[A-Za-z0-9_-]+$/.test(itemId);
+  const watermarkUrl =
+    (item.download_urls &&
+    typeof item.download_urls === "object" &&
+    typeof item.download_urls.watermark === "string" &&
+    item.download_urls.watermark) ||
+    "";
+  const noWatermarkUrl =
+    (item.download_urls &&
+    typeof item.download_urls === "object" &&
+    typeof item.download_urls.no_watermark === "string" &&
+    item.download_urls.no_watermark) ||
+    (typeof item.no_watermark === "string" && item.no_watermark) ||
+    "";
+
+  if (isDraftId) {
+    return (
+      watermarkUrl ||
+      (typeof item.downloadUrl === "string" && item.downloadUrl) ||
+      noWatermarkUrl ||
+      ""
+    );
+  }
+
+  return (
+    buildNoWatermarkProxyUrl(itemId) ||
+    noWatermarkUrl ||
+    watermarkUrl ||
+    (typeof item.downloadUrl === "string" && item.downloadUrl) ||
+    ""
+  );
+}
+
+function tryWebkitPictureInPicture(video) {
+  if (
+    !(video instanceof HTMLVideoElement) ||
+    typeof video.webkitSupportsPresentationMode !== "function" ||
+    typeof video.webkitSetPresentationMode !== "function"
+  ) {
+    return false;
+  }
+
+  try {
+    if (!video.webkitSupportsPresentationMode("picture-in-picture")) {
+      return false;
+    }
+
+    if (video.webkitPresentationMode === "picture-in-picture") {
+      return true;
+    }
+
+    video.webkitSetPresentationMode("picture-in-picture");
+    return video.webkitPresentationMode === "picture-in-picture";
+  } catch (_error) {
+    return false;
+  }
+}
+
+function requestPictureInPictureIfPossible(video) {
+  if (!(video instanceof HTMLVideoElement) || video.disablePictureInPicture) {
+    return;
+  }
+
+  if (tryWebkitPictureInPicture(video)) {
+    return;
+  }
+
+  if (
+    typeof document === "undefined" ||
+    !document.pictureInPictureEnabled ||
+    typeof video.requestPictureInPicture !== "function"
+  ) {
+    return;
+  }
+
+  if (document.pictureInPictureElement === video) {
+    return;
+  }
+
+  try {
+    const pipPromise = video.requestPictureInPicture();
+    if (pipPromise && typeof pipPromise.catch === "function") {
+      void pipPromise.catch(() => {});
+    }
+  } catch (_error) {
+    // Ignore Picture-in-Picture failures and keep the inline player as the fallback.
+  }
+}
+
+function schedulePictureInPictureRetries(video) {
+  if (!(video instanceof HTMLVideoElement)) {
+    return;
+  }
+
+  const attempt = () => {
+    requestPictureInPictureIfPossible(video);
+  };
+
+  video.addEventListener("loadedmetadata", attempt, { once: true });
+  video.addEventListener("canplay", attempt, { once: true });
+  video.addEventListener("playing", attempt, { once: true });
+}
+
+function exitPictureInPictureIfActive(video) {
+  if (!(video instanceof HTMLVideoElement) || typeof document === "undefined") {
+    return;
+  }
+
+  if (document.pictureInPictureElement === video && typeof document.exitPictureInPicture === "function") {
+    try {
+      const exitPromise = document.exitPictureInPicture();
+      if (exitPromise && typeof exitPromise.catch === "function") {
+        void exitPromise.catch(() => {});
+      }
+    } catch (_error) {
+      // Ignore PiP exit failures and continue restoring the thumbnail view.
+    }
+  }
+
+  if (
+    typeof video.webkitSetPresentationMode === "function" &&
+    typeof video.webkitPresentationMode === "string" &&
+    video.webkitPresentationMode === "picture-in-picture"
+  ) {
+    try {
+      video.webkitSetPresentationMode("inline");
+    } catch (_error) {
+      // Ignore presentation-mode failures and continue cleaning up the preview.
+    }
+  }
+}
+
+function stopInlineVideo(video) {
+  if (!(video instanceof HTMLVideoElement)) {
+    return;
+  }
+
+  exitPictureInPictureIfActive(video);
+
+  try {
+    video.pause();
+  } catch (_error) {
+    // Ignore pause failures during teardown.
+  }
+
+  try {
+    video.currentTime = 0;
+  } catch (_error) {
+    // Ignore currentTime failures during teardown.
+  }
+
+  video.removeAttribute("src");
+  try {
+    video.load();
+  } catch (_error) {
+    // Ignore load failures during teardown.
+  }
+}
+
+function restoreThumbnailPreview(context, skipRerender = false) {
+  if (!context || typeof context !== "object") {
+    return;
+  }
+
+  const { media, item, titleOverrides, video } = context;
+  if (activeInlinePreview === context) {
+    activeInlinePreview = null;
+  }
+
+  stopInlineVideo(video);
+
+  if (!skipRerender && media instanceof HTMLElement && media.isConnected) {
+    renderMediaPreview(media, item, titleOverrides);
+  }
+}
 
 /**
  * Renders either the thumbnail preview or the inline video player for an item.
@@ -17,9 +208,14 @@ export function renderMediaPreview(media, item, titleOverrides = {}) {
     return;
   }
 
+  if (activeInlinePreview && activeInlinePreview.media === media) {
+    restoreThumbnailPreview(activeInlinePreview, true);
+  }
+
   media.onclick = null;
   media.onkeydown = null;
-  media.classList.toggle("is-playable", Boolean(item.downloadUrl));
+  const playbackUrl = getItemPlaybackUrl(item);
+  media.classList.toggle("is-playable", Boolean(playbackUrl));
   media.classList.remove("is-inline-video");
   media.removeAttribute("role");
   media.removeAttribute("tabindex");
@@ -90,7 +286,7 @@ export function renderMediaPreview(media, item, titleOverrides = {}) {
   }
   overlay.append(bottomRow);
 
-  if (item.downloadUrl) {
+  if (playbackUrl) {
     const playLabel = `Preview ${resolveItemTitle(item, titleOverrides)}`;
     media.setAttribute("role", "button");
     media.setAttribute("tabindex", "0");
@@ -135,8 +331,13 @@ export function renderMediaPreview(media, item, titleOverrides = {}) {
  * @param {Record<string, string>} titleOverrides
  */
 function activateInlineVideo(media, item, titleOverrides) {
-  if (!media || !(media instanceof HTMLElement) || !item || !item.downloadUrl) {
+  const playbackUrl = getItemPlaybackUrl(item);
+  if (!media || !(media instanceof HTMLElement) || !item || !playbackUrl) {
     return;
+  }
+
+  if (activeInlinePreview && activeInlinePreview.media !== media) {
+    restoreThumbnailPreview(activeInlinePreview);
   }
 
   media.onclick = null;
@@ -150,12 +351,25 @@ function activateInlineVideo(media, item, titleOverrides) {
 
   const video = document.createElement("video");
   video.className = "item-video";
-  video.src = item.downloadUrl;
+  video.src = playbackUrl;
   video.controls = true;
   video.playsInline = true;
   video.preload = "metadata";
-  video.muted = true;
+  video.autoplay = true;
+  video.defaultMuted = false;
+  video.muted = false;
+  video.volume = 1;
+  video.disablePictureInPicture = false;
   media.append(video);
+  requestPictureInPictureIfPossible(video);
+
+  const previewContext = {
+    media,
+    item,
+    titleOverrides,
+    video,
+  };
+  activeInlinePreview = previewContext;
 
   const replayButton = document.createElement("button");
   replayButton.type = "button";
@@ -164,10 +378,11 @@ function activateInlineVideo(media, item, titleOverrides) {
   replayButton.addEventListener("click", (event) => {
     event.preventDefault();
     event.stopPropagation();
-    renderMediaPreview(media, item, titleOverrides);
+    restoreThumbnailPreview(previewContext);
   });
   media.append(replayButton);
 
+  schedulePictureInPictureRetries(video);
   void video.play().catch(() => {});
 }
 

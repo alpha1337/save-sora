@@ -5,8 +5,8 @@ import {
   truncatePrompt,
 } from "../../utils/format.js";
 import {
-  getAspectRatioLabel,
   getItemSourceLabel,
+  isDraftVideoItem,
   isCreatorScopedItem,
   resolveItemTitle,
 } from "../../utils/items.js";
@@ -45,7 +45,7 @@ export function createTitleRow(item, context) {
 }
 
 /**
- * Creates the metadata row with timestamp and aspect badge.
+ * Creates the metadata row with timestamp and optional state/source badges.
  *
  * @param {object} item
  * @returns {HTMLDivElement}
@@ -59,9 +59,9 @@ export function createMetaRow(item) {
     metaRow.append(sourceBadge);
   }
 
-  const aspectBadge = createAspectBadge(item);
-  if (aspectBadge) {
-    metaRow.append(aspectBadge);
+  const draftBadge = createDraftBadge(item);
+  if (draftBadge) {
+    metaRow.append(draftBadge);
   }
 
   const meta = document.createElement("p");
@@ -138,20 +138,19 @@ export function createFooter(item, context) {
 }
 
 /**
- * Creates a badge describing the item's aspect ratio.
+ * Creates a badge describing that the item is still in draft state.
  *
  * @param {object} item
  * @returns {HTMLSpanElement|null}
  */
-function createAspectBadge(item) {
-  const aspectLabel = getAspectRatioLabel(item);
-  if (!aspectLabel) {
+function createDraftBadge(item) {
+  if (!isDraftVideoItem(item)) {
     return null;
   }
 
   const badge = document.createElement("span");
-  badge.className = "item-aspect-badge";
-  badge.textContent = aspectLabel;
+  badge.className = "item-state-badge";
+  badge.textContent = "Draft";
   return badge;
 }
 
