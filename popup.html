@@ -307,141 +307,171 @@
           <section class="panel info-panel settings-panel">
             <div class="settings-head">
               <span class="label">Settings</span>
-              <h2>Defaults</h2>
-              <p class="settings-intro">Choose how the downloader opens and fetches.</p>
+              <h2>Shape how Save Sora opens, updates, and stores local data.</h2>
+              <p class="settings-intro">Set your default fetch behavior, control automatic updates, and manage the extension data that stays on this machine.</p>
             </div>
 
-            <div class="settings-grid">
-              <div class="settings-group">
-                <label class="settings-label" for="max-videos-input">Max videos</label>
-                <input
-                  id="max-videos-input"
-                  class="settings-input"
-                  type="number"
-                  min="1"
-                  step="1"
-                  inputmode="numeric"
-                  placeholder="Unlimited"
-                />
-                <p class="settings-help">Leave blank to fetch everything.</p>
-              </div>
+            <div class="settings-layout">
+              <section class="settings-section settings-section-primary" aria-labelledby="settings-defaults-title">
+                <div class="settings-section-head">
+                  <span class="label">Defaults</span>
+                  <h3 id="settings-defaults-title">Open the dashboard the way you work.</h3>
+                  <p class="settings-section-intro">These defaults shape the first view you see when the popup launches and a new fetch begins.</p>
+                </div>
 
-              <div class="settings-group">
-                <span class="settings-label">Default sources</span>
-                <div id="default-source-control" class="multi-select">
-                  <button
-                    id="default-source-button"
-                    class="multi-select-trigger"
-                    type="button"
-                    aria-haspopup="true"
-                    aria-expanded="false"
-                    aria-controls="default-source-menu"
-                  >
-                    <span id="default-source-label">No sources selected</span>
-                    <span class="multi-select-caret" aria-hidden="true">▾</span>
-                  </button>
-                  <div
-                    id="default-source-menu"
-                    class="multi-select-menu hidden"
-                    role="group"
-                    aria-label="Default sources"
-                  >
-                    <label class="multi-select-option">
-                      <input type="checkbox" value="profile" data-source-group="settings" />
-                      <span>Published</span>
-                    </label>
-                    <label class="multi-select-option">
-                      <input type="checkbox" value="drafts" data-source-group="settings" />
-                      <span>Drafts</span>
-                    </label>
-                    <label class="multi-select-option">
-                      <input type="checkbox" value="likes" data-source-group="settings" />
-                      <span>Likes</span>
-                    </label>
-                    <label class="multi-select-option">
-                      <input type="checkbox" value="characters" data-source-group="settings" />
-                      <span>Cameos</span>
-                    </label>
-                    <label class="multi-select-option">
-                      <input type="checkbox" value="characterAccounts" data-source-group="settings" />
-                      <span>Characters</span>
-                    </label>
-                    <label class="multi-select-option">
-                      <input type="checkbox" value="creators" data-source-group="settings" />
-                      <span>Creators</span>
-                    </label>
+                <div class="settings-grid">
+                  <div class="settings-group">
+                    <label class="settings-label" for="max-videos-input">Max videos</label>
+                    <input
+                      id="max-videos-input"
+                      class="settings-input"
+                      type="number"
+                      min="1"
+                      step="1"
+                      inputmode="numeric"
+                      placeholder="Unlimited"
+                    />
+                    <p class="settings-help">Leave blank to fetch everything.</p>
+                  </div>
+
+                  <div class="settings-group">
+                    <span class="settings-label">Default sources</span>
+                    <div id="default-source-control" class="multi-select">
+                      <button
+                        id="default-source-button"
+                        class="multi-select-trigger"
+                        type="button"
+                        aria-haspopup="true"
+                        aria-expanded="false"
+                        aria-controls="default-source-menu"
+                      >
+                        <span id="default-source-label">No sources selected</span>
+                        <span class="multi-select-caret" aria-hidden="true">▾</span>
+                      </button>
+                      <div
+                        id="default-source-menu"
+                        class="multi-select-menu hidden"
+                        role="group"
+                        aria-label="Default sources"
+                      >
+                        <label class="multi-select-option">
+                          <input type="checkbox" value="profile" data-source-group="settings" />
+                          <span>Published</span>
+                        </label>
+                        <label class="multi-select-option">
+                          <input type="checkbox" value="drafts" data-source-group="settings" />
+                          <span>Drafts</span>
+                        </label>
+                        <label class="multi-select-option">
+                          <input type="checkbox" value="likes" data-source-group="settings" />
+                          <span>Likes</span>
+                        </label>
+                        <label class="multi-select-option">
+                          <input type="checkbox" value="characters" data-source-group="settings" />
+                          <span>Cameos</span>
+                        </label>
+                        <label class="multi-select-option">
+                          <input type="checkbox" value="characterAccounts" data-source-group="settings" />
+                          <span>Characters</span>
+                        </label>
+                        <label class="multi-select-option">
+                          <input type="checkbox" value="creators" data-source-group="settings" />
+                          <span>Creators</span>
+                        </label>
+                      </div>
+                    </div>
+                    <p class="settings-help">Used when Overview first opens.</p>
+                  </div>
+
+                  <div class="settings-group">
+                    <label class="settings-label" for="default-sort-input">Default sort</label>
+                    <select id="default-sort-input" class="settings-input">
+                      <option value="newest">Newest</option>
+                      <option value="oldest">Oldest</option>
+                      <option value="likes">Most Likes</option>
+                      <option value="views">Most Views</option>
+                      <option value="remixes">Most Remixed</option>
+                    </select>
+                    <p class="settings-help">Applied after new results load.</p>
+                  </div>
+
+                  <div class="settings-group">
+                    <label class="settings-label" for="default-theme-input">Default theme</label>
+                    <select id="default-theme-input" class="settings-input">
+                      <option value="dark">Dark</option>
+                      <option value="light">Light</option>
+                    </select>
+                    <p class="settings-help">Used the next time you open the popup.</p>
                   </div>
                 </div>
-                <p class="settings-help">Used when Overview first opens.</p>
-              </div>
+              </section>
 
-              <div class="settings-group">
-                <label class="settings-label" for="default-sort-input">Default sort</label>
-                <select id="default-sort-input" class="settings-input">
-                  <option value="newest">Newest</option>
-                  <option value="oldest">Oldest</option>
-                  <option value="likes">Most Likes</option>
-                  <option value="views">Most Views</option>
-                  <option value="remixes">Most Remixed</option>
-                </select>
-                <p class="settings-help">Applied after new results load.</p>
-              </div>
+              <div class="settings-rail">
+                <section class="settings-section" aria-labelledby="settings-updates-title">
+                  <div class="settings-section-head">
+                    <span class="label">Updater</span>
+                    <h3 id="settings-updates-title">Keep your install current.</h3>
+                    <p class="settings-section-intro">Save Sora can watch GitHub for new releases, stage the update, and apply it once your unpacked install folder is linked.</p>
+                  </div>
 
-              <div class="settings-group">
-                <label class="settings-label" for="default-theme-input">Default theme</label>
-                <select id="default-theme-input" class="settings-input">
-                  <option value="dark">Dark</option>
-                  <option value="light">Light</option>
-                </select>
-                <p class="settings-help">Used the next time you open the popup.</p>
-              </div>
+                  <div class="settings-stack">
+                    <div class="settings-group">
+                      <span class="settings-label">Automatic updates</span>
+                      <label class="settings-switch-row" for="automatic-updates-input">
+                        <span class="settings-switch-copy">
+                          Install new GitHub releases automatically after the unpacked Save Sora folder has been linked once.
+                        </span>
+                        <input id="automatic-updates-input" class="settings-switch-input" type="checkbox" />
+                        <span class="settings-switch-track" aria-hidden="true">
+                          <span class="settings-switch-thumb"></span>
+                        </span>
+                      </label>
+                    </div>
 
-              <div class="settings-group">
-                <span class="settings-label">Automatic updates</span>
-                <label class="settings-switch-row" for="automatic-updates-input">
-                  <span class="settings-switch-copy">
-                    Keep this unpacked extension updated from the latest GitHub release after version 1.17.0 is linked once.
-                  </span>
-                  <input id="automatic-updates-input" class="settings-switch-input" type="checkbox" />
-                  <span class="settings-switch-track" aria-hidden="true">
-                    <span class="settings-switch-thumb"></span>
-                  </span>
-                </label>
-              </div>
+                    <div class="settings-group settings-group-wide">
+                      <span class="settings-label">Updater status</span>
+                      <div id="updater-status-row" class="updater-status-row">
+                        <div class="updater-status-copy">
+                          <p id="updater-status-summary" class="updater-status-summary">
+                            Version 1.17.0 · Never checked · Install folder not linked
+                          </p>
+                          <p id="updater-status-detail" class="settings-help">
+                            Save Sora checks GitHub for new releases on startup and periodically while Chrome stays open.
+                          </p>
+                          <p id="updater-status-diagnostics" class="updater-status-diagnostics">
+                            Latest GitHub version: none · Manifest: missing · Package zip: missing · Pending update: not ready
+                          </p>
+                        </div>
+                        <div class="updater-status-actions">
+                          <button id="updater-check-now-button" type="button" class="secondary">
+                            Check now
+                          </button>
+                          <button id="updater-relink-button" type="button" class="secondary">
+                            Relink folder
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </section>
 
-              <div class="settings-group settings-group-wide">
-                <span class="settings-label">Updater status</span>
-                <div id="updater-status-row" class="updater-status-row">
-                  <div class="updater-status-copy">
-                    <p id="updater-status-summary" class="updater-status-summary">
-                      Version 1.17.0 · Never checked · Install folder not linked
-                    </p>
-                    <p id="updater-status-detail" class="settings-help">
-                      Save Sora checks GitHub for new releases on startup and periodically while Chrome stays open.
-                    </p>
-                    <p id="updater-status-diagnostics" class="updater-status-diagnostics">
-                      Latest GitHub version: none · Manifest: missing · Package zip: missing · Pending update: not ready
+                <section class="settings-section" aria-labelledby="settings-storage-title">
+                  <div class="settings-section-head">
+                    <span class="label">Storage</span>
+                    <h3 id="settings-storage-title">Manage local extension data.</h3>
+                    <p class="settings-section-intro">Use this only when you need to reset the dashboard state on this machine.</p>
+                  </div>
+
+                  <div class="settings-group settings-group-wide">
+                    <span class="settings-label">Plugin storage</span>
+                    <button id="clear-storage-button" type="button" class="secondary danger">
+                      Clear local storage
+                    </button>
+                    <p class="settings-help">
+                      Wipes this extension's saved settings, renamed titles, selection state, and current working set. Updater folder access and updater history stay intact.
                     </p>
                   </div>
-                  <div class="updater-status-actions">
-                    <button id="updater-check-now-button" type="button" class="secondary">
-                      Check now
-                    </button>
-                    <button id="updater-relink-button" type="button" class="secondary">
-                      Relink folder
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              <div class="settings-group settings-group-wide">
-                <span class="settings-label">Plugin storage</span>
-                <button id="clear-storage-button" type="button" class="secondary danger">
-                  Clear local storage
-                </button>
-                <p class="settings-help">
-                  Wipes this extension's saved settings, renamed titles, selection state, and current working set. Updater folder access and updater history stay intact.
-                </p>
+                </section>
               </div>
             </div>
 
