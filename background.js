@@ -19,10 +19,42 @@ const POPUP_STATE_ITEM_LIMIT = 3000;
 const POPUP_STATE_TARGET_BYTES = 8 * 1024 * 1024;
 const VOLATILE_SOURCE_PREVIEW_LIMIT = 3000;
 const VOLATILE_BACKUP_DB_NAME = "saveSoraVolatileBackup";
-const VOLATILE_BACKUP_DB_VERSION = 2;
+const VOLATILE_BACKUP_DB_VERSION = 3;
 const VOLATILE_BACKUP_ITEM_STORE = "items";
 const VOLATILE_BACKUP_META_STORE = "meta";
+const VOLATILE_BACKUP_UPDATER_STORE = "updater";
 const VOLATILE_BACKUP_WRITE_CHUNK_SIZE = 250;
+const UPDATE_ALARM_NAME = "saveSoraCheckForUpdates";
+const UPDATE_CHECK_INTERVAL_MINUTES = 30;
+const GITHUB_OWNER = "alpha1337";
+const GITHUB_REPO = "save-sora";
+const GITHUB_LATEST_RELEASE_URL = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/releases/latest`;
+const UPDATE_MANIFEST_ASSET_NAME = "save-sora-update-manifest.json";
+const UPDATE_FOLDER_RECORD_KEY = "install-folder";
+const UPDATE_META_RECORD_KEY = "updater-meta";
+const UPDATE_PENDING_RECORD_KEY = "pending-update";
+const UPDATE_ROLLBACK_RECORD_KEY = "rollback-snapshot";
+const UPDATE_MANAGED_ROOT_ENTRIES = [
+  "assets",
+  "background.js",
+  "manifest.json",
+  "offscreen.html",
+  "offscreen.js",
+  "popup",
+  "popup.css",
+  "popup.html",
+  "popup.js",
+  "vendor",
+];
+const CURRENT_EXTENSION_MANIFEST = chrome.runtime.getManifest();
+const CURRENT_EXTENSION_VERSION =
+  CURRENT_EXTENSION_MANIFEST && typeof CURRENT_EXTENSION_MANIFEST.version === "string"
+    ? CURRENT_EXTENSION_MANIFEST.version
+    : "0.0.0";
+const CURRENT_EXTENSION_NAME =
+  CURRENT_EXTENSION_MANIFEST && typeof CURRENT_EXTENSION_MANIFEST.name === "string"
+    ? CURRENT_EXTENSION_MANIFEST.name
+    : "Save Sora: Sora Bulk Downloader";
 const DRAFT_BATCH_LIMIT = 100;
 const LIKES_BATCH_LIMIT = 100;
 const CHARACTERS_BATCH_LIMIT = 100;
@@ -75,12 +107,36 @@ let volatileBackupDbPromise = null;
 let activeVolatileBackupSessionKey = "";
 let activeVolatileBackupResumeMeta = null;
 let pausedFetchRequest = null;
+let currentUpdateState = createDefaultUpdateState();
+let linkedInstallFolderRecordCache = null;
+let updaterReadyPromise = null;
+let zipLibraryLoaded = false;
 
-void restoreState();
+void initializeBackgroundRuntime();
 
 chrome.runtime.onInstalled.addListener(() => {
   void persistState();
   void persistCatalogState();
+  void scheduleUpdateAlarm();
+  void restoreUpdaterState();
+});
+
+chrome.runtime.onStartup.addListener(() => {
+  void scheduleUpdateAlarm();
+  void restoreUpdaterState();
+  void runUpdateCheck({ trigger: "startup", interactive: false }).catch((error) => {
+    console.warn("Failed to check for updates during startup.", error);
+  });
+});
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (!alarm || alarm.name !== UPDATE_ALARM_NAME) {
+    return;
+  }
+
+  void runUpdateCheck({ trigger: "alarm", interactive: false }).catch((error) => {
+    console.warn("Failed to check for updates from the scheduled alarm.", error);
+  });
 });
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -336,6 +392,51 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       })
       .catch((error) => {
         console.error("Failed to update the Sora downloader settings.", error);
+        sendResponse({ ok: false, error: getErrorMessage(error) });
+      });
+    return true;
+  }
+
+  if (message.type === "GET_UPDATE_STATUS") {
+    sendResponse({ ok: true, updateStatus: buildUpdateStatusSnapshot() });
+    return false;
+  }
+
+  if (message.type === "CHECK_FOR_UPDATES") {
+    void runUpdateCheck({
+      trigger: typeof message.trigger === "string" ? message.trigger : "popup",
+      interactive: message.interactive !== false,
+      applyIfAvailable: message.applyIfAvailable !== false,
+    })
+      .then((updateStatus) => {
+        sendResponse({ ok: true, updateStatus });
+      })
+      .catch((error) => {
+        console.error("Failed to check for Save Sora updates.", error);
+        sendResponse({ ok: false, error: getErrorMessage(error) });
+      });
+    return true;
+  }
+
+  if (message.type === "LINK_INSTALL_FOLDER") {
+    void linkInstallFolder(message.handle)
+      .then((updateStatus) => {
+        sendResponse({ ok: true, updateStatus });
+      })
+      .catch((error) => {
+        console.error("Failed to link the unpacked extension folder.", error);
+        sendResponse({ ok: false, error: getErrorMessage(error) });
+      });
+    return true;
+  }
+
+  if (message.type === "INSTALL_PENDING_UPDATE") {
+    void installPendingUpdate()
+      .then((updateStatus) => {
+        sendResponse({ ok: true, updateStatus });
+      })
+      .catch((error) => {
+        console.error("Failed to install the pending Save Sora update.", error);
         sendResponse({ ok: false, error: getErrorMessage(error) });
       });
     return true;
@@ -612,9 +713,34 @@ function createDefaultState(overrides = {}) {
       defaultSource: [...DEFAULT_SOURCE_VALUES],
       defaultSort: "newest",
       theme: "dark",
+      automaticUpdatesEnabled: true,
     },
     startedAt: null,
     finishedAt: null,
+    ...overrides,
+  };
+}
+
+function createDefaultUpdateState(overrides = {}) {
+  return {
+    phase: "idle",
+    currentVersion: CURRENT_EXTENSION_VERSION,
+    latestVersion: CURRENT_EXTENSION_VERSION,
+    message: "",
+    detail: "",
+    progress: 0,
+    lastCheckedAt: null,
+    installFolderLinked: false,
+    automaticUpdatesEnabled: true,
+    updateAvailable: false,
+    pendingUpdateVersion: "",
+    pendingUpdateUrl: "",
+    pendingReleaseUrl: "",
+    pendingManifestUrl: "",
+    pendingManagedFiles: [],
+    changelogMarkdown: "",
+    pendingDeferred: false,
+    error: "",
     ...overrides,
   };
 }
@@ -759,6 +885,20 @@ function createVolatileBackupSessionKey() {
   return `volatile-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+function initializeBackgroundRuntime() {
+  if (updaterReadyPromise) {
+    return;
+  }
+
+  updaterReadyPromise = (async () => {
+    await restoreState();
+    await restoreUpdaterState();
+    await scheduleUpdateAlarm();
+  })().catch((error) => {
+    console.warn("Failed to initialize the Save Sora background runtime.", error);
+  });
+}
+
 function createIndexedDbRequestPromise(request) {
   return new Promise((resolve, reject) => {
     request.onsuccess = () => resolve(request.result);
@@ -794,6 +934,11 @@ function openVolatileBackupDb() {
           keyPath: "sessionKey",
         });
       }
+      if (!db.objectStoreNames.contains(VOLATILE_BACKUP_UPDATER_STORE)) {
+        db.createObjectStore(VOLATILE_BACKUP_UPDATER_STORE, {
+          keyPath: "key",
+        });
+      }
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error || new Error("Could not open the volatile backup database."));
@@ -817,6 +962,976 @@ async function clearVolatileBackups() {
     transaction.objectStore(VOLATILE_BACKUP_ITEM_STORE).clear();
     transaction.objectStore(VOLATILE_BACKUP_META_STORE).clear();
   });
+}
+
+async function readUpdaterRecord(key) {
+  if (!key) {
+    return null;
+  }
+
+  const db = await openVolatileBackupDb();
+  const transaction = db.transaction([VOLATILE_BACKUP_UPDATER_STORE], "readonly");
+  const store = transaction.objectStore(VOLATILE_BACKUP_UPDATER_STORE);
+  const record = await createIndexedDbRequestPromise(store.get(key));
+  return record && typeof record === "object" ? record : null;
+}
+
+async function writeUpdaterRecord(key, patch = {}) {
+  if (!key) {
+    return null;
+  }
+
+  const existingRecord = await readUpdaterRecord(key);
+  const nextRecord = {
+    ...(existingRecord && typeof existingRecord === "object" ? existingRecord : {}),
+    ...(patch && typeof patch === "object" ? patch : {}),
+    key,
+    updatedAt: new Date().toISOString(),
+  };
+
+  const db = await openVolatileBackupDb();
+  await new Promise((resolve, reject) => {
+    const transaction = db.transaction([VOLATILE_BACKUP_UPDATER_STORE], "readwrite");
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () =>
+      reject(transaction.error || new Error("Could not write updater data."));
+    transaction.objectStore(VOLATILE_BACKUP_UPDATER_STORE).put(nextRecord);
+  });
+
+  return nextRecord;
+}
+
+async function deleteUpdaterRecord(key) {
+  if (!key) {
+    return;
+  }
+
+  if (key === UPDATE_FOLDER_RECORD_KEY) {
+    linkedInstallFolderRecordCache = null;
+  }
+
+  const db = await openVolatileBackupDb();
+  await new Promise((resolve, reject) => {
+    const transaction = db.transaction([VOLATILE_BACKUP_UPDATER_STORE], "readwrite");
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () =>
+      reject(transaction.error || new Error("Could not delete updater data."));
+    transaction.objectStore(VOLATILE_BACKUP_UPDATER_STORE).delete(key);
+  });
+}
+
+function buildUpdateStatusSnapshot() {
+  const source = currentUpdateState && typeof currentUpdateState === "object"
+    ? currentUpdateState
+    : createDefaultUpdateState();
+
+  return {
+    phase: source.phase,
+    currentVersion: source.currentVersion,
+    latestVersion: source.latestVersion,
+    message: source.message,
+    detail: source.detail,
+    progress: clampFetchProgressRatio(source.progress),
+    lastCheckedAt: source.lastCheckedAt,
+    installFolderLinked: source.installFolderLinked === true,
+    automaticUpdatesEnabled: source.automaticUpdatesEnabled !== false,
+    updateAvailable: source.updateAvailable === true,
+    pendingUpdateVersion: source.pendingUpdateVersion || "",
+    pendingDeferred: source.pendingDeferred === true,
+    changelogMarkdown: typeof source.changelogMarkdown === "string" ? source.changelogMarkdown : "",
+    error: source.error || "",
+  };
+}
+
+function normalizeAutomaticUpdatesEnabled(value) {
+  return value !== false;
+}
+
+async function persistUpdateMeta() {
+  const snapshot = buildUpdateStatusSnapshot();
+  await writeUpdaterRecord(UPDATE_META_RECORD_KEY, {
+    phase: snapshot.phase,
+    currentVersion: snapshot.currentVersion,
+    latestVersion: snapshot.latestVersion,
+    message: snapshot.message,
+    detail: snapshot.detail,
+    progress: snapshot.progress,
+    lastCheckedAt: snapshot.lastCheckedAt,
+    installFolderLinked: snapshot.installFolderLinked,
+    automaticUpdatesEnabled: snapshot.automaticUpdatesEnabled,
+    updateAvailable: snapshot.updateAvailable,
+    pendingUpdateVersion: snapshot.pendingUpdateVersion,
+    pendingDeferred: snapshot.pendingDeferred,
+    changelogMarkdown: snapshot.changelogMarkdown,
+    error: snapshot.error,
+  });
+}
+
+async function setUpdateState(patch = {}, options = {}) {
+  currentUpdateState = createDefaultUpdateState({
+    ...currentUpdateState,
+    ...patch,
+    currentVersion: CURRENT_EXTENSION_VERSION,
+    automaticUpdatesEnabled: normalizeAutomaticUpdatesEnabled(
+      patch && Object.prototype.hasOwnProperty.call(patch, "automaticUpdatesEnabled")
+        ? patch.automaticUpdatesEnabled
+        : currentState &&
+            currentState.settings &&
+            Object.prototype.hasOwnProperty.call(currentState.settings, "automaticUpdatesEnabled")
+          ? currentState.settings.automaticUpdatesEnabled
+          : currentUpdateState.automaticUpdatesEnabled,
+    ),
+  });
+
+  if (options.persist !== false) {
+    await persistUpdateMeta();
+  }
+}
+
+async function restoreUpdaterState() {
+  const installRecord = await readUpdaterRecord(UPDATE_FOLDER_RECORD_KEY);
+  const pendingRecord = await readUpdaterRecord(UPDATE_PENDING_RECORD_KEY);
+  const metaRecord = await readUpdaterRecord(UPDATE_META_RECORD_KEY);
+  const installFolderLinked = await hasStoredInstallFolderAccess(installRecord);
+  const automaticUpdatesEnabled = normalizeAutomaticUpdatesEnabled(
+    currentState &&
+      currentState.settings &&
+      Object.prototype.hasOwnProperty.call(currentState.settings, "automaticUpdatesEnabled")
+      ? currentState.settings.automaticUpdatesEnabled
+      : true,
+  );
+
+  currentUpdateState = createDefaultUpdateState({
+    ...(metaRecord && typeof metaRecord === "object" ? metaRecord : {}),
+    installFolderLinked,
+    automaticUpdatesEnabled,
+    latestVersion:
+      pendingRecord && typeof pendingRecord.version === "string" && pendingRecord.version
+        ? pendingRecord.version
+        : metaRecord && typeof metaRecord.latestVersion === "string" && metaRecord.latestVersion
+          ? metaRecord.latestVersion
+          : CURRENT_EXTENSION_VERSION,
+    pendingUpdateVersion:
+      pendingRecord && typeof pendingRecord.version === "string" ? pendingRecord.version : "",
+    pendingUpdateUrl:
+      pendingRecord && typeof pendingRecord.zipUrl === "string" ? pendingRecord.zipUrl : "",
+    pendingReleaseUrl:
+      pendingRecord && typeof pendingRecord.releaseUrl === "string" ? pendingRecord.releaseUrl : "",
+    pendingManifestUrl:
+      pendingRecord && typeof pendingRecord.manifestUrl === "string"
+        ? pendingRecord.manifestUrl
+        : "",
+    pendingManagedFiles:
+      pendingRecord && Array.isArray(pendingRecord.managedFiles) ? pendingRecord.managedFiles : [],
+    changelogMarkdown:
+      pendingRecord && typeof pendingRecord.changelogMarkdown === "string"
+        ? pendingRecord.changelogMarkdown
+        : metaRecord && typeof metaRecord.changelogMarkdown === "string"
+          ? metaRecord.changelogMarkdown
+          : "",
+    updateAvailable:
+      pendingRecord && typeof pendingRecord.version === "string"
+        ? compareSemver(pendingRecord.version, CURRENT_EXTENSION_VERSION) > 0
+        : metaRecord && metaRecord.updateAvailable === true,
+    phase:
+      pendingRecord &&
+      typeof pendingRecord.version === "string" &&
+      compareSemver(pendingRecord.version, CURRENT_EXTENSION_VERSION) > 0 &&
+      metaRecord &&
+      metaRecord.phase !== "downloading" &&
+      metaRecord.phase !== "applying" &&
+      metaRecord.phase !== "reloading"
+        ? metaRecord && metaRecord.pendingDeferred === true
+          ? "deferred"
+          : "update-available"
+        : metaRecord &&
+            typeof metaRecord.phase === "string" &&
+            metaRecord.phase &&
+            metaRecord.phase !== "awaiting-folder"
+          ? metaRecord.phase
+          : "idle",
+  });
+
+  await persistUpdateMeta();
+}
+
+async function scheduleUpdateAlarm() {
+  if (!chrome.alarms) {
+    return;
+  }
+
+  await chrome.alarms.create(UPDATE_ALARM_NAME, {
+    delayInMinutes: UPDATE_CHECK_INTERVAL_MINUTES,
+    periodInMinutes: UPDATE_CHECK_INTERVAL_MINUTES,
+  });
+}
+
+function compareSemver(leftVersion, rightVersion) {
+  const leftParts = String(leftVersion || "")
+    .split(".")
+    .map((value) => Number.parseInt(value, 10) || 0);
+  const rightParts = String(rightVersion || "")
+    .split(".")
+    .map((value) => Number.parseInt(value, 10) || 0);
+  const maxLength = Math.max(leftParts.length, rightParts.length);
+
+  for (let index = 0; index < maxLength; index += 1) {
+    const leftValue = leftParts[index] || 0;
+    const rightValue = rightParts[index] || 0;
+    if (leftValue > rightValue) {
+      return 1;
+    }
+    if (leftValue < rightValue) {
+      return -1;
+    }
+  }
+
+  return 0;
+}
+
+async function hasStoredInstallFolderAccess(record) {
+  const handle = record && record.handle ? record.handle : null;
+  if (!handle || typeof handle.queryPermission !== "function") {
+    return false;
+  }
+
+  try {
+    return (await handle.queryPermission({ mode: "readwrite" })) === "granted";
+  } catch (_error) {
+    return false;
+  }
+}
+
+async function getLinkedInstallFolderRecord() {
+  if (
+    linkedInstallFolderRecordCache &&
+    typeof linkedInstallFolderRecordCache === "object" &&
+    (await hasStoredInstallFolderAccess(linkedInstallFolderRecordCache))
+  ) {
+    return linkedInstallFolderRecordCache;
+  }
+
+  const record = await readUpdaterRecord(UPDATE_FOLDER_RECORD_KEY);
+  if (!record || !(await hasStoredInstallFolderAccess(record))) {
+    linkedInstallFolderRecordCache = null;
+    return null;
+  }
+
+  linkedInstallFolderRecordCache = record;
+  return record;
+}
+
+async function validateInstallFolderHandle(handle) {
+  if (!handle || handle.kind !== "directory") {
+    throw new Error("Select the unpacked Save Sora extension folder.");
+  }
+
+  const manifestHandle = await handle.getFileHandle("manifest.json", { create: false });
+  const manifestFile = await manifestHandle.getFile();
+  const manifestText = await manifestFile.text();
+  const parsedManifest = JSON.parse(manifestText);
+  if (!parsedManifest || parsedManifest.name !== CURRENT_EXTENSION_NAME) {
+    throw new Error("The selected folder does not look like the Save Sora unpacked extension.");
+  }
+
+  return {
+    manifestVersion:
+      parsedManifest && typeof parsedManifest.version === "string" ? parsedManifest.version : "",
+    manifestName:
+      parsedManifest && typeof parsedManifest.name === "string" ? parsedManifest.name : "",
+  };
+}
+
+async function linkInstallFolder(handle) {
+  const folderInfo = await validateInstallFolderHandle(handle);
+  const record = await writeUpdaterRecord(UPDATE_FOLDER_RECORD_KEY, {
+    handle,
+    linkedAt: new Date().toISOString(),
+    manifestVersion: folderInfo.manifestVersion,
+    manifestName: folderInfo.manifestName,
+  });
+  linkedInstallFolderRecordCache = record;
+
+  await setUpdateState({
+    installFolderLinked: true,
+    error: "",
+    message: "",
+    detail: "",
+    phase: currentUpdateState.updateAvailable ? currentUpdateState.phase : "idle",
+  });
+
+  return buildUpdateStatusSnapshot();
+}
+
+function sanitizeManagedRelativePath(path) {
+  if (typeof path !== "string") {
+    return "";
+  }
+
+  const normalized = path.replace(/\\/g, "/").replace(/^\/+/, "");
+  if (!normalized || normalized.includes("../") || normalized === "..") {
+    return "";
+  }
+
+  return normalized;
+}
+
+async function fetchJson(url) {
+  const response = await fetch(url, {
+    cache: "no-store",
+    headers: {
+      accept: "application/json",
+    },
+  });
+  if (!response.ok) {
+    const error = new Error(`Request failed (${response.status}) while loading ${url}.`);
+    error.status = response.status;
+    error.url = url;
+    throw error;
+  }
+  return response.json();
+}
+
+function extractGitHubReleaseVersion(release) {
+  const rawValue =
+    release && typeof release.tag_name === "string" && release.tag_name
+      ? release.tag_name
+      : release && typeof release.name === "string" && release.name
+        ? release.name
+        : "";
+  const trimmedValue = rawValue.trim().replace(/^v/i, "");
+  const matchedVersion = trimmedValue.match(/\d+\.\d+\.\d+/);
+  return matchedVersion ? matchedVersion[0] : trimmedValue;
+}
+
+async function fetchLatestReleaseManifest() {
+  const release = await fetchJson(GITHUB_LATEST_RELEASE_URL);
+  const assets = Array.isArray(release && release.assets) ? release.assets : [];
+  const releaseVersion = extractGitHubReleaseVersion(release);
+  const manifestAsset = assets.find(
+    (asset) => asset && asset.name === UPDATE_MANIFEST_ASSET_NAME && asset.browser_download_url,
+  );
+  if (!manifestAsset) {
+    const error = new Error("The latest GitHub release is missing the update manifest asset.");
+    error.code = "MISSING_UPDATE_MANIFEST";
+    error.releaseVersion = releaseVersion;
+    throw error;
+  }
+
+  const manifest = await fetchJson(manifestAsset.browser_download_url);
+  if (!manifest || typeof manifest !== "object") {
+    throw new Error("The GitHub update manifest is invalid.");
+  }
+
+  const zipFileName =
+    typeof manifest.zipFileName === "string" && manifest.zipFileName ? manifest.zipFileName : "";
+  const zipAsset = assets.find(
+    (asset) => asset && asset.name === zipFileName && asset.browser_download_url,
+  );
+  if (!zipAsset) {
+    throw new Error("The latest GitHub release is missing the packaged update zip.");
+  }
+
+  const managedFiles = Array.isArray(manifest.managedFiles)
+    ? manifest.managedFiles
+        .map((value) => sanitizeManagedRelativePath(value))
+        .filter(Boolean)
+    : [];
+
+  return {
+    version:
+      typeof manifest.version === "string" && manifest.version ? manifest.version : releaseVersion,
+    zipUrl: zipAsset.browser_download_url,
+    zipSha256: typeof manifest.zipSha256 === "string" ? manifest.zipSha256.toLowerCase() : "",
+    manifestUrl: manifestAsset.browser_download_url,
+    releaseUrl: typeof release.html_url === "string" ? release.html_url : "",
+    managedFiles,
+    releaseId: release && release.id ? release.id : "",
+    generatedAt: typeof manifest.generatedAt === "string" ? manifest.generatedAt : "",
+    changelogMarkdown: typeof release.body === "string" ? release.body : "",
+  };
+}
+
+async function downloadBinaryWithProgress(url, onProgress) {
+  const response = await fetch(url, {
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    throw new Error(`Request failed (${response.status}) while downloading the update package.`);
+  }
+
+  const totalBytes = Number(response.headers.get("content-length")) || 0;
+  if (!response.body || typeof response.body.getReader !== "function") {
+    const arrayBuffer = await response.arrayBuffer();
+    if (typeof onProgress === "function") {
+      onProgress(1, arrayBuffer.byteLength, arrayBuffer.byteLength || totalBytes);
+    }
+    return arrayBuffer;
+  }
+
+  const reader = response.body.getReader();
+  const chunks = [];
+  let receivedBytes = 0;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+
+    if (value && value.byteLength > 0) {
+      chunks.push(value);
+      receivedBytes += value.byteLength;
+      if (typeof onProgress === "function") {
+        onProgress(totalBytes > 0 ? receivedBytes / totalBytes : 0, receivedBytes, totalBytes);
+      }
+    }
+  }
+
+  const merged = new Uint8Array(receivedBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+
+  if (typeof onProgress === "function") {
+    onProgress(1, receivedBytes, totalBytes || receivedBytes);
+  }
+
+  return merged.buffer;
+}
+
+async function digestSha256Hex(arrayBuffer) {
+  const digest = await crypto.subtle.digest("SHA-256", arrayBuffer);
+  return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, "0")).join("");
+}
+
+function ensureZipLibraryLoaded() {
+  if (zipLibraryLoaded && globalThis.zip && globalThis.zip.ZipReader) {
+    return;
+  }
+
+  importScripts(chrome.runtime.getURL("vendor/zip-core.min.js"));
+  zipLibraryLoaded = true;
+}
+
+async function extractManagedFilesFromZip(arrayBuffer, managedFiles) {
+  ensureZipLibraryLoaded();
+  const normalizedManagedFiles = new Set(
+    Array.isArray(managedFiles)
+      ? managedFiles.map((value) => sanitizeManagedRelativePath(value)).filter(Boolean)
+      : [],
+  );
+  const zipReader = new globalThis.zip.ZipReader(
+    new globalThis.zip.Uint8ArrayReader(new Uint8Array(arrayBuffer)),
+  );
+  const entries = await zipReader.getEntries();
+  const extractedFiles = new Map();
+
+  for (const entry of entries) {
+    if (!entry || entry.directory) {
+      continue;
+    }
+
+    const relativePath = sanitizeManagedRelativePath(entry.filename);
+    if (!relativePath) {
+      await zipReader.close();
+      throw new Error("The downloaded update contains an invalid file path.");
+    }
+
+    if (!normalizedManagedFiles.has(relativePath)) {
+      await zipReader.close();
+      throw new Error(`The downloaded update contains an unmanaged file: ${relativePath}`);
+    }
+
+    const bytes = await entry.getData(new globalThis.zip.Uint8ArrayWriter());
+    extractedFiles.set(relativePath, bytes);
+  }
+
+  await zipReader.close();
+  return extractedFiles;
+}
+
+function isUpdaterBusyPhase() {
+  return (
+    currentUpdateState.phase === "checking" ||
+    currentUpdateState.phase === "downloading" ||
+    currentUpdateState.phase === "applying" ||
+    currentUpdateState.phase === "reloading"
+  );
+}
+
+function isUpdaterApplyBlocked() {
+  return Boolean(activeRun) || currentState.phase === "fetch-paused" || currentState.phase === "paused";
+}
+
+async function readManagedFileBytes(rootHandle, relativePath) {
+  const normalizedPath = sanitizeManagedRelativePath(relativePath);
+  if (!normalizedPath) {
+    return null;
+  }
+
+  const pathParts = normalizedPath.split("/");
+  let directoryHandle = rootHandle;
+  for (let index = 0; index < pathParts.length - 1; index += 1) {
+    directoryHandle = await directoryHandle.getDirectoryHandle(pathParts[index], { create: false });
+  }
+
+  const fileHandle = await directoryHandle.getFileHandle(pathParts[pathParts.length - 1], {
+    create: false,
+  });
+  const file = await fileHandle.getFile();
+  return new Uint8Array(await file.arrayBuffer());
+}
+
+async function ensureDirectoryHandle(rootHandle, directorySegments) {
+  let directoryHandle = rootHandle;
+  for (const segment of directorySegments) {
+    directoryHandle = await directoryHandle.getDirectoryHandle(segment, { create: true });
+  }
+  return directoryHandle;
+}
+
+async function writeManagedFileBytes(rootHandle, relativePath, bytes) {
+  const normalizedPath = sanitizeManagedRelativePath(relativePath);
+  if (!normalizedPath) {
+    throw new Error(`Could not write invalid managed path: ${relativePath}`);
+  }
+
+  const pathParts = normalizedPath.split("/");
+  const directoryHandle = await ensureDirectoryHandle(rootHandle, pathParts.slice(0, -1));
+  const fileHandle = await directoryHandle.getFileHandle(pathParts[pathParts.length - 1], {
+    create: true,
+  });
+  const writable = await fileHandle.createWritable();
+  try {
+    await writable.write(bytes);
+  } finally {
+    await writable.close();
+  }
+}
+
+async function removeManagedPath(rootHandle, relativePath) {
+  const normalizedPath = sanitizeManagedRelativePath(relativePath);
+  if (!normalizedPath) {
+    return;
+  }
+
+  const pathParts = normalizedPath.split("/");
+  let directoryHandle = rootHandle;
+  for (let index = 0; index < pathParts.length - 1; index += 1) {
+    directoryHandle = await directoryHandle.getDirectoryHandle(pathParts[index], { create: false });
+  }
+
+  await directoryHandle.removeEntry(pathParts[pathParts.length - 1]);
+}
+
+async function snapshotExistingManagedFiles(rootHandle, managedFiles) {
+  const snapshot = new Map();
+
+  for (const relativePath of managedFiles) {
+    try {
+      snapshot.set(relativePath, await readManagedFileBytes(rootHandle, relativePath));
+    } catch (_error) {
+      snapshot.set(relativePath, null);
+    }
+  }
+
+  return snapshot;
+}
+
+async function applyExtractedManagedFiles(rootHandle, extractedFiles, onProgress) {
+  const fileEntries = [...extractedFiles.entries()];
+  const rollbackSnapshot = await snapshotExistingManagedFiles(
+    rootHandle,
+    fileEntries.map(([relativePath]) => relativePath),
+  );
+  await writeUpdaterRecord(UPDATE_ROLLBACK_RECORD_KEY, {
+    createdAt: new Date().toISOString(),
+    fileCount: fileEntries.length,
+    files: fileEntries.map(([relativePath]) => relativePath),
+  });
+
+  try {
+    for (let index = 0; index < fileEntries.length; index += 1) {
+      const [relativePath, bytes] = fileEntries[index];
+      await writeManagedFileBytes(rootHandle, relativePath, bytes);
+      if (typeof onProgress === "function") {
+        onProgress((index + 1) / fileEntries.length, index + 1, fileEntries.length);
+      }
+    }
+  } catch (error) {
+    for (const [relativePath, previousBytes] of rollbackSnapshot.entries()) {
+      if (previousBytes) {
+        await writeManagedFileBytes(rootHandle, relativePath, previousBytes);
+      } else {
+        try {
+          await removeManagedPath(rootHandle, relativePath);
+        } catch (_rollbackError) {
+          // Ignore rollback deletes for files that still do not exist.
+        }
+      }
+    }
+    throw error;
+  }
+}
+
+async function storePendingUpdate(updateInfo) {
+  if (!updateInfo) {
+    await deleteUpdaterRecord(UPDATE_PENDING_RECORD_KEY);
+    return null;
+  }
+
+  return writeUpdaterRecord(UPDATE_PENDING_RECORD_KEY, {
+    version: updateInfo.version,
+    zipUrl: updateInfo.zipUrl,
+    zipSha256: updateInfo.zipSha256,
+    manifestUrl: updateInfo.manifestUrl,
+    releaseUrl: updateInfo.releaseUrl,
+    managedFiles: updateInfo.managedFiles,
+    generatedAt: updateInfo.generatedAt,
+    releaseId: updateInfo.releaseId,
+    changelogMarkdown: updateInfo.changelogMarkdown || "",
+    pendingDeferred: updateInfo.pendingDeferred === true,
+  });
+}
+
+async function installPendingUpdate(options = {}) {
+  await restoreUpdaterState();
+  const pendingUpdate =
+    options.pendingUpdate && typeof options.pendingUpdate === "object"
+      ? options.pendingUpdate
+      : await readUpdaterRecord(UPDATE_PENDING_RECORD_KEY);
+  if (!pendingUpdate || !pendingUpdate.version || compareSemver(pendingUpdate.version, CURRENT_EXTENSION_VERSION) <= 0) {
+    await setUpdateState({
+      phase: "idle",
+      latestVersion: CURRENT_EXTENSION_VERSION,
+      pendingUpdateVersion: "",
+      updateAvailable: false,
+      pendingDeferred: false,
+      message: "",
+      detail: "",
+      error: "",
+    });
+    return buildUpdateStatusSnapshot();
+  }
+
+  const installRecord = await getLinkedInstallFolderRecord();
+  if (!installRecord || !installRecord.handle) {
+    await setUpdateState({
+      phase: "awaiting-folder",
+      latestVersion: pendingUpdate.version,
+      updateAvailable: true,
+      pendingUpdateVersion: pendingUpdate.version,
+      pendingUpdateUrl: pendingUpdate.zipUrl || "",
+      pendingReleaseUrl: pendingUpdate.releaseUrl || "",
+      pendingManifestUrl: pendingUpdate.manifestUrl || "",
+      pendingManagedFiles: Array.isArray(pendingUpdate.managedFiles) ? pendingUpdate.managedFiles : [],
+      changelogMarkdown:
+        typeof pendingUpdate.changelogMarkdown === "string" ? pendingUpdate.changelogMarkdown : "",
+      message: "Link the Save Sora install folder to enable self-updates.",
+      detail: "Choose the unpacked extension folder once so Save Sora can apply future GitHub releases automatically.",
+      error: "",
+    });
+    return buildUpdateStatusSnapshot();
+  }
+
+  if (isUpdaterApplyBlocked()) {
+    await storePendingUpdate({
+      ...pendingUpdate,
+      pendingDeferred: true,
+    });
+    await setUpdateState({
+      phase: "deferred",
+      latestVersion: pendingUpdate.version,
+      updateAvailable: true,
+      pendingUpdateVersion: pendingUpdate.version,
+      pendingDeferred: true,
+      changelogMarkdown:
+        typeof pendingUpdate.changelogMarkdown === "string" ? pendingUpdate.changelogMarkdown : "",
+      message: "Update ready to install.",
+      detail: "Save Sora will install the pending update after the current fetch or download finishes.",
+      error: "",
+    });
+    return buildUpdateStatusSnapshot();
+  }
+
+  await setUpdateState(
+    {
+      phase: "downloading",
+      latestVersion: pendingUpdate.version,
+      updateAvailable: true,
+      pendingUpdateVersion: pendingUpdate.version,
+      pendingUpdateUrl: pendingUpdate.zipUrl || "",
+      pendingReleaseUrl: pendingUpdate.releaseUrl || "",
+      pendingManifestUrl: pendingUpdate.manifestUrl || "",
+      pendingManagedFiles: Array.isArray(pendingUpdate.managedFiles) ? pendingUpdate.managedFiles : [],
+      changelogMarkdown:
+        typeof pendingUpdate.changelogMarkdown === "string" ? pendingUpdate.changelogMarkdown : "",
+      pendingDeferred: false,
+      message: `Downloading Save Sora ${pendingUpdate.version}…`,
+      detail: "Fetching the latest GitHub release package and verifying its checksum.",
+      progress: 0,
+      error: "",
+    },
+    { persist: true },
+  );
+
+  try {
+    const packageBuffer = await downloadBinaryWithProgress(pendingUpdate.zipUrl, async (progressRatio) => {
+      await setUpdateState(
+        {
+          phase: "downloading",
+          progress: progressRatio * 0.55,
+        },
+        { persist: false },
+      );
+    });
+    const actualDigest = await digestSha256Hex(packageBuffer);
+    if (
+      pendingUpdate.zipSha256 &&
+      pendingUpdate.zipSha256.toLowerCase() !== actualDigest.toLowerCase()
+    ) {
+      throw new Error("The downloaded update package failed checksum verification.");
+    }
+
+    const extractedFiles = await extractManagedFilesFromZip(
+      packageBuffer,
+      pendingUpdate.managedFiles,
+    );
+    const extractedManifestBytes = extractedFiles.get("manifest.json");
+    if (!extractedManifestBytes) {
+      throw new Error("The update package does not contain manifest.json.");
+    }
+
+    const extractedManifest = JSON.parse(new TextDecoder().decode(extractedManifestBytes));
+    if (!extractedManifest || extractedManifest.name !== CURRENT_EXTENSION_NAME) {
+      throw new Error("The update package does not match the Save Sora extension.");
+    }
+    if (
+      typeof extractedManifest.version !== "string" ||
+      compareSemver(extractedManifest.version, CURRENT_EXTENSION_VERSION) <= 0
+    ) {
+      throw new Error("The update package is not newer than the installed extension.");
+    }
+
+    await setUpdateState(
+      {
+        phase: "applying",
+        message: `Installing Save Sora ${pendingUpdate.version}…`,
+        detail: "Applying the verified update into the unpacked extension folder.",
+        progress: 0.6,
+      },
+      { persist: true },
+    );
+
+    await applyExtractedManagedFiles(installRecord.handle, extractedFiles, async (progressRatio) => {
+      await setUpdateState(
+        {
+          phase: "applying",
+          progress: 0.6 + progressRatio * 0.35,
+        },
+        { persist: false },
+      );
+    });
+
+    await deleteUpdaterRecord(UPDATE_PENDING_RECORD_KEY);
+    await writeUpdaterRecord(UPDATE_META_RECORD_KEY, {
+      lastSuccessfulUpdateAt: new Date().toISOString(),
+      lastSuccessfulUpdateVersion: pendingUpdate.version,
+      latestVersion: pendingUpdate.version,
+      updateAvailable: false,
+      pendingUpdateVersion: "",
+      pendingDeferred: false,
+      error: "",
+      phase: "reloading",
+      progress: 1,
+      message: `Installed Save Sora ${pendingUpdate.version}.`,
+      detail: "Reloading the extension with the updated runtime files.",
+    });
+    currentUpdateState = createDefaultUpdateState({
+      ...currentUpdateState,
+      phase: "reloading",
+      latestVersion: pendingUpdate.version,
+      updateAvailable: false,
+      pendingUpdateVersion: "",
+      pendingDeferred: false,
+      progress: 1,
+      message: `Installed Save Sora ${pendingUpdate.version}.`,
+      detail: "Reloading the extension with the updated runtime files.",
+      error: "",
+    });
+    const snapshot = buildUpdateStatusSnapshot();
+    setTimeout(() => {
+      chrome.runtime.reload();
+    }, 80);
+    return snapshot;
+  } catch (error) {
+    await setUpdateState({
+      phase: "error",
+      latestVersion: pendingUpdate.version,
+      updateAvailable: true,
+      pendingUpdateVersion: pendingUpdate.version,
+      pendingDeferred: false,
+      changelogMarkdown:
+        typeof pendingUpdate.changelogMarkdown === "string" ? pendingUpdate.changelogMarkdown : "",
+      message: "Could not install the latest update.",
+      detail: getErrorMessage(error),
+      error: getErrorMessage(error),
+      progress: 0,
+    });
+    return buildUpdateStatusSnapshot();
+  }
+}
+
+async function runUpdateCheck(options = {}) {
+  if (isUpdaterBusyPhase()) {
+    return buildUpdateStatusSnapshot();
+  }
+
+  await restoreUpdaterState();
+  const automaticUpdatesEnabled = normalizeAutomaticUpdatesEnabled(
+    currentState &&
+      currentState.settings &&
+      Object.prototype.hasOwnProperty.call(currentState.settings, "automaticUpdatesEnabled")
+      ? currentState.settings.automaticUpdatesEnabled
+      : true,
+  );
+
+  await setUpdateState({
+    phase: "checking",
+    message: "Checking GitHub for updates…",
+    detail: "Looking for the latest Save Sora release before opening the dashboard.",
+    progress: 0,
+    automaticUpdatesEnabled,
+    error: "",
+  });
+
+  try {
+    const latestRelease = await fetchLatestReleaseManifest();
+    const installFolderLinked = Boolean(await getLinkedInstallFolderRecord());
+    const updateAvailable = compareSemver(latestRelease.version, CURRENT_EXTENSION_VERSION) > 0;
+    const lastCheckedAt = new Date().toISOString();
+
+    if (!updateAvailable) {
+      await storePendingUpdate(null);
+      await setUpdateState({
+        phase:
+          automaticUpdatesEnabled && !installFolderLinked ? "awaiting-folder" : "idle",
+        latestVersion: CURRENT_EXTENSION_VERSION,
+        lastCheckedAt,
+        installFolderLinked,
+        updateAvailable: false,
+        pendingUpdateVersion: "",
+        pendingManagedFiles: [],
+        changelogMarkdown: "",
+        pendingDeferred: false,
+        message:
+          automaticUpdatesEnabled && !installFolderLinked
+            ? "Finish one-time update setup."
+            : "",
+        detail:
+          automaticUpdatesEnabled && !installFolderLinked
+            ? "Chrome requires one-time access to the unpacked Save Sora folder so future GitHub releases can install automatically."
+            : "",
+        progress: 0,
+        error: "",
+      });
+      return buildUpdateStatusSnapshot();
+    }
+
+    const pendingUpdate = {
+      ...latestRelease,
+      pendingDeferred: false,
+    };
+    await storePendingUpdate(pendingUpdate);
+    await setUpdateState({
+      phase: !installFolderLinked
+        ? "awaiting-folder"
+        : automaticUpdatesEnabled
+          ? "downloading"
+          : "update-available",
+      latestVersion: latestRelease.version,
+      lastCheckedAt,
+      installFolderLinked,
+      updateAvailable: true,
+      pendingUpdateVersion: latestRelease.version,
+      pendingUpdateUrl: latestRelease.zipUrl,
+      pendingReleaseUrl: latestRelease.releaseUrl,
+      pendingManifestUrl: latestRelease.manifestUrl,
+      pendingManagedFiles: latestRelease.managedFiles,
+      changelogMarkdown: latestRelease.changelogMarkdown || "",
+      pendingDeferred: false,
+      message: !installFolderLinked
+        ? "Link the Save Sora install folder to install the latest update."
+        : automaticUpdatesEnabled
+          ? `Downloading Save Sora ${latestRelease.version}…`
+          : `Save Sora ${latestRelease.version} is ready to install.`,
+      detail: !installFolderLinked
+        ? "Choose the unpacked extension folder once so Save Sora can update itself from GitHub."
+        : automaticUpdatesEnabled
+          ? "Fetching the latest GitHub release package and verifying it before install."
+          : "Automatic updates are turned off. Install the latest GitHub release when you are ready.",
+      progress: 0,
+      error: "",
+    });
+
+    if (!installFolderLinked || !automaticUpdatesEnabled || options.applyIfAvailable === false) {
+      return buildUpdateStatusSnapshot();
+    }
+
+    return installPendingUpdate({ pendingUpdate });
+  } catch (error) {
+    const releaseVersion =
+      error && typeof error.releaseVersion === "string" ? error.releaseVersion : "";
+    const missingManifestForOlderOrCurrentRelease =
+      error &&
+      error.code === "MISSING_UPDATE_MANIFEST" &&
+      compareSemver(releaseVersion || CURRENT_EXTENSION_VERSION, CURRENT_EXTENSION_VERSION) <= 0;
+    const noPublishedReleaseYet =
+      error &&
+      error.status === 404 &&
+      error.url === GITHUB_LATEST_RELEASE_URL;
+
+    if (missingManifestForOlderOrCurrentRelease || noPublishedReleaseYet) {
+      const installFolderLinked = Boolean(await getLinkedInstallFolderRecord());
+      await storePendingUpdate(null);
+      await setUpdateState({
+        phase:
+          automaticUpdatesEnabled && !installFolderLinked ? "awaiting-folder" : "idle",
+        latestVersion: CURRENT_EXTENSION_VERSION,
+        lastCheckedAt: new Date().toISOString(),
+        installFolderLinked,
+        updateAvailable: false,
+        pendingUpdateVersion: "",
+        pendingManagedFiles: [],
+        changelogMarkdown: "",
+        pendingDeferred: false,
+        message:
+          automaticUpdatesEnabled && !installFolderLinked
+            ? "Finish one-time update setup."
+            : "",
+        detail:
+          automaticUpdatesEnabled && !installFolderLinked
+            ? "Chrome requires one-time access to the unpacked Save Sora folder so future GitHub releases can install automatically."
+            : "",
+        progress: 0,
+        error: "",
+      });
+      return buildUpdateStatusSnapshot();
+    }
+
+    await setUpdateState({
+      phase: "error",
+      message: "Could not check GitHub for updates.",
+      detail: getErrorMessage(error),
+      progress: 0,
+      changelogMarkdown: currentUpdateState.changelogMarkdown,
+      error: getErrorMessage(error),
+    });
+    return buildUpdateStatusSnapshot();
+  }
 }
 
 async function readVolatileBackupMeta(sessionKey) {
@@ -1184,6 +2299,7 @@ function buildPopupStateSnapshot(state = currentState) {
     items: limitedItems,
     selectedKeys,
     titleOverrides,
+    updateStatus: buildUpdateStatusSnapshot(),
     queued: Number.isFinite(Number(sourceState.queued))
       ? Number(sourceState.queued)
       : selectedKeysTotal,
@@ -1350,6 +2466,9 @@ async function restoreState() {
         defaultSource: normalizeDefaultSource(currentState.settings.defaultSource),
         defaultSort: normalizeDefaultSort(currentState.settings.defaultSort),
         theme: normalizeTheme(currentState.settings.theme),
+        automaticUpdatesEnabled: normalizeAutomaticUpdatesEnabled(
+          currentState.settings.automaticUpdatesEnabled,
+        ),
       };
       currentState.characterAccounts = normalizeCharacterAccounts(currentState.characterAccounts);
       if (currentState.hasExplicitCharacterAccountSelection !== true) {
@@ -1498,10 +2617,12 @@ async function setState(patch, options = {}) {
   );
 
   if (options.persist === false) {
+    maybeResumeDeferredUpdate();
     return;
   }
 
   await persistState(currentState);
+  maybeResumeDeferredUpdate();
 }
 
 async function setCatalogState(patch, options = {}) {
@@ -1517,6 +2638,23 @@ async function setCatalogState(patch, options = {}) {
   }
 
   await persistCatalogState(currentCatalog);
+}
+
+function maybeResumeDeferredUpdate() {
+  if (
+    (currentUpdateState.phase !== "deferred" && currentUpdateState.phase !== "update-available") ||
+    currentUpdateState.automaticUpdatesEnabled !== true ||
+    isUpdaterBusyPhase() ||
+    isUpdaterApplyBlocked()
+  ) {
+    return;
+  }
+
+  queueMicrotask(() => {
+    void installPendingUpdate().catch((error) => {
+      console.warn("Failed to resume the deferred Save Sora update.", error);
+    });
+  });
 }
 
 async function resetExtensionState() {
@@ -1556,6 +2694,7 @@ async function clearLocalStorageState() {
   pausedFetchRequest = null;
   currentState = createDefaultState();
   currentCatalog = createDefaultCatalogState();
+  await restoreUpdaterState();
 }
 
 function normalizeSources(input) {
@@ -4526,9 +5665,28 @@ async function updateSettings(nextSettings) {
     settings.theme = normalizeTheme(settings.theme);
   }
 
+  if (
+    nextSettings &&
+    Object.prototype.hasOwnProperty.call(nextSettings, "automaticUpdatesEnabled")
+  ) {
+    settings.automaticUpdatesEnabled = normalizeAutomaticUpdatesEnabled(
+      nextSettings.automaticUpdatesEnabled,
+    );
+  } else {
+    settings.automaticUpdatesEnabled = normalizeAutomaticUpdatesEnabled(
+      settings.automaticUpdatesEnabled,
+    );
+  }
+
   await setState({
     settings,
   });
+  await setUpdateState({
+    automaticUpdatesEnabled: settings.automaticUpdatesEnabled,
+  });
+  if (settings.automaticUpdatesEnabled === true) {
+    maybeResumeDeferredUpdate();
+  }
 }
 
 async function downloadSelected() {

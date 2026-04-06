@@ -29,6 +29,15 @@ import {
   handleThemeToggleChange,
 } from "./settings.js";
 import {
+  handleUpdateGateContinueClick,
+  handleUpdateGateInstallClick,
+  handleUpdateGateLinkClick,
+  handleUpdateGateRetryClick,
+  handleUpdateGateSkipClick,
+  handleUpdaterCheckNowClick,
+  handleUpdaterRelinkClick,
+} from "./updater.js";
+import {
   handleCharacterMenuChange,
   handleCharacterSelectionClick,
   handleCreatorDialogCancelClick,
@@ -93,7 +102,15 @@ export function initializeEventHandlers() {
   dom.defaultSourceMenu?.addEventListener("change", handleSettingsSourceMenuChange);
   dom.defaultSortInput?.addEventListener("change", handleSettingsChange);
   dom.defaultThemeInput?.addEventListener("change", handleSettingsChange);
+  dom.automaticUpdatesInput?.addEventListener("change", handleSettingsChange);
   dom.clearStorageButton?.addEventListener("click", handleClearStorageClick);
+  dom.updateGateLinkButton?.addEventListener("click", handleUpdateGateLinkClick);
+  dom.updateGateInstallButton?.addEventListener("click", handleUpdateGateInstallClick);
+  dom.updateGateRetryButton?.addEventListener("click", handleUpdateGateRetryClick);
+  dom.updateGateSkipButton?.addEventListener("click", handleUpdateGateSkipClick);
+  dom.updateGateContinueButton?.addEventListener("click", handleUpdateGateContinueClick);
+  dom.updaterCheckNowButton?.addEventListener("click", handleUpdaterCheckNowClick);
+  dom.updaterRelinkButton?.addEventListener("click", handleUpdaterRelinkClick);
 
   for (const button of dom.tabButtons) {
     button.addEventListener("click", () => {

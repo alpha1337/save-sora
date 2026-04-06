@@ -125,7 +125,7 @@ export async function handleClearStorageClick() {
   }
 
   const confirmed = window.confirm(
-    "Clear all saved Save Sora local data? This removes saved settings, renamed titles, selection state, and the current working set.",
+    "Clear all saved Save Sora local data? This removes saved settings, renamed titles, selection state, and the current working set. Your updater folder link and resumable updater data will stay intact.",
   );
   if (!confirmed) {
     return;
@@ -162,6 +162,7 @@ async function saveSettingsFromForm() {
     !(dom.maxVideosInput instanceof HTMLInputElement) ||
     !(dom.defaultSortInput instanceof HTMLSelectElement) ||
     !(dom.defaultThemeInput instanceof HTMLSelectElement) ||
+    !(dom.automaticUpdatesInput instanceof HTMLInputElement) ||
     !(dom.defaultSourceLabel instanceof HTMLElement) ||
     !(dom.settingsStatus instanceof HTMLElement)
   ) {
@@ -175,6 +176,7 @@ async function saveSettingsFromForm() {
   const defaultSource = getSelectedSourceValues(dom.defaultSourceInputs);
   const defaultSort = normalizeSortValue(dom.defaultSortInput.value);
   const theme = dom.defaultThemeInput.value === "light" ? "light" : "dark";
+  const automaticUpdatesEnabled = dom.automaticUpdatesInput.checked;
 
   try {
     await saveRuntimeSettings({
@@ -182,6 +184,7 @@ async function saveSettingsFromForm() {
       defaultSource,
       defaultSort,
       theme,
+      automaticUpdatesEnabled,
     });
   } catch (error) {
     dom.settingsStatus.textContent = "Could not save.";

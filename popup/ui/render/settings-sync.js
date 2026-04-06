@@ -11,9 +11,9 @@ import {
  * Synchronizes the settings UI without overwriting a currently focused input.
  *
  * @param {object} settings
- * @param {{theme: string, defaultSource: string[], defaultSort: string}} defaults
+ * @param {{theme: string, defaultSource: string[], defaultSort: string, automaticUpdatesEnabled: boolean}} defaults
  */
-export function syncSettingsInputs(settings, { theme, defaultSource, defaultSort }) {
+export function syncSettingsInputs(settings, { theme, defaultSource, defaultSort, automaticUpdatesEnabled }) {
   if (dom.maxVideosInput && !isFocusedElement(dom.maxVideosInput)) {
     dom.maxVideosInput.value =
       typeof settings.maxVideos === "number" && Number.isFinite(settings.maxVideos)
@@ -40,6 +40,10 @@ export function syncSettingsInputs(settings, { theme, defaultSource, defaultSort
 
   if (dom.defaultThemeInput && !isFocusedElement(dom.defaultThemeInput)) {
     dom.defaultThemeInput.value = theme;
+  }
+
+  if (dom.automaticUpdatesInput && !isFocusedElement(dom.automaticUpdatesInput)) {
+    dom.automaticUpdatesInput.checked = automaticUpdatesEnabled;
   }
 
   if (dom.sourceSelectLabel instanceof HTMLElement) {

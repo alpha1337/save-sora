@@ -35,6 +35,46 @@ export async function fetchRuntimeState() {
   return response.state;
 }
 
+export async function fetchUpdateStatus() {
+  const response = await sendPopupMessage(
+    { type: "GET_UPDATE_STATUS" },
+    "Could not load the current updater status.",
+  );
+  return response.updateStatus;
+}
+
+export async function requestUpdateCheck(options = {}) {
+  const response = await sendPopupMessage(
+    {
+      type: "CHECK_FOR_UPDATES",
+      trigger: typeof options.trigger === "string" ? options.trigger : "popup",
+      interactive: options.interactive !== false,
+      applyIfAvailable: options.applyIfAvailable !== false,
+    },
+    "Could not check GitHub for updates.",
+  );
+  return response.updateStatus;
+}
+
+export async function linkRuntimeInstallFolder(handle) {
+  const response = await sendPopupMessage(
+    {
+      type: "LINK_INSTALL_FOLDER",
+      handle,
+    },
+    "Could not link the unpacked extension folder.",
+  );
+  return response.updateStatus;
+}
+
+export async function installPendingRuntimeUpdate() {
+  const response = await sendPopupMessage(
+    { type: "INSTALL_PENDING_UPDATE" },
+    "Could not install the pending update.",
+  );
+  return response.updateStatus;
+}
+
 /**
  * Loads the available proxy-character accounts for the signed-in user.
  *

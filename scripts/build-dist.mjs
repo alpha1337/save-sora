@@ -2,6 +2,7 @@ import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statS
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 
 /**
  * Produces a clean extension-only distribution folder and a versioned zip file
@@ -22,6 +23,7 @@ const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
 const packageSlug = "save-sora";
 const packageDir = path.join(distRoot, packageSlug);
 const zipPath = path.join(distRoot, `${packageSlug}-v${manifest.version}.zip`);
+const updateManifestPath = path.join(distRoot, `${packageSlug}-update-manifest.json`);
 
 const requiredRootEntries = [
   "manifest.json",
@@ -52,9 +54,11 @@ function main() {
 
   writeBuildReport(packageEntries);
   createZipArchive();
+  writeUpdateManifest(packageEntries);
 
   console.log(`Built unpacked extension: ${relativePathFromRepo(packageDir)}`);
   console.log(`Built zip archive: ${relativePathFromRepo(zipPath)}`);
+  console.log(`Built update manifest: ${relativePathFromRepo(updateManifestPath)}`);
 }
 
 /**
@@ -170,6 +174,22 @@ function createZipArchive() {
     cwd: distRoot,
     stdio: "inherit"
   });
+}
+
+function writeUpdateManifest(packageEntries) {
+  const zipBuffer = readFileSync(zipPath);
+  const zipSha256 = createHash("sha256").update(zipBuffer).digest("hex");
+  const updateManifest = {
+    name: manifest.name,
+    version: manifest.version,
+    generatedAt: new Date().toISOString(),
+    packageSlug,
+    zipFileName: path.basename(zipPath),
+    zipSha256,
+    managedFiles: packageEntries,
+  };
+
+  writeFileSync(updateManifestPath, `${JSON.stringify(updateManifest, null, 2)}\n`, "utf8");
 }
 
 function recreateDirectory(targetPath) {

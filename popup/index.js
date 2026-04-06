@@ -1,6 +1,7 @@
 import { initializeEventHandlers } from "./controllers/index.js";
 import { dom } from "./dom.js";
-import { refreshStatus, startPolling } from "./controllers/polling.js";
+import { startPolling } from "./controllers/polling.js";
+import { bootstrapUpdaterGate } from "./controllers/updater.js";
 import { setActiveTab } from "./ui/layout.js";
 
 /**
@@ -9,9 +10,9 @@ import { setActiveTab } from "./ui/layout.js";
 export function initPopupApp() {
   syncAppVersionLabel();
   initializeEventHandlers();
-  void refreshStatus();
-  startPolling();
   setActiveTab("overview");
+  startPolling();
+  void bootstrapUpdaterGate();
 }
 
 function syncAppVersionLabel() {

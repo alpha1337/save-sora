@@ -14,6 +14,7 @@ import { startFetchStatusRotation, stopFetchStatusRotation } from "./render/fetc
 import { syncFetchProgressPanel } from "./render/fetch-progress.js";
 import { syncPrimaryControls } from "./render/primary-controls.js";
 import { syncSettingsInputs } from "./render/settings-sync.js";
+import { syncUpdateSurfaces } from "./render/update-gate.js";
 import { syncCharacterMenu } from "../controllers/source-menus.js";
 import { syncSourceSelectionScreen } from "./character-selection.js";
 
@@ -66,9 +67,12 @@ export function renderState(state) {
       : {};
   const settings =
     state && state.settings && typeof state.settings === "object" ? state.settings : {};
+  const updateStatus =
+    state && state.updateStatus && typeof state.updateStatus === "object" ? state.updateStatus : {};
   const theme = settings && settings.theme === "light" ? "light" : "dark";
   const defaultSource = normalizeSourceValues(settings.defaultSource);
   const defaultSort = normalizeSortValue(settings.defaultSort);
+  const automaticUpdatesEnabled = settings && settings.automaticUpdatesEnabled !== false;
   const totalVideos =
     Number.isFinite(popupTotalItemCount) && popupTotalItemCount >= 0
       ? phase === "fetching"
@@ -110,7 +114,9 @@ export function renderState(state) {
     theme,
     defaultSource,
     defaultSort,
+    automaticUpdatesEnabled,
   });
+  syncUpdateSurfaces(updateStatus);
 
   if (dom.settingsStatus && dom.settingsStatus.textContent === "Saving...") {
     dom.settingsStatus.textContent = "Saved automatically.";
