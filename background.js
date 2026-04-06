@@ -1408,6 +1408,10 @@ async function fetchLatestReleaseManifest() {
     version:
       typeof manifest.version === "string" && manifest.version ? manifest.version : releaseVersion,
     releaseVersion,
+    packageSlug:
+      typeof manifest.packageSlug === "string" && manifest.packageSlug
+        ? sanitizeManagedRelativePath(manifest.packageSlug)
+        : "",
     zipUrl: zipAsset.browser_download_url,
     zipSha256: typeof manifest.zipSha256 === "string" ? manifest.zipSha256.toLowerCase() : "",
     manifestUrl: manifestAsset.browser_download_url,
@@ -1493,7 +1497,26 @@ function ensureZipLibraryLoaded() {
   throw new Error("Save Sora could not initialize the bundled zip library during startup.");
 }
 
-async function extractManagedFilesFromZip(arrayBuffer, managedFiles) {
+function normalizeManagedZipEntryPath(entryPath, packageSlug) {
+  const normalizedPath = sanitizeManagedRelativePath(entryPath);
+  if (!normalizedPath) {
+    return "";
+  }
+
+  if (packageSlug) {
+    const normalizedPackageSlug = sanitizeManagedRelativePath(packageSlug);
+    if (normalizedPath === normalizedPackageSlug) {
+      return "";
+    }
+    if (normalizedPath.startsWith(`${normalizedPackageSlug}/`)) {
+      return normalizedPath.slice(normalizedPackageSlug.length + 1);
+    }
+  }
+
+  return normalizedPath;
+}
+
+async function extractManagedFilesFromZip(arrayBuffer, managedFiles, packageSlug = "") {
   ensureZipLibraryLoaded();
   const normalizedManagedFiles = new Set(
     Array.isArray(managedFiles)
@@ -1511,7 +1534,7 @@ async function extractManagedFilesFromZip(arrayBuffer, managedFiles) {
       continue;
     }
 
-    const relativePath = sanitizeManagedRelativePath(entry.filename);
+    const relativePath = normalizeManagedZipEntryPath(entry.filename, packageSlug);
     if (!relativePath) {
       await zipReader.close();
       throw new Error("The downloaded update contains an invalid file path.");
@@ -1662,6 +1685,7 @@ async function storePendingUpdate(updateInfo) {
 
   return writeUpdaterRecord(UPDATE_PENDING_RECORD_KEY, {
     version: updateInfo.version,
+    packageSlug: updateInfo.packageSlug || "",
     zipUrl: updateInfo.zipUrl,
     zipSha256: updateInfo.zipSha256,
     manifestUrl: updateInfo.manifestUrl,
@@ -1710,6 +1734,7 @@ async function installPendingUpdate(options = {}) {
       pendingUpdateUrl: pendingUpdate.zipUrl || "",
       pendingReleaseUrl: pendingUpdate.releaseUrl || "",
       pendingManifestUrl: pendingUpdate.manifestUrl || "",
+      pendingPackageSlug: pendingUpdate.packageSlug || "",
       pendingManagedFiles: Array.isArray(pendingUpdate.managedFiles) ? pendingUpdate.managedFiles : [],
       changelogMarkdown:
         typeof pendingUpdate.changelogMarkdown === "string" ? pendingUpdate.changelogMarkdown : "",
@@ -1757,6 +1782,7 @@ async function installPendingUpdate(options = {}) {
       pendingUpdateUrl: pendingUpdate.zipUrl || "",
       pendingReleaseUrl: pendingUpdate.releaseUrl || "",
       pendingManifestUrl: pendingUpdate.manifestUrl || "",
+      pendingPackageSlug: pendingUpdate.packageSlug || "",
       pendingManagedFiles: Array.isArray(pendingUpdate.managedFiles) ? pendingUpdate.managedFiles : [],
       changelogMarkdown:
         typeof pendingUpdate.changelogMarkdown === "string" ? pendingUpdate.changelogMarkdown : "",
@@ -1809,6 +1835,7 @@ async function installPendingUpdate(options = {}) {
     const extractedFiles = await extractManagedFilesFromZip(
       packageBuffer,
       pendingUpdate.managedFiles,
+      pendingUpdate.packageSlug || "",
     );
     const extractedManifestBytes = extractedFiles.get("manifest.json");
     if (!extractedManifestBytes) {
@@ -1981,6 +2008,7 @@ async function runUpdateCheck(options = {}) {
       pendingUpdateUrl: latestRelease.zipUrl,
       pendingReleaseUrl: latestRelease.releaseUrl,
       pendingManifestUrl: latestRelease.manifestUrl,
+      pendingPackageSlug: latestRelease.packageSlug || "",
       pendingManagedFiles: latestRelease.managedFiles,
       changelogMarkdown: latestRelease.changelogMarkdown || "",
       pendingDeferred: false,
