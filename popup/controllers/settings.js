@@ -1,6 +1,6 @@
 import { SETTINGS_SAVE_DEBOUNCE_MS } from "../config.js";
 import { dom } from "../dom.js";
-import { requestClearLocalStorage, saveRuntimeSettings } from "../runtime.js";
+import { requestClearLocalStorage, requestClearVolatileBackups, saveRuntimeSettings } from "../runtime.js";
 import { popupState } from "../state.js";
 import {
   formatSourceSelectionLabel,
@@ -139,6 +139,35 @@ export async function handleClearStorageClick() {
     await refreshStatus();
   } catch (error) {
     dom.settingsStatus.textContent = "Could not clear local storage.";
+    showNotice(dom.errorBox, error instanceof Error ? error.message : String(error));
+  }
+}
+
+/**
+ * Clears resumable creator/fetch backup data stored in IndexedDB.
+ *
+ * @returns {Promise<void>}
+ */
+export async function handleClearVolatileBackupsClick() {
+  if (!(dom.settingsStatus instanceof HTMLElement)) {
+    return;
+  }
+
+  const confirmed = window.confirm(
+    "Clear resumable fetch backup data? This removes saved crawl checkpoints and preview backups for large fetches, but keeps your updater folder link, updater history, and normal settings.",
+  );
+  if (!confirmed) {
+    return;
+  }
+
+  dom.settingsStatus.textContent = "Clearing resumable fetch backups...";
+
+  try {
+    await requestClearVolatileBackups();
+    dom.settingsStatus.textContent = "Resumable fetch backups cleared.";
+    await refreshStatus();
+  } catch (error) {
+    dom.settingsStatus.textContent = "Could not clear resumable fetch backups.";
     showNotice(dom.errorBox, error instanceof Error ? error.message : String(error));
   }
 }

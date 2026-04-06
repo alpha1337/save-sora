@@ -106,6 +106,7 @@ export const dom = {
   updaterCheckNowButton: document.getElementById("updater-check-now-button"),
   updaterRelinkButton: document.getElementById("updater-relink-button"),
   clearStorageButton: document.getElementById("clear-storage-button"),
+  clearVolatileBackupsButton: document.getElementById("clear-volatile-backups-button"),
   settingsStatus: document.getElementById("settings-status"),
   themeToggle: document.getElementById("theme-toggle"),
   creatorDialog: document.getElementById("creator-dialog"),

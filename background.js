@@ -318,6 +318,25 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       .catch((error) => {
         console.error("Failed to clear the Sora downloader local storage.", error);
         sendResponse({ ok: false, error: getErrorMessage(error) });
+    });
+    return true;
+  }
+
+  if (message.type === "CLEAR_VOLATILE_BACKUPS") {
+    if (activeRun) {
+      sendResponse({ ok: false, error: "Wait until the current fetch or download run finishes." });
+      return false;
+    }
+
+    void clearVolatileBackups()
+      .then(() => {
+        activeVolatileBackupSessionKey = "";
+        activeVolatileBackupResumeMeta = null;
+        sendResponse({ ok: true, state: buildPopupStateSnapshot(currentState) });
+      })
+      .catch((error) => {
+        console.error("Failed to clear Save Sora resumable fetch backups.", error);
+        sendResponse({ ok: false, error: getErrorMessage(error) });
       });
     return true;
   }
@@ -2205,7 +2224,7 @@ function normalizeVolatileBackupProgressEntry(entry) {
     return null;
   }
 
-  return {
+  const normalizedEntry = {
     ...entry,
     cursor: typeof entry.cursor === "string" ? entry.cursor : "",
     previousCursor: typeof entry.previousCursor === "string" ? entry.previousCursor : "",
@@ -2220,6 +2239,17 @@ function normalizeVolatileBackupProgressEntry(entry) {
       : 0,
     isComplete: entry.isComplete === true,
   };
+
+  if (
+    normalizedEntry.totalItemCount < normalizedEntry.previewCount ||
+    normalizedEntry.totalItemCount < normalizedEntry.backedUpItemCount ||
+    normalizedEntry.totalItemCount <
+      normalizedEntry.previewCount + normalizedEntry.backedUpItemCount
+  ) {
+    return null;
+  }
+
+  return normalizedEntry;
 }
 
 function normalizeVolatileBackupProgressMap(progressByKey) {
@@ -2307,6 +2337,45 @@ async function updateVolatileBackupProgress(sessionKey, progressKey, patch = {})
 
   return writeVolatileBackupMeta(sessionKey, {
     progressByKey: nextProgressMap,
+  });
+}
+
+async function clearVolatileBackupProgress(sessionKey, progressKey) {
+  if (!sessionKey || !progressKey) {
+    return null;
+  }
+
+  const existingMeta = await readVolatileBackupMeta(sessionKey);
+  const existingProgressMap = normalizeVolatileBackupProgressMap(
+    existingMeta && existingMeta.progressByKey,
+  );
+  if (Object.prototype.hasOwnProperty.call(existingProgressMap, progressKey)) {
+    delete existingProgressMap[progressKey];
+  }
+
+  const db = await openVolatileBackupDb();
+  await new Promise((resolve, reject) => {
+    const transaction = db.transaction([VOLATILE_BACKUP_ITEM_STORE], "readwrite");
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () =>
+      reject(transaction.error || new Error("Could not clear volatile backup items."));
+    const store = transaction.objectStore(VOLATILE_BACKUP_ITEM_STORE);
+    const index = store.index("sessionProgressKey");
+    const request = index.openCursor(IDBKeyRange.only(`${sessionKey}:${progressKey}`));
+    request.onsuccess = () => {
+      const cursor = request.result;
+      if (!cursor) {
+        return;
+      }
+      cursor.delete();
+      cursor.continue();
+    };
+    request.onerror = () =>
+      reject(request.error || new Error("Could not enumerate volatile backup items."));
+  });
+
+  return writeVolatileBackupMeta(sessionKey, {
+    progressByKey: existingProgressMap,
   });
 }
 
@@ -4465,36 +4534,19 @@ async function startScan(requestedSources, requestedSearchQuery = "") {
         creatorProfiles: currentState.creatorProfiles,
         selectedCreatorProfileIds: currentState.selectedCreatorProfileIds,
       });
-      const resumableMeta = await findLatestVolatileBackupMeta({
-        source: "creators",
-        selectionSignature,
-        statuses: ["running", "paused", "error"],
-      });
-
-      if (resumableMeta) {
-        activeVolatileBackupSessionKey = resumableMeta.sessionKey;
-        activeVolatileBackupResumeMeta = resumableMeta;
-        await writeVolatileBackupMeta(activeVolatileBackupSessionKey, {
+      activeVolatileBackupSessionKey = createVolatileBackupSessionKey();
+      activeVolatileBackupResumeMeta = null;
+      await writeVolatileBackupMeta(
+        activeVolatileBackupSessionKey,
+        {
+          startedAt: new Date().toISOString(),
           source: "creators",
           selectionSignature,
           status: "running",
-          resumedAt: new Date().toISOString(),
-          error: "",
-        });
-      } else {
-        activeVolatileBackupSessionKey = createVolatileBackupSessionKey();
-        await writeVolatileBackupMeta(
-          activeVolatileBackupSessionKey,
-          {
-            startedAt: new Date().toISOString(),
-            source: "creators",
-            selectionSignature,
-            status: "running",
-            progressByKey: {},
-          },
-          { merge: false },
-        );
-      }
+          progressByKey: {},
+        },
+        { merge: false },
+      );
     } catch (error) {
       console.warn("Could not initialize the volatile backup store.", error);
       activeVolatileBackupSessionKey = "";
@@ -6757,14 +6809,14 @@ async function collectItems(sources, maxVideos, options = {}) {
                   }, { persist: false });
                 },
                 })
-                : await fetchAllCreatorItems({
+              : await fetchAllCreatorItems({
                   maxItems: maxRemaining,
                   creatorProfiles: currentState.creatorProfiles,
                   selectedCreatorProfileIds,
                   knownItemKeys,
                   enableVolatileBackup,
-                  volatileBackupResumeMeta:
-                    enableVolatileBackup === true ? activeVolatileBackupResumeMeta : null,
+                  volatileBackupSessionKey:
+                    enableVolatileBackup === true ? activeVolatileBackupSessionKey : "",
                   onProgress: async ({ count, pageNumber, message, previewItems, backedUpItemCount: previewBackedUpItemCount }) => {
                     if (Array.isArray(previewItems) && previewItems.length > 0) {
                       const previewItemMap = new Map(
@@ -7960,12 +8012,30 @@ async function fetchAllCreatorCharacterCameoItems(creatorProfile, options = {}) 
 
   for (let pageNumber = 0; pageNumber < maxPageCount; pageNumber += 1) {
     throwIfFetchAbortRequested();
-    const page = await fetchSourceDataFromTab("characterAccountAppearances", {
+    const pageResult = await fetchSourceDataFromTab("characterAccountAppearances", {
       routeUrl: getCreatorRouteUrl(creatorProfile),
       characterId: characterAccount.userId,
       limit: CREATOR_PROFILE_FEED_LIMIT,
       cursor,
     });
+    const page =
+      pageResult && typeof pageResult === "object"
+        ? {
+            ...pageResult,
+            ids: Array.isArray(pageResult.ids) ? pageResult.ids : [],
+            items: Array.isArray(pageResult.items) ? pageResult.items : [],
+            rowCount: Number.isFinite(Number(pageResult.rowCount))
+              ? Math.max(0, Number(pageResult.rowCount))
+              : 0,
+            nextCursor:
+              typeof pageResult.nextCursor === "string" ? pageResult.nextCursor : "",
+          }
+        : {
+            ids: [],
+            items: [],
+            rowCount: 0,
+            nextCursor: "",
+          };
 
     for (const id of page.ids) {
       ids.add(id);
@@ -8084,6 +8154,183 @@ async function fetchAllCreatorCharacterCameoItems(creatorProfile, options = {}) 
         console.warn("Failed to checkpoint creator-character cameo progress.", error);
       }
     }
+
+    if (page.rowCount === 0 || !nextCursor) {
+      isExhaustive = !(maxItems && totalItemCount >= maxItems);
+      break;
+    }
+
+    if (maxItems && totalItemCount >= maxItems) {
+      break;
+    }
+
+    previousCursor = cursor;
+    cursor = nextCursor;
+  }
+
+  return {
+    ids: [...ids],
+    items,
+    partialWarning:
+      usesVolatileBackup && backedUpItemCount > 0
+        ? `Saved ${backedUpItemCount.toLocaleString()} additional creator-character cameo items to the local backup so the crawl can continue without exhausting Chrome memory. The popup shows a preview.`
+        : "",
+    isExhaustive,
+    totalItemCount,
+    backedUpItemCount,
+    usesVolatileBackup,
+  };
+}
+
+async function fetchAllCreatorCharacterCameoItemsSimple(creatorProfile, options = {}) {
+  const characterAccount = createCharacterAccountFromCreatorProfile(creatorProfile);
+  if (!characterAccount) {
+    return {
+      ids: [],
+      items: [],
+      partialWarning: "",
+      isExhaustive: true,
+      totalItemCount: 0,
+      backedUpItemCount: 0,
+      usesVolatileBackup: false,
+    };
+  }
+
+  const ids = new Set();
+  const items = [];
+  const maxItems = getMaxVideosSetting({ maxVideos: options.maxItems });
+  const previewLimit = Math.max(
+    1,
+    maxItems ? Math.min(maxItems, VOLATILE_SOURCE_PREVIEW_LIMIT) : VOLATILE_SOURCE_PREVIEW_LIMIT,
+  );
+  const knownItemKeys = options.knownItemKeys instanceof Set ? options.knownItemKeys : null;
+  const maxPageCount = getProfileFeedPageCap(characterAccount.cameoCount);
+  const backupSessionKey =
+    typeof options.volatileBackupSessionKey === "string" ? options.volatileBackupSessionKey : "";
+  const shouldBackupVolatileItems = Boolean(backupSessionKey);
+  const progressKey = getVolatileBackupProgressKey(
+    "creatorCharacterCameos",
+    creatorProfile.profileId,
+  );
+  let isExhaustive = false;
+  let cursor = null;
+  let previousCursor = null;
+  let totalItemCount = 0;
+  let backedUpItemCount = 0;
+  let usesVolatileBackup = false;
+
+  for (let pageNumber = 0; pageNumber < maxPageCount; pageNumber += 1) {
+    throwIfFetchAbortRequested();
+    const pageResult = await fetchSourceDataFromTab("characterAccountAppearances", {
+      routeUrl: getCreatorRouteUrl(creatorProfile),
+      characterId: characterAccount.userId,
+      limit: CREATOR_PROFILE_FEED_LIMIT,
+      cursor,
+    });
+    const page =
+      pageResult && typeof pageResult === "object"
+        ? {
+            ...pageResult,
+            ids: Array.isArray(pageResult.ids) ? pageResult.ids : [],
+            items: Array.isArray(pageResult.items) ? pageResult.items : [],
+            rowCount: Number.isFinite(Number(pageResult.rowCount))
+              ? Math.max(0, Number(pageResult.rowCount))
+              : 0,
+            nextCursor:
+              typeof pageResult.nextCursor === "string" ? pageResult.nextCursor : "",
+          }
+        : {
+            ids: [],
+            items: [],
+            rowCount: 0,
+            nextCursor: "",
+          };
+
+    for (const id of page.ids) {
+      ids.add(id);
+    }
+
+    const pageItems = [];
+    const overflowItems = [];
+    for (const item of page.items) {
+      if (maxItems && totalItemCount >= maxItems) {
+        break;
+      }
+
+      const mappedItem = appendCreatorProfileContext(
+        {
+          ...item,
+          sourcePage: "creatorCharacterCameos",
+          sourceLabel: "Character Cameo",
+        },
+        creatorProfile,
+        {
+          sourcePage: "creatorCharacterCameos",
+          categoryLabel: "Character Cameos",
+        },
+      );
+      pageItems.push(mappedItem);
+      totalItemCount += 1;
+
+      if (!shouldBackupVolatileItems || items.length < previewLimit) {
+        items.push(mappedItem);
+        continue;
+      }
+
+      overflowItems.push(mappedItem);
+      backedUpItemCount += 1;
+    }
+
+    if (shouldBackupVolatileItems && overflowItems.length > 0) {
+      try {
+        const storedCount = await appendVolatileBackupItems(
+          backupSessionKey,
+          overflowItems,
+          {
+            source: "creators",
+            sourcePage: "creatorCharacterCameos",
+            progressKey,
+            selectionSignature:
+              typeof options.selectionSignature === "string" ? options.selectionSignature : "",
+            creatorProfileId: creatorProfile.profileId,
+            creatorProfileUsername: creatorProfile.username,
+            characterAccountId: characterAccount.userId,
+            characterAccountUsername: characterAccount.username,
+          },
+        );
+
+        if (storedCount > 0) {
+          usesVolatileBackup = true;
+        }
+
+        if (storedCount < overflowItems.length) {
+          const unstoredItems = overflowItems.slice(storedCount);
+          backedUpItemCount -= unstoredItems.length;
+          items.push(...unstoredItems);
+        }
+      } catch (error) {
+        console.warn("Failed to persist creator-character cameo backup items.", error);
+        backedUpItemCount -= overflowItems.length;
+        items.push(...overflowItems);
+      }
+    }
+
+    if (typeof options.onProgress === "function") {
+      await options.onProgress({
+        count: totalItemCount,
+        pageNumber: pageNumber + 1,
+        previewItems: [...items],
+        backedUpItemCount,
+      });
+    }
+
+    throwIfFetchAbortRequested();
+
+    if (didPageContainOnlyKnownItems(pageItems, knownItemKeys)) {
+      break;
+    }
+
+    const nextCursor = resolveNextProfileFeedCursor(page, pageItems, cursor, previousCursor);
 
     if (page.rowCount === 0 || !nextCursor) {
       isExhaustive = !(maxItems && totalItemCount >= maxItems);
@@ -8378,13 +8625,12 @@ async function fetchAllCreatorItems(options = {}) {
   let isExhaustive = true;
   let backedUpItemCount = 0;
   let usesVolatileBackup = false;
-  const volatileBackupResumeMeta =
-    options && options.volatileBackupResumeMeta && typeof options.volatileBackupResumeMeta === "object"
-      ? normalizeVolatileBackupMetaRecord(options.volatileBackupResumeMeta)
-      : null;
-  const volatileBackupProgressByKey = normalizeVolatileBackupProgressMap(
-    volatileBackupResumeMeta && volatileBackupResumeMeta.progressByKey,
-  );
+  const volatileBackupSessionKey =
+    typeof options.volatileBackupSessionKey === "string" ? options.volatileBackupSessionKey : "";
+  const creatorSelectionSignature = getSourceSelectionSignature("creators", {
+    creatorProfiles: normalizedCreatorProfiles,
+    selectedCreatorProfileIds,
+  });
 
   const mergeResult = (result) => {
     if (!result || typeof result !== "object") {
@@ -8412,7 +8658,7 @@ async function fetchAllCreatorItems(options = {}) {
     usesVolatileBackup = usesVolatileBackup || result.usesVolatileBackup === true;
   };
 
-  const reportProgress = async (messagePrefix) => {
+  const reportProgress = async (messagePrefix, extraProgress = null) => {
     if (typeof options.onProgress !== "function") {
       return;
     }
@@ -8421,6 +8667,7 @@ async function fetchAllCreatorItems(options = {}) {
       count: totalCount,
       pageNumber: 1,
       message: messagePrefix,
+      ...(extraProgress && typeof extraProgress === "object" ? extraProgress : {}),
     });
   };
 
@@ -8471,21 +8718,18 @@ async function fetchAllCreatorItems(options = {}) {
             break;
           }
 
-          const creatorCharacterCameoResult = await fetchAllCreatorCharacterCameoItems(
+          const creatorCharacterCameoResult = await fetchAllCreatorCharacterCameoItemsSimple(
             creatorProfileForFetch,
             {
               maxItems: characterCameoMaxRemaining,
               knownItemKeys,
-              volatileBackupSessionKey:
-                options.enableVolatileBackup === true ? activeVolatileBackupSessionKey : "",
-              resumeState:
-                volatileBackupProgressByKey[
-                  getVolatileBackupProgressKey(
-                    "creatorCharacterCameos",
-                    creatorProfileForFetch.profileId,
-                  )
-                ] || null,
-              onProgress: async ({ count }) => {
+              volatileBackupSessionKey,
+              selectionSignature: creatorSelectionSignature,
+              onProgress: async ({
+                count,
+                previewItems,
+                backedUpItemCount: previewBackedUpItemCount,
+              }) => {
                 totalCount = maxItems
                   ? Math.min(maxItems, characterCameoBaseCount + count)
                   : characterCameoBaseCount + count;
@@ -8493,7 +8737,7 @@ async function fetchAllCreatorItems(options = {}) {
                   `Fetching ${creatorProfileForFetch.displayName} community character cameos...`,
                   {
                     previewItems,
-                    backedUpItemCount,
+                    backedUpItemCount: previewBackedUpItemCount,
                   },
                 );
               },

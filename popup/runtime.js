@@ -170,6 +170,18 @@ export async function requestClearLocalStorage() {
 }
 
 /**
+ * Clears resumable fetch backups stored in IndexedDB without touching updater linkage.
+ *
+ * @returns {Promise<object>}
+ */
+export async function requestClearVolatileBackups() {
+  return sendPopupMessage(
+    { type: "CLEAR_VOLATILE_BACKUPS" },
+    "Could not clear the resumable fetch backup cache.",
+  );
+}
+
+/**
  * Persists the current selection.
  *
  * @param {string[]} selectedKeys

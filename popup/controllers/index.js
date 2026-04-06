@@ -20,6 +20,7 @@ import {
 import { startPolling, stopPolling } from "./polling.js";
 import {
   handleClearStorageClick,
+  handleClearVolatileBackupsClick,
   handleCreatorResultsTabClick,
   handleMaxVideosInput,
   handleSearchInput,
@@ -104,6 +105,7 @@ export function initializeEventHandlers() {
   dom.defaultThemeInput?.addEventListener("change", handleSettingsChange);
   dom.automaticUpdatesInput?.addEventListener("change", handleSettingsChange);
   dom.clearStorageButton?.addEventListener("click", handleClearStorageClick);
+  dom.clearVolatileBackupsButton?.addEventListener("click", handleClearVolatileBackupsClick);
   dom.updateGateLinkButton?.addEventListener("click", handleUpdateGateLinkClick);
   dom.updateGateInstallButton?.addEventListener("click", handleUpdateGateInstallClick);
   dom.updateGateRetryButton?.addEventListener("click", handleUpdateGateRetryClick);
