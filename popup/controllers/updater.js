@@ -13,6 +13,7 @@ import { refreshStatus } from "./polling.js";
 const UPDATE_GATE_MIN_STARTUP_DWELL_MS = 900;
 const UPDATE_GATE_AUTO_INSTALL_DWELL_MS = 3200;
 const UPDATE_GATE_POLL_INTERVAL_MS = 220;
+const UPDATE_GATE_RELOAD_FALLBACK_MS = 1200;
 const VOLATILE_BACKUP_DB_NAME = "saveSoraVolatileBackup";
 const VOLATILE_BACKUP_DB_VERSION = 3;
 const VOLATILE_BACKUP_ITEM_STORE = "items";
@@ -154,7 +155,8 @@ async function installPendingUpdateFromUi() {
   try {
     popupState.updateGateHidden = false;
     popupState.skippedUpdateVersion = "";
-    await awaitUpdateOperation(installPendingRuntimeUpdate());
+    const updateStatus = await awaitUpdateOperation(installPendingRuntimeUpdate());
+    await maybeFinalizeReloadingUpdate(updateStatus);
   } catch (error) {
     showNotice(dom.errorBox, error instanceof Error ? error.message : String(error));
   } finally {
@@ -426,7 +428,9 @@ async function maybeAutoInstallAfterReview(updateStatus) {
     return liveStatus;
   }
 
-  return await awaitUpdateOperation(installPendingRuntimeUpdate());
+  const installedStatus = await awaitUpdateOperation(installPendingRuntimeUpdate());
+  await maybeFinalizeReloadingUpdate(installedStatus);
+  return installedStatus;
 }
 
 function shouldAutoInstallAfterReview(updateStatus) {
@@ -466,6 +470,26 @@ function isBlockingUpdatePhase(phase) {
     "deferred",
     "error",
   ].includes(typeof phase === "string" ? phase : "");
+}
+
+async function maybeFinalizeReloadingUpdate(updateStatus) {
+  if (!updateStatus || updateStatus.phase !== "reloading") {
+    return;
+  }
+
+  await waitForMs(UPDATE_GATE_RELOAD_FALLBACK_MS);
+
+  try {
+    const liveStatus = await fetchUpdateStatus();
+    syncUpdateSurfaces(liveStatus);
+    if (liveStatus.phase !== "reloading") {
+      return;
+    }
+  } catch (_error) {
+    // Ignore transient runtime disconnects during extension reload.
+  }
+
+  window.location.reload();
 }
 
 function waitForMs(durationMs) {

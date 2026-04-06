@@ -1118,6 +1118,26 @@ async function restoreUpdaterState() {
       ? currentState.settings.automaticUpdatesEnabled
       : true,
   );
+  const hasPendingNewerUpdate =
+    pendingRecord &&
+    typeof pendingRecord.version === "string" &&
+    compareSemver(pendingRecord.version, CURRENT_EXTENSION_VERSION) > 0;
+  const restoredPhase =
+    hasPendingNewerUpdate &&
+    metaRecord &&
+    metaRecord.phase !== "downloading" &&
+    metaRecord.phase !== "applying" &&
+    metaRecord.phase !== "reloading"
+      ? metaRecord && metaRecord.pendingDeferred === true
+        ? "deferred"
+        : "update-available"
+      : metaRecord &&
+          typeof metaRecord.phase === "string" &&
+          metaRecord.phase &&
+          metaRecord.phase !== "awaiting-folder" &&
+          metaRecord.phase !== "reloading"
+        ? metaRecord.phase
+        : "idle";
 
   currentUpdateState = createDefaultUpdateState({
     ...(metaRecord && typeof metaRecord === "object" ? metaRecord : {}),
@@ -1169,23 +1189,17 @@ async function restoreUpdaterState() {
       pendingRecord && typeof pendingRecord.version === "string"
         ? compareSemver(pendingRecord.version, CURRENT_EXTENSION_VERSION) > 0
         : metaRecord && metaRecord.pendingUpdateReady === true,
-    phase:
-      pendingRecord &&
-      typeof pendingRecord.version === "string" &&
-      compareSemver(pendingRecord.version, CURRENT_EXTENSION_VERSION) > 0 &&
-      metaRecord &&
-      metaRecord.phase !== "downloading" &&
-      metaRecord.phase !== "applying" &&
-      metaRecord.phase !== "reloading"
-        ? metaRecord && metaRecord.pendingDeferred === true
-          ? "deferred"
-          : "update-available"
-        : metaRecord &&
-            typeof metaRecord.phase === "string" &&
-            metaRecord.phase &&
-            metaRecord.phase !== "awaiting-folder"
-          ? metaRecord.phase
-          : "idle",
+    phase: restoredPhase,
+    message:
+      restoredPhase === "idle" && metaRecord && metaRecord.phase === "reloading" ? "" : metaRecord?.message,
+    detail:
+      restoredPhase === "idle" && metaRecord && metaRecord.phase === "reloading" ? "" : metaRecord?.detail,
+    progress:
+      restoredPhase === "idle" && metaRecord && metaRecord.phase === "reloading"
+        ? 0
+        : metaRecord && Number.isFinite(Number(metaRecord.progress))
+          ? Number(metaRecord.progress)
+          : undefined,
   });
 
   await persistUpdateMeta();
