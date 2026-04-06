@@ -24,11 +24,14 @@ import {
   handleClearVolatileBackupsClick,
   handleCreatorResultsTabClick,
   handleMaxVideosInput,
+  handleResultsPageNextClick,
+  handleResultsPagePrevClick,
   handleSearchInput,
   handleSettingsBlur,
   handleSettingsChange,
   handleSortChange,
   handleThemeToggleChange,
+  handleViewFullscreenClick,
 } from "./settings.js";
 import {
   handleUpdateGateContinueClick,
@@ -86,8 +89,11 @@ export function initializeEventHandlers() {
   dom.itemsList?.addEventListener("focusout", handleItemsListFocusOut);
   dom.searchInput?.addEventListener("input", handleSearchInput);
   dom.creatorResultsTabs?.addEventListener("click", handleCreatorResultsTabClick);
+  dom.resultsPagePrev?.addEventListener("click", handleResultsPagePrevClick);
+  dom.resultsPageNext?.addEventListener("click", handleResultsPageNextClick);
   dom.sortSelect?.addEventListener("change", handleSortChange);
   dom.themeToggle?.addEventListener("change", handleThemeToggleChange);
+  dom.viewFullscreenButton?.addEventListener("click", handleViewFullscreenClick);
   dom.sourceSelectButton?.addEventListener("click", handleOverviewSourceTriggerClick);
   dom.sourceSelectMenu?.addEventListener("change", handleOverviewSourceMenuChange);
   dom.characterSelectButton?.addEventListener("click", handleCharacterMenuTriggerClick);

@@ -27,6 +27,13 @@ export function setActiveTab(nextTab) {
   updateBackToTopVisibility();
 }
 
+export function initializeShellViewMode() {
+  const viewContext = readShellViewContext();
+  applyShellViewMode(viewContext.viewMode);
+  syncViewModeButtonLabel();
+  return viewContext;
+}
+
 /**
  * Locks overview scrolling while the popup is still in its empty pre-fetch state.
  */
@@ -139,6 +146,48 @@ export function hideNotice(element) {
 
   element.textContent = "";
   element.classList.add("hidden");
+}
+
+function readShellViewContext() {
+  let requestedTab = "overview";
+  let requestedViewMode = "windowed";
+
+  try {
+    const url = new URL(window.location.href);
+    requestedViewMode = url.searchParams.get("view") === "fullscreen" ? "fullscreen" : "windowed";
+    const tabParam = url.searchParams.get("tab");
+    if (isKnownTopLevelTab(tabParam)) {
+      requestedTab = tabParam;
+    }
+  } catch (_error) {
+    // Fall back to the compact popup shell if the URL cannot be parsed.
+  }
+
+  return {
+    initialTab: requestedTab,
+    viewMode: requestedViewMode,
+  };
+}
+
+function applyShellViewMode(viewMode) {
+  popupState.isFullscreenView = viewMode === "fullscreen";
+  document.documentElement.classList.toggle("is-fullscreen-view", popupState.isFullscreenView);
+  document.body.classList.toggle("is-fullscreen-view", popupState.isFullscreenView);
+}
+
+function syncViewModeButtonLabel() {
+  if (!(dom.viewFullscreenButton instanceof HTMLButtonElement)) {
+    return;
+  }
+
+  const label = popupState.isFullscreenView ? "Open Windowed" : "View Fullscreen";
+  dom.viewFullscreenButton.textContent = label;
+  dom.viewFullscreenButton.setAttribute("aria-label", label);
+  dom.viewFullscreenButton.title = label;
+}
+
+function isKnownTopLevelTab(tabName) {
+  return Array.from(dom.tabButtons || []).some((button) => button.dataset.tab === tabName);
 }
 
 function setSourceControlDisabled(button, inputs, disabled) {

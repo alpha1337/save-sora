@@ -204,8 +204,23 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message.type === "GET_STATUS") {
-    sendResponse({ ok: true, state: buildPopupStateSnapshot(currentState) });
-    return false;
+    void ensureBackgroundRuntimeReady()
+      .then(() =>
+        buildPopupStateSnapshotForView(currentState, {
+          pageIndex: message.pageIndex,
+          pageSize: message.pageSize,
+          sortKey: message.sortKey,
+          query: message.query,
+          creatorTab: message.creatorTab,
+        }),
+      )
+      .then((state) => {
+        sendResponse({ ok: true, state });
+      })
+      .catch((error) => {
+        sendResponse({ ok: false, error: getErrorMessage(error) });
+      });
+    return true;
   }
 
   if (message.type === "START_SCAN") {
@@ -348,7 +363,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       return false;
     }
 
-    void setSelectedKeys(message.selectedKeys).catch((error) => {
+    void setSelectedKeys(message.selectedKeys, message.visibleKeys).catch((error) => {
       console.error("Failed to update the Sora selection.", error);
     });
     sendResponse({ ok: true });
@@ -727,22 +742,60 @@ function createDefaultState(overrides = {}) {
     items: [],
     selectedKeys: [],
     titleOverrides: {},
+    popupPageIndex: 0,
     pendingItems: [],
     runMode: null,
     runTotal: 0,
     failedItems: [],
+    resumableFetchRequest: null,
     fetchProgress: createDefaultFetchProgress(),
     settings: {
       maxVideos: null,
       defaultSource: [...DEFAULT_SOURCE_VALUES],
       defaultSort: "newest",
       theme: "dark",
+      preferredViewMode: "windowed",
       automaticUpdatesEnabled: true,
     },
     startedAt: null,
     finishedAt: null,
     ...overrides,
   };
+}
+
+function normalizeResumableFetchRequest(request) {
+  if (!request || typeof request !== "object" || Array.isArray(request)) {
+    return null;
+  }
+
+  const sources = normalizeSources(request.sources);
+  if (sources.length === 0) {
+    return null;
+  }
+
+  return {
+    sources: [...sources],
+    searchQuery: normalizeSearchText(request.searchQuery),
+  };
+}
+
+function normalizePreferredViewMode(value) {
+  return value === "fullscreen" ? "fullscreen" : "windowed";
+}
+
+function buildPopupShellUrl(options = {}) {
+  const url = new URL(chrome.runtime.getURL("popup.html"));
+  url.searchParams.set("view", normalizePreferredViewMode(options.viewMode));
+
+  if (typeof options.updatedVersion === "string" && options.updatedVersion) {
+    url.searchParams.set("updated", options.updatedVersion);
+  }
+
+  if (typeof options.tab === "string" && options.tab) {
+    url.searchParams.set("tab", options.tab);
+  }
+
+  return url.toString();
 }
 
 function createDefaultUpdateState(overrides = {}) {
@@ -927,6 +980,13 @@ function initializeBackgroundRuntime() {
   })().catch((error) => {
     console.warn("Failed to initialize the Save Sora background runtime.", error);
   });
+}
+
+async function ensureBackgroundRuntimeReady() {
+  initializeBackgroundRuntime();
+  if (updaterReadyPromise) {
+    await updaterReadyPromise;
+  }
 }
 
 function createIndexedDbRequestPromise(request) {
@@ -1239,16 +1299,44 @@ async function maybeReopenUpdatedAppShell() {
     typeof reopenRecord.version === "string" && reopenRecord.version
       ? reopenRecord.version
       : CURRENT_EXTENSION_VERSION;
+  const targetViewMode = normalizePreferredViewMode(
+    reopenRecord.viewMode ||
+      (currentState.settings && typeof currentState.settings === "object"
+        ? currentState.settings.preferredViewMode
+        : "windowed"),
+  );
 
   if (compareSemver(CURRENT_EXTENSION_VERSION, targetVersion) < 0) {
     return;
   }
 
   try {
-    await chrome.tabs.create({
-      url: chrome.runtime.getURL(`popup.html?updated=${encodeURIComponent(targetVersion)}`),
-      active: true,
+    const popupUrl = buildPopupShellUrl({
+      updatedVersion: targetVersion,
+      viewMode: targetViewMode,
     });
+
+    if (targetViewMode === "fullscreen") {
+      await chrome.tabs.create({
+        url: popupUrl,
+        active: true,
+      });
+    } else {
+      try {
+        await chrome.windows.create({
+          url: popupUrl,
+          type: "popup",
+          focused: true,
+          width: 760,
+          height: 860,
+        });
+      } catch (_windowError) {
+        await chrome.tabs.create({
+          url: popupUrl,
+          active: true,
+        });
+      }
+    }
   } catch (error) {
     console.warn("Failed to reopen Save Sora after update.", error);
   } finally {
@@ -1960,6 +2048,11 @@ async function installPendingUpdate(options = {}) {
     await deleteUpdaterRecord(UPDATE_PENDING_RECORD_KEY);
     await writeUpdaterRecord(UPDATE_REOPEN_RECORD_KEY, {
       version: pendingUpdate.version,
+      viewMode: normalizePreferredViewMode(
+        currentState.settings && typeof currentState.settings === "object"
+          ? currentState.settings.preferredViewMode
+          : "windowed",
+      ),
       createdAt: new Date().toISOString(),
     });
     await writeUpdaterRecord(UPDATE_META_RECORD_KEY, {
@@ -2244,9 +2337,53 @@ async function loadVolatileBackupItemsByProgressKey(
     .filter(Boolean);
 }
 
+async function loadVolatileBackupItemsBySessionKey(sessionKey) {
+  if (!sessionKey) {
+    return [];
+  }
+
+  const db = await openVolatileBackupDb();
+  const transaction = db.transaction([VOLATILE_BACKUP_ITEM_STORE], "readonly");
+  const store = transaction.objectStore(VOLATILE_BACKUP_ITEM_STORE);
+  const index = store.index("sessionKey");
+  const request = index.getAll(IDBKeyRange.only(sessionKey));
+  const records = await createIndexedDbRequestPromise(request);
+
+  return (Array.isArray(records) ? records : [])
+    .map((record) => {
+      const item = record && record.item ? record.item : null;
+      return item && typeof item === "object"
+        ? {
+            ...item,
+            storedAt: Number(record && record.storedAt) || 0,
+          }
+        : null;
+    })
+    .filter(Boolean)
+    .sort((left, right) => {
+      const leftTime = Number(left && left.storedAt) || 0;
+      const rightTime = Number(right && right.storedAt) || 0;
+      if (leftTime !== rightTime) {
+        return leftTime - rightTime;
+      }
+
+      const leftKey = typeof left.key === "string" ? left.key : "";
+      const rightKey = typeof right.key === "string" ? right.key : "";
+      return leftKey.localeCompare(rightKey);
+    })
+    .map(({ storedAt: _storedAt, ...item }) => item);
+}
+
 async function hasUsableVolatileBackupProgress(sessionKey, progressKey, progressEntry) {
   const normalizedEntry = normalizeVolatileBackupProgressEntry(progressEntry);
   if (!sessionKey || !progressKey || !normalizedEntry || normalizedEntry.totalItemCount <= 0) {
+    return false;
+  }
+
+  const hasResumeCursor =
+    normalizedEntry.isComplete === true ||
+    (typeof normalizedEntry.cursor === "string" && normalizedEntry.cursor);
+  if (!hasResumeCursor) {
     return false;
   }
 
@@ -2713,12 +2850,8 @@ function buildPopupStateSnapshot(state = currentState) {
   const titleOverrides = pruneLegacyTitleOverrides(limitedItems, sourceState.titleOverrides);
   const totalItemCount = sourceItems.length + backedUpItemCount;
   const hiddenItemCount = Math.max(0, totalItemCount - limitedItems.length);
-  const truncationWarning = hiddenItemCount > 0
-    ? `Showing ${limitedItems.length.toLocaleString()} of ${totalItemCount.toLocaleString()} results in the popup to stay under Chrome's runtime and memory limits. Refine search or source scope to work with a smaller slice.`
-    : "";
   const partialWarning = joinPartialWarnings([
     sourceState.partialWarning,
-    truncationWarning,
   ]);
 
   return {
@@ -2736,6 +2869,234 @@ function buildPopupStateSnapshot(state = currentState) {
     popupVisibleItemCount: limitedItems.length,
     popupTotalItemCount: totalItemCount,
     popupSelectedCountTotal: selectedKeysTotal,
+    popupPageIndex: 0,
+    popupPageCount: hiddenItemCount > 0 ? Math.max(1, Math.ceil(totalItemCount / POPUP_STATE_ITEM_LIMIT)) : 1,
+    popupPageSize: POPUP_STATE_ITEM_LIMIT,
+  };
+}
+
+function getPopupPageSize(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return 120;
+  }
+
+  return Math.max(25, Math.min(250, Math.floor(numeric)));
+}
+
+function getCreatorScopedTabKey(item) {
+  switch (item && item.sourcePage) {
+    case "creatorPublished":
+      return "published";
+    case "creatorCameos":
+      return "castIn";
+    case "creatorCharacters":
+      return "characters";
+    case "creatorCharacterCameos":
+      return "characterCameos";
+    default:
+      return "all";
+  }
+}
+
+function filterPopupItemsForCreatorTab(items, activeTabKey) {
+  const sourceItems = Array.isArray(items) ? items : [];
+  if (!sourceItems.length || !activeTabKey || activeTabKey === "all") {
+    return sourceItems;
+  }
+
+  return sourceItems.filter((item) => getCreatorScopedTabKey(item) === activeTabKey);
+}
+
+function getComparablePopupItemTimestamp(value) {
+  if (value == null || value === "") {
+    return 0;
+  }
+
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? (value < 1e12 ? value * 1000 : value) : 0;
+  }
+
+  const numericValue = Number(value);
+  if (Number.isFinite(numericValue)) {
+    return numericValue < 1e12 ? numericValue * 1000 : numericValue;
+  }
+
+  const timestamp = new Date(value).getTime();
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function getPopupItemSortValue(item, sortKey) {
+  if (sortKey === "likes") {
+    return Number(item && item.likeCount) || 0;
+  }
+
+  if (sortKey === "views") {
+    return Number(item && item.viewCount) || 0;
+  }
+
+  if (sortKey === "remixes") {
+    return Number(item && item.remixCount) || 0;
+  }
+
+  return getComparablePopupItemTimestamp(item && (item.createdAt || item.postedAt));
+}
+
+function comparePopupItems(left, right, sortKey) {
+  const leftRemoved = Boolean(left && left.isRemoved);
+  const rightRemoved = Boolean(right && right.isRemoved);
+  if (leftRemoved !== rightRemoved) {
+    return leftRemoved ? 1 : -1;
+  }
+
+  const leftDownloaded = Boolean(left && left.isDownloaded);
+  const rightDownloaded = Boolean(right && right.isDownloaded);
+  if (leftDownloaded !== rightDownloaded) {
+    return leftDownloaded ? 1 : -1;
+  }
+
+  const ascending = sortKey === "oldest";
+  const primaryLeft = getPopupItemSortValue(left, sortKey);
+  const primaryRight = getPopupItemSortValue(right, sortKey);
+  if (primaryLeft !== primaryRight) {
+    return ascending ? primaryLeft - primaryRight : primaryRight - primaryLeft;
+  }
+
+  const fallbackLeft = getPopupItemSortValue(left, "newest");
+  const fallbackRight = getPopupItemSortValue(right, "newest");
+  if (fallbackLeft !== fallbackRight) {
+    return ascending ? fallbackLeft - fallbackRight : fallbackRight - fallbackLeft;
+  }
+
+  return String((left && left.id) || "").localeCompare(String((right && right.id) || ""));
+}
+
+function getSortedPopupItems(items, sortKey) {
+  const nextItems = [...(Array.isArray(items) ? items : [])];
+  nextItems.sort((left, right) => comparePopupItems(left, right, sortKey));
+  return nextItems;
+}
+
+function normalizePopupSearchText(value) {
+  return String(value || "")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function getPopupSearchTokens(value) {
+  return String(value || "")
+    .split(" ")
+    .filter(Boolean);
+}
+
+function getPopupItemSearchText(item, titleOverrides) {
+  const titledItem = applyTitleOverride(item, titleOverrides);
+  return [
+    titledItem && titledItem.title,
+    item && item.id,
+    item && item.prompt,
+    item && item.description,
+    item && item.caption,
+    item && item.discoveryPhrase,
+    item && item.creatorProfileDisplayName,
+    item && item.creatorProfileUsername,
+    item && item.characterAccountDisplayName,
+    item && item.characterAccountUsername,
+    item && item.sourceLabel,
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function matchesPopupSearch(item, titleOverrides, query) {
+  const normalizedQuery = normalizePopupSearchText(query);
+  if (!normalizedQuery) {
+    return true;
+  }
+
+  const haystack = normalizePopupSearchText(getPopupItemSearchText(item, titleOverrides));
+  if (!haystack) {
+    return false;
+  }
+
+  const queryTokens = getPopupSearchTokens(normalizedQuery);
+  const haystackTokens = getPopupSearchTokens(haystack);
+  if (!queryTokens.length || !haystackTokens.length) {
+    return false;
+  }
+
+  const haystackTokenSet = new Set(haystackTokens);
+  return queryTokens.every((token) => haystackTokenSet.has(token));
+}
+
+async function buildPopupStateSnapshotForView(state = currentState, options = {}) {
+  const sourceState = state && typeof state === "object" ? state : createDefaultState();
+  const popupSnapshot = buildPopupStateSnapshot(sourceState);
+  if (popupSnapshot.popupItemsTruncated !== true) {
+    return popupSnapshot;
+  }
+
+  const pageSize = getPopupPageSize(options.pageSize);
+  const requestedPageIndex = Math.max(0, Math.floor(Number(options.pageIndex) || 0));
+  const sortKey = typeof options.sortKey === "string" && options.sortKey ? options.sortKey : "newest";
+  const query = typeof options.query === "string" ? options.query : "";
+  const creatorTab =
+    typeof options.creatorTab === "string" && options.creatorTab ? options.creatorTab : "all";
+  const mergedItems = new Map();
+
+  for (const item of Array.isArray(sourceState.items) ? sourceState.items : []) {
+    mergedItems.set(item.key || getItemKey(item), item);
+  }
+
+  if (Number(sourceState.backedUpItemCount) > 0) {
+    try {
+      const backupMeta = await findArchiveVolatileBackupMeta(sourceState);
+      if (backupMeta && typeof backupMeta.sessionKey === "string" && backupMeta.sessionKey) {
+        const backupItems = await loadVolatileBackupItemsBySessionKey(backupMeta.sessionKey);
+        for (const item of backupItems) {
+          mergedItems.set(item.key || getItemKey(item), item);
+        }
+      }
+    } catch (error) {
+      console.warn("Failed to load paged popup results from the persistent backup.", error);
+    }
+  }
+
+  const creatorFilteredItems = filterPopupItemsForCreatorTab([...mergedItems.values()], creatorTab);
+  const queryFilteredItems = creatorFilteredItems.filter((item) =>
+    matchesPopupSearch(item, sourceState.titleOverrides, query),
+  );
+  const sortedItems = getSortedPopupItems(queryFilteredItems, sortKey);
+  const totalItemCount = sortedItems.length;
+  const pageCount = Math.max(1, Math.ceil(Math.max(0, totalItemCount) / pageSize));
+  const pageIndex = Math.min(requestedPageIndex, Math.max(0, pageCount - 1));
+  const pageStart = pageIndex * pageSize;
+  const pageItems = sortedItems
+    .slice(pageStart, pageStart + pageSize)
+    .map((item) => compactItemForPopup(item))
+    .filter(Boolean);
+  const visibleKeys = new Set(pageItems.map((item) => item.key || getItemKey(item)));
+  const selectedKeysTotal = Array.isArray(sourceState.selectedKeys)
+    ? sourceState.selectedKeys.filter((key) => typeof key === "string").length
+    : 0;
+
+  return {
+    ...popupSnapshot,
+    items: pageItems,
+    selectedKeys: Array.isArray(sourceState.selectedKeys)
+      ? sourceState.selectedKeys.filter((key) => typeof key === "string" && visibleKeys.has(key))
+      : [],
+    partialWarning: sourceState.partialWarning || "",
+    popupVisibleItemCount: pageItems.length,
+    popupHiddenItemCount: Math.max(0, totalItemCount - pageItems.length),
+    popupTotalItemCount: totalItemCount,
+    popupSelectedCountTotal: selectedKeysTotal,
+    popupPageIndex: pageIndex,
+    popupPageCount: pageCount,
+    popupPageSize: pageSize,
   };
 }
 
@@ -2826,6 +3187,9 @@ function serializeStateForPersistence(state = currentState) {
     itemKeys: persistedItemKeys,
     pendingItems: normalizePersistedItems(state && state.pendingItems),
     failedItems: normalizePersistedItems(state && state.failedItems),
+    resumableFetchRequest: normalizeResumableFetchRequest(
+      state && state.resumableFetchRequest,
+    ),
     fetchProgress: createDefaultFetchProgress(),
   };
 
@@ -2870,6 +3234,171 @@ function restorePersistedItems(savedState, catalogItems) {
   return normalizeCatalogItems(sourceState && sourceState.items);
 }
 
+async function restoreInterruptedFetchState(state) {
+  const nextState = state && typeof state === "object" ? { ...state } : createDefaultState();
+  const phase = typeof nextState.phase === "string" ? nextState.phase : "idle";
+  const resumableFetchRequest = normalizeResumableFetchRequest(nextState.resumableFetchRequest);
+
+  if ((phase !== "fetching" && phase !== "fetch-paused") || !resumableFetchRequest) {
+    pausedFetchRequest = null;
+    activeVolatileBackupSessionKey = "";
+    activeVolatileBackupResumeMeta = null;
+    return normalizeRestoredTransientState({
+      ...nextState,
+      resumableFetchRequest,
+    });
+  }
+
+  const supportsCheckpointRestore =
+    resumableFetchRequest.searchQuery === "" &&
+    resumableFetchRequest.sources.includes("creators");
+  if (!supportsCheckpointRestore) {
+    pausedFetchRequest = null;
+    activeVolatileBackupSessionKey = "";
+    activeVolatileBackupResumeMeta = null;
+    return normalizeRestoredTransientState({
+      ...nextState,
+      resumableFetchRequest: null,
+    });
+  }
+
+  try {
+    const selectionSignature = getSourceSelectionSignature("creators", {
+      creatorProfiles: nextState.creatorProfiles,
+      selectedCreatorProfileIds: nextState.selectedCreatorProfileIds,
+    });
+    const backupMeta = await findUsableCreatorVolatileBackupMeta(
+      selectionSignature,
+      nextState.creatorProfiles,
+      nextState.selectedCreatorProfileIds,
+    );
+
+    if (!backupMeta || typeof backupMeta.sessionKey !== "string" || !backupMeta.sessionKey) {
+      pausedFetchRequest = null;
+      activeVolatileBackupSessionKey = "";
+      activeVolatileBackupResumeMeta = null;
+      return normalizeRestoredTransientState({
+        ...nextState,
+        resumableFetchRequest: null,
+      });
+    }
+
+    const progressMap = normalizeVolatileBackupProgressMap(backupMeta.progressByKey);
+    const normalizedProfiles = normalizeCreatorProfiles(nextState.creatorProfiles);
+    const selectedProfileIds = normalizeSelectedCreatorProfileIds(
+      normalizedProfiles,
+      nextState.selectedCreatorProfileIds,
+      [],
+      { allowEmpty: true },
+    );
+    const restoredItems = [];
+    const restoredKeys = new Set();
+    let restoredTotalItemCount = 0;
+
+    for (const creatorProfile of normalizedProfiles) {
+      if (!selectedProfileIds.includes(creatorProfile.profileId)) {
+        continue;
+      }
+
+      const progressKey = getVolatileBackupProgressKey(
+        "creatorCharacterCameos",
+        creatorProfile.profileId,
+      );
+      const progressEntry = normalizeVolatileBackupProgressEntry(progressMap[progressKey]);
+      if (
+        !(await hasUsableVolatileBackupProgress(
+          backupMeta.sessionKey,
+          progressKey,
+          progressEntry,
+        ))
+      ) {
+        continue;
+      }
+
+      restoredTotalItemCount += progressEntry.totalItemCount;
+
+      const remainingPreviewSlots = VOLATILE_SOURCE_PREVIEW_LIMIT - restoredItems.length;
+      if (remainingPreviewSlots <= 0) {
+        continue;
+      }
+
+      const previewLimit = Math.max(
+        1,
+        Math.min(progressEntry.previewCount || VOLATILE_SOURCE_PREVIEW_LIMIT, remainingPreviewSlots),
+      );
+      const previewItems = await loadVolatileBackupItemsByProgressKey(
+        backupMeta.sessionKey,
+        progressKey,
+        previewLimit,
+      );
+
+      for (const item of previewItems) {
+        const key = item && (item.key || getItemKey(item));
+        if (!key || restoredKeys.has(key)) {
+          continue;
+        }
+        restoredKeys.add(key);
+        restoredItems.push(item);
+      }
+    }
+
+    if (restoredTotalItemCount <= 0 || restoredItems.length === 0) {
+      pausedFetchRequest = null;
+      activeVolatileBackupSessionKey = "";
+      activeVolatileBackupResumeMeta = null;
+      return normalizeRestoredTransientState({
+        ...nextState,
+        resumableFetchRequest: null,
+      });
+    }
+
+    pausedFetchRequest = { ...resumableFetchRequest };
+    activeVolatileBackupSessionKey = backupMeta.sessionKey;
+    activeVolatileBackupResumeMeta = backupMeta;
+
+    const restoredSourceIds = deriveSourceIdsFromItems(restoredItems);
+    const restoredSelectedKeys = normalizeSelectedKeys(restoredItems, nextState.selectedKeys);
+    const totalVisiblePreviewCount = restoredItems.length;
+    const backedUpItemCount = Math.max(0, restoredTotalItemCount - totalVisiblePreviewCount);
+
+    return {
+      ...nextState,
+      phase: "fetch-paused",
+      message: "Restored the previous fetch from the local checkpoint. Resume when you're ready.",
+      currentSource: null,
+      profileIds: restoredSourceIds.profileIds,
+      draftIds: restoredSourceIds.draftIds,
+      likesIds: restoredSourceIds.likesIds,
+      cameoIds: restoredSourceIds.cameoIds,
+      characterIds: restoredSourceIds.characterIds,
+      creatorIds: restoredSourceIds.creatorIds,
+      items: restoredItems,
+      fetchedCount: restoredTotalItemCount,
+      backedUpItemCount,
+      selectedKeys: restoredSelectedKeys,
+      queued: restoredSelectedKeys.length,
+      titleOverrides: pruneLegacyTitleOverrides(restoredItems, nextState.titleOverrides),
+      fetchProgress: createDefaultFetchProgress({
+        stage: "paused",
+        stageLabel: "Fetch paused",
+        detail: "Recovered the saved checkpoint from the local backup. Resume when you're ready.",
+        itemsFound: restoredTotalItemCount,
+      }),
+      finishedAt: new Date().toISOString(),
+      resumableFetchRequest,
+    };
+  } catch (error) {
+    console.warn("Failed to restore the interrupted fetch checkpoint.", error);
+    pausedFetchRequest = null;
+    activeVolatileBackupSessionKey = "";
+    activeVolatileBackupResumeMeta = null;
+    return normalizeRestoredTransientState({
+      ...nextState,
+      resumableFetchRequest: null,
+    });
+  }
+}
+
 async function restoreState() {
   // Restore local-only extension state so the popup can reopen without losing the current
   // queue, previous results, or user preferences.
@@ -2893,6 +3422,7 @@ async function restoreState() {
         defaultSource: normalizeDefaultSource(currentState.settings.defaultSource),
         defaultSort: normalizeDefaultSort(currentState.settings.defaultSort),
         theme: normalizeTheme(currentState.settings.theme),
+        preferredViewMode: normalizePreferredViewMode(currentState.settings.preferredViewMode),
         automaticUpdatesEnabled: normalizeAutomaticUpdatesEnabled(
           currentState.settings.automaticUpdatesEnabled,
         ),
@@ -2915,6 +3445,9 @@ async function restoreState() {
         };
       }
       currentState.creatorProfiles = normalizeResolvedCreatorProfiles(currentState.creatorProfiles);
+      currentState.resumableFetchRequest = normalizeResumableFetchRequest(
+        currentState.resumableFetchRequest,
+      );
       if (currentState.hasExplicitCreatorProfileSelection !== true) {
         const savedSelection = Array.isArray(currentState.selectedCreatorProfileIds)
           ? currentState.selectedCreatorProfileIds.filter((value) => typeof value === "string")
@@ -2952,7 +3485,6 @@ async function restoreState() {
         currentState.items,
         currentState.titleOverrides,
       );
-      currentState = normalizeRestoredTransientState(currentState);
     }
 
     if (stored && stored[CATALOG_STORAGE_KEY]) {
@@ -2981,6 +3513,8 @@ async function restoreState() {
         titleOverrides: pruneLegacyTitleOverrides(restoredItems, currentState.titleOverrides),
       };
     }
+
+    currentState = await restoreInterruptedFetchState(currentState);
   } catch (error) {
     console.warn("Failed to restore extension state.", error);
   }
@@ -2989,9 +3523,13 @@ async function restoreState() {
 function normalizeRestoredTransientState(state) {
   const nextState = state && typeof state === "object" ? { ...state } : createDefaultState();
   const phase = typeof nextState.phase === "string" ? nextState.phase : "idle";
+  const resumableFetchRequest = normalizeResumableFetchRequest(nextState.resumableFetchRequest);
 
   if (phase !== "fetching" && phase !== "fetch-paused") {
-    return nextState;
+    return {
+      ...nextState,
+      resumableFetchRequest,
+    };
   }
 
   const restoredItems = normalizeCatalogItems(nextState.items);
@@ -3010,6 +3548,7 @@ function normalizeRestoredTransientState(state) {
     fetchProgress: createDefaultFetchProgress(),
     startedAt: null,
     finishedAt: hasRecoveredPreview ? new Date().toISOString() : null,
+    resumableFetchRequest: hasRecoveredPreview ? resumableFetchRequest : null,
   };
 }
 
@@ -3290,6 +3829,100 @@ function getSelectedItems(items, selectedKeys, titleOverrides) {
   return (Array.isArray(items) ? items : [])
     .filter((item) => validSelection.has(item.key || getItemKey(item)))
     .map((item) => applyTitleOverride(item, titleOverrides));
+}
+
+function shouldExpandArchiveSelectionToFullResultSet(state = currentState) {
+  const popupSnapshot = buildPopupStateSnapshot(state);
+  if (!popupSnapshot || popupSnapshot.popupItemsTruncated !== true) {
+    return false;
+  }
+
+  const visibleItems = Array.isArray(popupSnapshot.items) ? popupSnapshot.items : [];
+  if (visibleItems.length === 0) {
+    return false;
+  }
+
+  const selectableVisibleKeys = normalizeSelectedKeys(
+    visibleItems,
+    visibleItems.map((item) => item && (item.key || getItemKey(item))),
+  );
+  if (selectableVisibleKeys.length === 0) {
+    return false;
+  }
+
+  const selectedVisibleKeys = normalizeSelectedKeys(visibleItems, state && state.selectedKeys);
+  return selectedVisibleKeys.length === selectableVisibleKeys.length;
+}
+
+async function findArchiveVolatileBackupMeta(state = currentState) {
+  const directSessionKey =
+    typeof activeVolatileBackupSessionKey === "string" && activeVolatileBackupSessionKey
+      ? activeVolatileBackupSessionKey
+      : activeVolatileBackupResumeMeta && typeof activeVolatileBackupResumeMeta.sessionKey === "string"
+        ? activeVolatileBackupResumeMeta.sessionKey
+        : "";
+
+  if (directSessionKey) {
+    const directMeta = await readVolatileBackupMeta(directSessionKey);
+    if (directMeta) {
+      return directMeta;
+    }
+  }
+
+  const sourceState = state && typeof state === "object" ? state : currentState;
+  const selectionSignature = getSourceSelectionSignature("creators", {
+    creatorProfiles: sourceState.creatorProfiles,
+    selectedCreatorProfileIds: sourceState.selectedCreatorProfileIds,
+  });
+
+  if (!selectionSignature) {
+    return null;
+  }
+
+  return findLatestVolatileBackupMeta({
+    source: "creators",
+    selectionSignature,
+    statuses: ["running", "paused", "completed", "error", "aborted"],
+  });
+}
+
+async function resolveSelectedArchiveItems(state = currentState) {
+  const sourceState = state && typeof state === "object" ? state : currentState;
+  const selectedItems = getSelectedItems(
+    sourceState.items,
+    sourceState.selectedKeys,
+    sourceState.titleOverrides,
+  );
+  if (!selectedItems.length) {
+    return [];
+  }
+
+  if (!shouldExpandArchiveSelectionToFullResultSet(sourceState)) {
+    return selectedItems;
+  }
+
+  const mergedItems = new Map();
+  for (const item of Array.isArray(sourceState.items) ? sourceState.items : []) {
+    const titledItem = applyTitleOverride(item, sourceState.titleOverrides);
+    mergedItems.set(titledItem.key || getItemKey(titledItem), titledItem);
+  }
+
+  if (Number.isFinite(Number(sourceState.backedUpItemCount)) && Number(sourceState.backedUpItemCount) > 0) {
+    try {
+      const backupMeta = await findArchiveVolatileBackupMeta(sourceState);
+      if (backupMeta && typeof backupMeta.sessionKey === "string" && backupMeta.sessionKey) {
+        const backupItems = await loadVolatileBackupItemsBySessionKey(backupMeta.sessionKey);
+        for (const item of backupItems) {
+          const titledItem = applyTitleOverride(item, sourceState.titleOverrides);
+          mergedItems.set(titledItem.key || getItemKey(titledItem), titledItem);
+        }
+      }
+    } catch (error) {
+      console.warn("Failed to load the full archived result set from the persistent backup.", error);
+    }
+  }
+
+  return sortItemsByNewest([...mergedItems.values()]);
 }
 
 function applyCurrentTitlesToQueueItems(queueItems, currentItems, titleOverrides) {
@@ -4788,6 +5421,7 @@ async function abortPausedScan() {
       ? "The paused fetch was canceled. Showing your current results."
       : "The paused fetch was canceled.",
     currentSource: null,
+    resumableFetchRequest: null,
     fetchedCount: activeItems.length + (Number(currentState.backedUpItemCount) || 0),
     selectedKeys: nextSelectedKeys,
     queued: nextSelectedKeys.length,
@@ -4837,6 +5471,10 @@ async function scanSources(sources, searchQuery = "") {
       message: cachedFilteredItems.length
         ? `Loaded ${cachedFilteredItems.length} cached item(s). Checking Sora for updates...`
         : "Opening Sora...",
+      resumableFetchRequest: {
+        sources: [...sources],
+        searchQuery,
+      },
       settings: currentState.settings,
       currentSource: sources[0] ?? null,
       characterAccounts: currentState.characterAccounts,
@@ -4980,6 +5618,7 @@ async function scanSources(sources, searchQuery = "") {
 
     const baseState = {
       currentSource: null,
+      resumableFetchRequest: null,
       profileIds: filteredSourceIds.profileIds,
       draftIds: filteredSourceIds.draftIds,
       likesIds: filteredSourceIds.likesIds,
@@ -5063,6 +5702,7 @@ async function scanSources(sources, searchQuery = "") {
         phase: "fetch-paused",
         message: fetchMessage,
         currentSource: null,
+        resumableFetchRequest: pausedFetchRequest,
         fetchedCount: activeItems.length + backedUpCount,
         selectedKeys: nextSelectedKeys,
         queued: nextSelectedKeys.length,
@@ -5099,6 +5739,7 @@ async function scanSources(sources, searchQuery = "") {
           ? "Fetch canceled. Showing your current results."
           : "Fetch canceled. Start another fetch when you're ready.",
         currentSource: null,
+        resumableFetchRequest: null,
         fetchedCount: activeItems.length + (Number(currentState.backedUpItemCount) || 0),
         selectedKeys: nextSelectedKeys,
         queued: nextSelectedKeys.length,
@@ -5132,6 +5773,7 @@ async function scanSources(sources, searchQuery = "") {
       phase: "error",
       message: "The fetch run stopped.",
       currentSource: null,
+      resumableFetchRequest: null,
       fetchProgress: createDefaultFetchProgress(),
       lastError: getErrorMessage(error),
       finishedAt: new Date().toISOString(),
@@ -5140,8 +5782,37 @@ async function scanSources(sources, searchQuery = "") {
   }
 }
 
-async function setSelectedKeys(requestedKeys) {
-  const selectedKeys = normalizeSelectedKeys(currentState.items, requestedKeys);
+async function setSelectedKeys(requestedKeys, visibleKeys = []) {
+  const normalizedVisibleKeys = Array.isArray(visibleKeys)
+    ? visibleKeys.filter((value) => typeof value === "string" && value)
+    : [];
+  const validKeySet = new Set([
+    ...normalizeSelectedKeys(
+      currentState.items,
+      (Array.isArray(currentState.items) ? currentState.items : []).map((item) => item && (item.key || getItemKey(item))),
+    ),
+    ...normalizedVisibleKeys,
+  ]);
+  const selectedKeysForVisiblePage = [];
+  for (const key of Array.isArray(requestedKeys) ? requestedKeys : []) {
+    if (typeof key !== "string" || !validKeySet.has(key) || selectedKeysForVisiblePage.includes(key)) {
+      continue;
+    }
+    selectedKeysForVisiblePage.push(key);
+  }
+
+  const preservedHiddenSelection = Array.isArray(currentState.selectedKeys)
+    ? currentState.selectedKeys.filter(
+      (key) => typeof key === "string" && !normalizedVisibleKeys.includes(key),
+    )
+    : [];
+  const selectedKeys = [...preservedHiddenSelection];
+  for (const key of selectedKeysForVisiblePage) {
+    if (!selectedKeys.includes(key)) {
+      selectedKeys.push(key);
+    }
+  }
+
   const patch = {
     selectedKeys,
     queued: selectedKeys.length,
@@ -6122,6 +6793,12 @@ async function updateSettings(nextSettings) {
     settings.theme = normalizeTheme(settings.theme);
   }
 
+  if (nextSettings && Object.prototype.hasOwnProperty.call(nextSettings, "preferredViewMode")) {
+    settings.preferredViewMode = normalizePreferredViewMode(nextSettings.preferredViewMode);
+  } else {
+    settings.preferredViewMode = normalizePreferredViewMode(settings.preferredViewMode);
+  }
+
   if (
     nextSettings &&
     Object.prototype.hasOwnProperty.call(nextSettings, "automaticUpdatesEnabled")
@@ -6151,11 +6828,7 @@ async function downloadSelected() {
     throw new Error("A fetch or download run is already in progress.");
   }
 
-  const selectedItems = getSelectedItems(
-    currentState.items,
-    currentState.selectedKeys,
-    currentState.titleOverrides,
-  );
+  const selectedItems = await resolveSelectedArchiveItems(currentState);
   if (!selectedItems.length) {
     throw new Error("Select at least one video before downloading.");
   }
@@ -6195,11 +6868,7 @@ async function beginSelectedDownload() {
     throw new Error("A fetch or download run is already in progress.");
   }
 
-  const selectedItems = getSelectedItems(
-    currentState.items,
-    currentState.selectedKeys,
-    currentState.titleOverrides,
-  );
+  const selectedItems = await resolveSelectedArchiveItems(currentState);
   if (!selectedItems.length) {
     throw new Error("Select at least one video before downloading.");
   }
@@ -7004,12 +7673,7 @@ async function collectItems(sources, maxVideos, options = {}) {
                         creatorIds: previewSourceIds.creatorIds,
                         selectedKeys: previewSelectedKeys,
                         queued: previewSelectedKeys.length,
-                        fetchedCount:
-                          itemMap.size +
-                          count +
-                          (Number.isFinite(Number(previewBackedUpItemCount))
-                            ? Math.max(0, Number(previewBackedUpItemCount))
-                            : backedUpItemCount),
+                        fetchedCount: itemMap.size + count,
                         backedUpItemCount:
                           Number.isFinite(Number(previewBackedUpItemCount))
                             ? Math.max(0, Number(previewBackedUpItemCount))
@@ -7018,12 +7682,7 @@ async function collectItems(sources, maxVideos, options = {}) {
                     }
 
                     await setState({
-                      fetchedCount:
-                        itemMap.size +
-                        count +
-                        (Number.isFinite(Number(previewBackedUpItemCount))
-                          ? Math.max(0, Number(previewBackedUpItemCount))
-                          : backedUpItemCount),
+                      fetchedCount: itemMap.size + count,
                       backedUpItemCount:
                         Number.isFinite(Number(previewBackedUpItemCount))
                           ? Math.max(0, Number(previewBackedUpItemCount))
@@ -7038,12 +7697,7 @@ async function collectItems(sources, maxVideos, options = {}) {
                         currentSourceLabel: sourceLabel,
                         currentSourceIndex: sourceIndex + 1,
                         totalSources: sources.length,
-                        itemsFound:
-                          itemMap.size +
-                          count +
-                          (Number.isFinite(Number(previewBackedUpItemCount))
-                            ? Math.max(0, Number(previewBackedUpItemCount))
-                            : backedUpItemCount),
+                        itemsFound: itemMap.size + count,
                         processedCount: pageNumber,
                         totalCount: 0,
                       }),
@@ -8154,11 +8808,39 @@ async function fetchAllCreatorCharacterCameoItems(creatorProfile, options = {}) 
         previewLimit,
       );
       if (previewItems.length) {
-        items.push(...previewItems);
+        const hasResumeCursor =
+          resumeState.isComplete === true ||
+          (typeof resumeState.cursor === "string" && resumeState.cursor);
+        if (!hasResumeCursor) {
+          cursor = null;
+          previousCursor = null;
+          totalItemCount = 0;
+          backedUpItemCount = 0;
+          usesVolatileBackup = false;
+          await clearVolatileBackupProgress(backupSessionKey, progressKey);
+        } else {
+          items.push(...previewItems);
+        }
+      } else {
+        cursor = null;
+        previousCursor = null;
+        totalItemCount = 0;
+        backedUpItemCount = 0;
+        usesVolatileBackup = false;
+        await clearVolatileBackupProgress(backupSessionKey, progressKey);
       }
     } catch (error) {
       console.warn("Failed to load creator-character cameo preview items from the volatile backup.", error);
     }
+  }
+
+  if (typeof options.onProgress === "function" && totalItemCount > 0 && items.length > 0) {
+    await options.onProgress({
+      count: totalItemCount,
+      pageNumber: 0,
+      previewItems: [...items],
+      backedUpItemCount,
+    });
   }
 
   for (let pageNumber = 0; pageNumber < maxPageCount; pageNumber += 1) {
@@ -8247,6 +8929,34 @@ async function fetchAllCreatorCharacterCameoItems(creatorProfile, options = {}) 
       }
     }
 
+    const didReachKnownItems = didPageContainOnlyKnownItems(pageItems, knownItemKeys);
+    const nextCursor = resolveNextProfileFeedCursor(page, pageItems, cursor, previousCursor);
+    const didReachTerminalPage =
+      didReachKnownItems ||
+      page.rowCount === 0 ||
+      !nextCursor ||
+      Boolean(maxItems && totalItemCount >= maxItems);
+
+    if (shouldBackupVolatileItems) {
+      try {
+        await updateVolatileBackupProgress(backupSessionKey, progressKey, {
+          sourcePage: "creatorCharacterCameos",
+          creatorProfileId: creatorProfile.profileId,
+          creatorProfileUsername: creatorProfile.username,
+          characterAccountId: characterAccount.userId,
+          characterAccountUsername: characterAccount.username,
+          cursor: didReachKnownItems ? cursor || "" : nextCursor || "",
+          previousCursor: cursor || "",
+          totalItemCount,
+          backedUpItemCount,
+          previewCount: items.length,
+          isComplete: didReachTerminalPage,
+        });
+      } catch (error) {
+        console.warn("Failed to checkpoint creator-character cameo progress.", error);
+      }
+    }
+
     if (typeof options.onProgress === "function") {
       await options.onProgress({
         count: totalItemCount,
@@ -8258,52 +8968,8 @@ async function fetchAllCreatorCharacterCameoItems(creatorProfile, options = {}) 
 
     throwIfFetchAbortRequested();
 
-    const didReachKnownItems = didPageContainOnlyKnownItems(pageItems, knownItemKeys);
     if (didReachKnownItems) {
-      if (shouldBackupVolatileItems) {
-        try {
-          await updateVolatileBackupProgress(backupSessionKey, progressKey, {
-            sourcePage: "creatorCharacterCameos",
-            creatorProfileId: creatorProfile.profileId,
-            creatorProfileUsername: creatorProfile.username,
-            characterAccountId: characterAccount.userId,
-            characterAccountUsername: characterAccount.username,
-            cursor: cursor || "",
-            previousCursor: previousCursor || "",
-            totalItemCount,
-            backedUpItemCount,
-            previewCount: items.length,
-            isComplete: true,
-          });
-        } catch (error) {
-          console.warn("Failed to mark creator-character cameo progress as complete.", error);
-        }
-      }
       break;
-    }
-
-    const nextCursor = resolveNextProfileFeedCursor(page, pageItems, cursor, previousCursor);
-    const didReachTerminalPage =
-      page.rowCount === 0 || !nextCursor || Boolean(maxItems && totalItemCount >= maxItems);
-
-    if (shouldBackupVolatileItems) {
-      try {
-        await updateVolatileBackupProgress(backupSessionKey, progressKey, {
-          sourcePage: "creatorCharacterCameos",
-          creatorProfileId: creatorProfile.profileId,
-          creatorProfileUsername: creatorProfile.username,
-          characterAccountId: characterAccount.userId,
-          characterAccountUsername: characterAccount.username,
-          cursor: nextCursor || "",
-          previousCursor: cursor || "",
-          totalItemCount,
-          backedUpItemCount,
-          previewCount: items.length,
-          isComplete: didReachTerminalPage,
-        });
-      } catch (error) {
-        console.warn("Failed to checkpoint creator-character cameo progress.", error);
-      }
     }
 
     if (page.rowCount === 0 || !nextCursor) {
@@ -8380,18 +9046,35 @@ async function fetchAllCreatorCharacterCameoItemsSimple(creatorProfile, options 
         previewLimit,
       );
       if (previewItems[0]) {
-        hasUsableResumeState = true;
-        cursor =
-          typeof resumeState.cursor === "string" && resumeState.cursor ? resumeState.cursor : null;
-        previousCursor =
-          typeof resumeState.previousCursor === "string" && resumeState.previousCursor
-            ? resumeState.previousCursor
-            : null;
-        totalItemCount = Math.max(0, Number(resumeState.totalItemCount) || 0);
-        backedUpItemCount = Math.max(0, Number(resumeState.backedUpItemCount) || 0);
-        usesVolatileBackup = true;
-        items.push(...previewItems);
+        const hasResumeCursor =
+          resumeState.isComplete === true ||
+          (typeof resumeState.cursor === "string" && resumeState.cursor);
+        if (!hasResumeCursor) {
+          cursor = null;
+          previousCursor = null;
+          totalItemCount = 0;
+          backedUpItemCount = 0;
+          usesVolatileBackup = false;
+          await clearVolatileBackupProgress(backupSessionKey, progressKey);
+        } else {
+          hasUsableResumeState = true;
+          cursor =
+            typeof resumeState.cursor === "string" && resumeState.cursor ? resumeState.cursor : null;
+          previousCursor =
+            typeof resumeState.previousCursor === "string" && resumeState.previousCursor
+              ? resumeState.previousCursor
+              : null;
+          totalItemCount = Math.max(0, Number(resumeState.totalItemCount) || 0);
+          backedUpItemCount = Math.max(0, Number(resumeState.backedUpItemCount) || 0);
+          usesVolatileBackup = true;
+          items.push(...previewItems);
+        }
       } else {
+        cursor = null;
+        previousCursor = null;
+        totalItemCount = 0;
+        backedUpItemCount = 0;
+        usesVolatileBackup = false;
         await clearVolatileBackupProgress(backupSessionKey, progressKey);
       }
     } catch (error) {
@@ -8412,6 +9095,15 @@ async function fetchAllCreatorCharacterCameoItemsSimple(creatorProfile, options 
       backedUpItemCount,
       usesVolatileBackup,
     };
+  }
+
+  if (typeof options.onProgress === "function" && totalItemCount > 0 && hasUsableResumeState) {
+    await options.onProgress({
+      count: totalItemCount,
+      pageNumber: 0,
+      previewItems: [...items],
+      backedUpItemCount,
+    });
   }
 
   for (let pageNumber = 0; pageNumber < maxPageCount; pageNumber += 1) {
@@ -8500,18 +9192,9 @@ async function fetchAllCreatorCharacterCameoItemsSimple(creatorProfile, options 
       }
     }
 
-    if (typeof options.onProgress === "function") {
-      await options.onProgress({
-        count: totalItemCount,
-        pageNumber: pageNumber + 1,
-        previewItems: [...items],
-        backedUpItemCount,
-      });
-    }
+    const didReachKnownItems = didPageContainOnlyKnownItems(pageItems, knownItemKeys);
 
-    throwIfFetchAbortRequested();
-
-    if (didPageContainOnlyKnownItems(pageItems, knownItemKeys)) {
+    if (didReachKnownItems) {
       if (shouldBackupVolatileItems) {
         try {
           await updateVolatileBackupProgress(backupSessionKey, progressKey, {
@@ -8531,6 +9214,15 @@ async function fetchAllCreatorCharacterCameoItemsSimple(creatorProfile, options 
           console.warn("Failed to mark creator-character cameo progress as complete.", error);
         }
       }
+      if (typeof options.onProgress === "function") {
+        await options.onProgress({
+          count: totalItemCount,
+          pageNumber: pageNumber + 1,
+          previewItems: [...items],
+          backedUpItemCount,
+        });
+      }
+      throwIfFetchAbortRequested();
       break;
     }
 
@@ -8557,6 +9249,17 @@ async function fetchAllCreatorCharacterCameoItemsSimple(creatorProfile, options 
         console.warn("Failed to checkpoint creator-character cameo progress.", error);
       }
     }
+
+    if (typeof options.onProgress === "function") {
+      await options.onProgress({
+        count: totalItemCount,
+        pageNumber: pageNumber + 1,
+        previewItems: [...items],
+        backedUpItemCount,
+      });
+    }
+
+    throwIfFetchAbortRequested();
 
     if (page.rowCount === 0 || !nextCursor) {
       isExhaustive = !(maxItems && totalItemCount >= maxItems);

@@ -16,7 +16,13 @@ import { renderState } from "../ui/render.js";
  */
 export async function refreshStatus() {
   try {
-    const state = await fetchRuntimeState();
+    const state = await fetchRuntimeState({
+      pageIndex: popupState.resultsPageIndex,
+      pageSize: popupState.resultsPageSize,
+      sortKey: popupState.browseState.sort,
+      query: popupState.browseState.query,
+      creatorTab: popupState.activeCreatorResultsTab,
+    });
     renderState(state);
   } catch (error) {
     showNotice(dom.errorBox, error instanceof Error ? error.message : String(error));

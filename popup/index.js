@@ -2,17 +2,23 @@ import { initializeEventHandlers } from "./controllers/index.js";
 import { dom } from "./dom.js";
 import { startPolling } from "./controllers/polling.js";
 import { bootstrapUpdaterGate } from "./controllers/updater.js";
-import { setActiveTab } from "./ui/layout.js";
+import { saveRuntimeSettings } from "./runtime.js";
+import { initializeShellViewMode, setActiveTab } from "./ui/layout.js";
 
 /**
  * Initializes the modular popup application.
  */
 export function initPopupApp() {
   syncAppVersionLabel();
+  const { initialTab, viewMode } = initializeShellViewMode();
   initializeEventHandlers();
-  setActiveTab("overview");
-  startPolling();
-  void bootstrapUpdaterGate();
+  setActiveTab(initialTab);
+  void saveRuntimeSettings({
+    preferredViewMode: viewMode,
+  }).catch(() => {});
+  void bootstrapUpdaterGate().finally(() => {
+    startPolling();
+  });
 }
 
 function syncAppVersionLabel() {

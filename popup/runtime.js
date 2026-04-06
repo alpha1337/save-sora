@@ -22,14 +22,41 @@ async function sendPopupMessage(message, fallbackMessage) {
   return response;
 }
 
+function normalizeShellViewMode(viewMode) {
+  return viewMode === "fullscreen" ? "fullscreen" : "windowed";
+}
+
+function buildRuntimeShellUrl(options = {}) {
+  const url = new URL(chrome.runtime.getURL("popup.html"));
+  const normalizedViewMode = normalizeShellViewMode(options.viewMode);
+  url.searchParams.set("view", normalizedViewMode);
+
+  if (typeof options.updatedVersion === "string" && options.updatedVersion) {
+    url.searchParams.set("updated", options.updatedVersion);
+  }
+
+  if (typeof options.tab === "string" && options.tab) {
+    url.searchParams.set("tab", options.tab);
+  }
+
+  return url.toString();
+}
+
 /**
  * Loads the latest persisted popup status from the background worker.
  *
  * @returns {Promise<object>}
  */
-export async function fetchRuntimeState() {
+export async function fetchRuntimeState(options = {}) {
   const response = await sendPopupMessage(
-    { type: "GET_STATUS" },
+    {
+      type: "GET_STATUS",
+      pageIndex: options.pageIndex,
+      pageSize: options.pageSize,
+      sortKey: options.sortKey,
+      query: options.query,
+      creatorTab: options.creatorTab,
+    },
     "Could not load the current extension status.",
   );
   return response.state;
@@ -76,6 +103,37 @@ export async function installPendingRuntimeUpdate(options = {}) {
     "Could not install the pending update.",
   );
   return response.updateStatus;
+}
+
+export async function openRuntimeShell(options = {}) {
+  const normalizedViewMode = normalizeShellViewMode(options.viewMode);
+  const url = buildRuntimeShellUrl({
+    viewMode: normalizedViewMode,
+    updatedVersion: options.updatedVersion,
+    tab: options.tab,
+  });
+
+  if (normalizedViewMode === "fullscreen") {
+    return chrome.tabs.create({
+      url,
+      active: true,
+    });
+  }
+
+  try {
+    return await chrome.windows.create({
+      url,
+      type: "popup",
+      focused: true,
+      width: 760,
+      height: 860,
+    });
+  } catch (_error) {
+    return chrome.tabs.create({
+      url,
+      active: true,
+    });
+  }
 }
 
 /**
@@ -190,11 +248,12 @@ export async function requestClearVolatileBackups() {
  * @param {string[]} selectedKeys
  * @returns {Promise<object>}
  */
-export async function saveSelection(selectedKeys) {
+export async function saveSelection(selectedKeys, visibleKeys = []) {
   return sendPopupMessage(
     {
       type: "SET_SELECTION",
       selectedKeys,
+      visibleKeys,
     },
     "Could not save the current selection.",
   );

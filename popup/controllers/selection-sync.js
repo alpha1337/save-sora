@@ -1,7 +1,11 @@
 import { saveSelection } from "../runtime.js";
 import { popupState } from "../state.js";
 import { renderCurrentItems } from "../ui/render.js";
-import { applyCurrentSelectionUi, getSelectedKeysFromDom } from "../ui/selection.js";
+import {
+  applyCurrentSelectionUi,
+  getItemCheckboxesWithOptions,
+  getSelectedKeysFromDom,
+} from "../ui/selection.js";
 
 /**
  * Persists the current DOM checkbox state and refreshes the local summary UI.
@@ -13,8 +17,9 @@ import { applyCurrentSelectionUi, getSelectedKeysFromDom } from "../ui/selection
  */
 export async function updateSelectionFromDom() {
   const selectedKeys = getSelectedKeysFromDom();
+  const visibleKeys = getItemCheckboxesWithOptions().map((input) => input.value);
   popupState.latestRenderState.selectedKeys = selectedKeys;
   renderCurrentItems();
   applyCurrentSelectionUi();
-  await saveSelection(selectedKeys);
+  await saveSelection(selectedKeys, visibleKeys);
 }

@@ -1,6 +1,11 @@
 import { SETTINGS_SAVE_DEBOUNCE_MS } from "../config.js";
 import { dom } from "../dom.js";
-import { requestClearLocalStorage, requestClearVolatileBackups, saveRuntimeSettings } from "../runtime.js";
+import {
+  openRuntimeShell,
+  requestClearLocalStorage,
+  requestClearVolatileBackups,
+  saveRuntimeSettings,
+} from "../runtime.js";
 import { popupState } from "../state.js";
 import {
   formatSourceSelectionLabel,
@@ -51,6 +56,25 @@ export function handleCreatorResultsTabClick(event) {
   rerenderBrowseResults();
 }
 
+export function handleResultsPagePrevClick() {
+  if (popupState.resultsPageIndex <= 0) {
+    return;
+  }
+
+  popupState.resultsPageIndex -= 1;
+  void refreshStatus();
+}
+
+export function handleResultsPageNextClick() {
+  const lastPageIndex = Math.max(0, popupState.resultsPageCount - 1);
+  if (popupState.resultsPageIndex >= lastPageIndex) {
+    return;
+  }
+
+  popupState.resultsPageIndex += 1;
+  void refreshStatus();
+}
+
 /**
  * Saves the theme toggle immediately.
  */
@@ -70,6 +94,32 @@ export async function handleThemeToggleChange() {
   } catch (error) {
     showNotice(dom.errorBox, error instanceof Error ? error.message : String(error));
     await refreshStatus();
+  }
+}
+
+export async function handleViewFullscreenClick() {
+  const nextViewMode = popupState.isFullscreenView ? "windowed" : "fullscreen";
+
+  try {
+    await saveRuntimeSettings({
+      preferredViewMode: nextViewMode,
+    });
+    await openRuntimeShell({
+      viewMode: nextViewMode,
+      tab: popupState.activeTab,
+    });
+
+    if (popupState.isFullscreenView) {
+      window.setTimeout(() => {
+        try {
+          window.close();
+        } catch (_error) {
+          // The alternate shell has already opened, so a close failure is harmless.
+        }
+      }, 40);
+    }
+  } catch (error) {
+    showNotice(dom.errorBox, error instanceof Error ? error.message : String(error));
   }
 }
 
@@ -176,9 +226,8 @@ export async function handleClearVolatileBackupsClick() {
  * Re-renders the list after a local browse-state change.
  */
 function rerenderBrowseResults() {
-  renderCurrentItems();
-  applyCurrentSelectionUi();
-  updateBackToTopVisibility();
+  popupState.resultsPageIndex = 0;
+  void refreshStatus();
 }
 
 /**

@@ -83,24 +83,33 @@
               <p class="subhead">Fetch your videos, rename what matters, and only download the ones you actually want.</p>
             </div>
           </div>
-          <label class="theme-toggle" for="theme-toggle">
-            <span class="theme-toggle-label">Theme Picker</span>
-            <input id="theme-toggle" class="theme-toggle-input" type="checkbox" />
-            <span class="theme-toggle-track" aria-hidden="true">
-              <span class="theme-toggle-icon theme-toggle-icon-dark">
-                <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
-                  <path d="M14.5 3.2a8.8 8.8 0 1 0 6.3 15.1 8.5 8.5 0 1 1-6.3-15.1Z" fill="currentColor"></path>
-                </svg>
+          <div class="topbar-utilities">
+            <button
+              id="view-fullscreen-button"
+              type="button"
+              class="ghost button-small topbar-utility-button"
+            >
+              View Fullscreen
+            </button>
+            <label class="theme-toggle" for="theme-toggle">
+              <span class="theme-toggle-label">Theme Picker</span>
+              <input id="theme-toggle" class="theme-toggle-input" type="checkbox" />
+              <span class="theme-toggle-track" aria-hidden="true">
+                <span class="theme-toggle-icon theme-toggle-icon-dark">
+                  <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+                    <path d="M14.5 3.2a8.8 8.8 0 1 0 6.3 15.1 8.5 8.5 0 1 1-6.3-15.1Z" fill="currentColor"></path>
+                  </svg>
+                </span>
+                <span class="theme-toggle-icon theme-toggle-icon-light">
+                  <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+                    <circle cx="12" cy="12" r="4.5" fill="currentColor"></circle>
+                    <path d="M12 2.5v2.6M12 18.9v2.6M21.5 12h-2.6M5.1 12H2.5M18.7 5.3l-1.8 1.8M7.1 16.9l-1.8 1.8M18.7 18.7l-1.8-1.8M7.1 7.1 5.3 5.3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"></path>
+                  </svg>
+                </span>
+                <span class="theme-toggle-thumb"></span>
               </span>
-              <span class="theme-toggle-icon theme-toggle-icon-light">
-                <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
-                  <circle cx="12" cy="12" r="4.5" fill="currentColor"></circle>
-                  <path d="M12 2.5v2.6M12 18.9v2.6M21.5 12h-2.6M5.1 12H2.5M18.7 5.3l-1.8 1.8M7.1 16.9l-1.8 1.8M18.7 18.7l-1.8-1.8M7.1 7.1 5.3 5.3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"></path>
-                </svg>
-              </span>
-              <span class="theme-toggle-thumb"></span>
-            </span>
-          </label>
+            </label>
+          </div>
         </div>
       </header>
 
@@ -239,6 +248,15 @@
                     role="tablist"
                     aria-label="Creator content types"
                   ></div>
+                  <div id="results-pager" class="results-pager hidden" aria-label="Result pages">
+                    <button id="results-page-prev" type="button" class="ghost button-small">
+                      Prev
+                    </button>
+                    <span id="results-page-status" class="results-page-status">Page 1 of 1</span>
+                    <button id="results-page-next" type="button" class="ghost button-small">
+                      Next
+                    </button>
+                  </div>
                 </div>
                 <div class="picker-header-actions">
                   <button id="select-all-button" type="button" class="ghost button-small hidden">
