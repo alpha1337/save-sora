@@ -43,7 +43,7 @@ function main() {
   validateRequiredEntries();
 
   const assetPaths = collectAssetPaths();
-  const packageEntries = [...requiredRootEntries, ...assetPaths].sort();
+  const packageEntries = collectManagedRuntimeEntries([...requiredRootEntries, ...assetPaths]);
 
   recreateDirectory(distRoot);
   mkdirSync(packageDir, { recursive: true });
@@ -59,6 +59,26 @@ function main() {
   console.log(`Built unpacked extension: ${relativePathFromRepo(packageDir)}`);
   console.log(`Built zip archive: ${relativePathFromRepo(zipPath)}`);
   console.log(`Built update manifest: ${relativePathFromRepo(updateManifestPath)}`);
+}
+
+function collectManagedRuntimeEntries(relativePaths) {
+  const packageEntries = new Set();
+
+  for (const relativePath of relativePaths) {
+    const sourcePath = path.join(repoRoot, relativePath);
+    const sourceStats = statSync(sourcePath);
+
+    if (sourceStats.isDirectory()) {
+      for (const absolutePath of listFilesRecursively(sourcePath)) {
+        packageEntries.add(path.relative(repoRoot, absolutePath));
+      }
+      continue;
+    }
+
+    packageEntries.add(relativePath);
+  }
+
+  return [...packageEntries].sort();
 }
 
 /**
