@@ -39,6 +39,16 @@ export async function bootstrapUpdaterGate() {
 
   try {
     await refreshStatus();
+    if (shouldBypassAutomaticUpdateStartup()) {
+      popupState.updateGateHidden = true;
+      if (updatedVersionNotice) {
+        showNotice(
+          dom.warningBox,
+          `Save Sora updated to v${updatedVersionNotice} and reopened automatically.`,
+        );
+      }
+      return;
+    }
     if (shouldRunStartupUpdateSilently()) {
       popupState.updateGateHidden = true;
       void requestUpdateCheck({
@@ -408,6 +418,16 @@ function setBootGateStep({ step, progress, title, message }) {
 
 function shouldRunStartupUpdateSilently() {
   return popupState.currentPhase === "fetching" || popupState.currentPhase === "fetch-paused";
+}
+
+function shouldBypassAutomaticUpdateStartup() {
+  const runtimeSettings =
+    popupState.latestRuntimeState &&
+    popupState.latestRuntimeState.settings &&
+    typeof popupState.latestRuntimeState.settings === "object"
+      ? popupState.latestRuntimeState.settings
+      : {};
+  return runtimeSettings.automaticUpdatesEnabled === false;
 }
 
 async function awaitUpdateOperation(operationPromise, options = {}) {

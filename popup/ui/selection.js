@@ -228,12 +228,10 @@ export function syncSelectionControls(totalCount, selectedCount, visibleCount = 
   const hasSourceSelection =
     isSourceSelectionScreenVisible() && selectionScreenState.totalCount > 0;
   const isFetching = phase === "fetching";
-  const isFetchPaused = phase === "fetch-paused";
   const showDownloadButton =
-    hasLoadedResults && selectedCount > 0 && !popupState.latestBusy && !popupState.latestPaused && !isFetching && !isFetchPaused;
+    hasLoadedResults && selectedCount > 0 && !popupState.latestBusy && !popupState.latestPaused && !isFetching;
   const showBatchActions =
     !isFetching &&
-    !isFetchPaused &&
     ((hasLoadedResults && visibleCount > 0) || hasSourceSelection);
   const showBrowseTools = hasLoadedResults;
   const showSummaryPanel = hasLoadedResults && !isFetching;
@@ -295,14 +293,7 @@ export function updateTotalSummary(items, selectedKeys) {
   }
 
   const { selectedCount, totalBytes } = getSelectedBatchMetrics(items, selectedKeys);
-  const selectedCountTotal = Number(popupState.latestRenderState.selectedCountTotal);
-  const effectiveSelectedCount =
-    Number.isFinite(selectedCountTotal) && selectedCountTotal >= selectedCount
-      ? selectedCountTotal
-      : selectedCount;
   const formattedSize = formatFileSize(totalBytes);
   dom.totalCount.textContent =
-    formattedSize && effectiveSelectedCount === selectedCount
-      ? `${formatWholeNumber(effectiveSelectedCount)} / ${formattedSize}`
-      : formatWholeNumber(effectiveSelectedCount);
+    formattedSize ? `${formatWholeNumber(selectedCount)} / ${formattedSize}` : formatWholeNumber(selectedCount);
 }

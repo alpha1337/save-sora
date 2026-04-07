@@ -220,7 +220,7 @@ function getUpdateGateTitle(updateStatus) {
   if (updateStatus.phase === "awaiting-folder") {
     return updateStatus.installFolderLinked
       ? "Confirm folder access"
-      : "Enable automatic updates";
+      : "Enable Automatic Updates?";
   }
   if (updateStatus.phase === "update-available" || updateStatus.phase === "deferred") {
     return `Save Sora ${updateStatus.pendingUpdateVersion || updateStatus.latestVersion} is ready`;

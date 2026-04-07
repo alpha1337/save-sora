@@ -69,6 +69,8 @@ const FETCH_SOURCE_PROGRESS_RATIO = 0.74;
 const FETCH_PROCESSING_PROGRESS_RATIO = 0.22;
 const FETCH_PROCESSING_STEP_COUNT = 2;
 const FETCH_PROGRESS_CHUNK_SIZE = 250;
+const ARCHIVE_DEBUG_MAX_JOBS = 8;
+const ARCHIVE_DEBUG_MAX_EVENTS = 400;
 const AVAILABLE_SOURCE_VALUES = [
   "profile",
   "drafts",
@@ -113,6 +115,123 @@ let currentUpdateState = createDefaultUpdateState();
 let linkedInstallFolderRecordCache = null;
 let updaterReadyPromise = null;
 let zipLibraryLoaded = false;
+const archiveDebugRoot = getArchiveDebugRoot();
+
+function getArchiveDebugRoot() {
+  if (!globalThis.__SAVE_SORA_ZIP_DEBUG__ || typeof globalThis.__SAVE_SORA_ZIP_DEBUG__ !== "object") {
+    globalThis.__SAVE_SORA_ZIP_DEBUG__ = {
+      activeJobId: "",
+      jobs: [],
+    };
+  }
+
+  return globalThis.__SAVE_SORA_ZIP_DEBUG__;
+}
+
+function getArchiveDebugJob(jobId) {
+  if (typeof jobId !== "string" || !jobId) {
+    return null;
+  }
+
+  const debugRoot = getArchiveDebugRoot();
+  return Array.isArray(debugRoot.jobs)
+    ? debugRoot.jobs.find((job) => job && job.jobId === jobId) || null
+    : null;
+}
+
+function ensureArchiveDebugJob(job, options = {}) {
+  if (!job || typeof job.jobId !== "string" || !job.jobId) {
+    return null;
+  }
+
+  const debugRoot = getArchiveDebugRoot();
+  if (!Array.isArray(debugRoot.jobs)) {
+    debugRoot.jobs = [];
+  }
+
+  let debugJob = getArchiveDebugJob(job.jobId);
+  if (!debugJob) {
+    debugJob = {
+      jobId: job.jobId,
+      archiveFilename:
+        typeof options.archiveFilename === "string" && options.archiveFilename
+          ? options.archiveFilename
+          : "",
+      totalItems: Number(options.totalItems) || 0,
+      startedAt: new Date().toISOString(),
+      completedAt: "",
+      status: "running",
+      itemResults: [],
+      events: [],
+    };
+    debugRoot.jobs.unshift(debugJob);
+    if (debugRoot.jobs.length > ARCHIVE_DEBUG_MAX_JOBS) {
+      debugRoot.jobs.length = ARCHIVE_DEBUG_MAX_JOBS;
+    }
+  }
+
+  debugRoot.activeJobId = job.jobId;
+  return debugJob;
+}
+
+function pushArchiveDebugEvent(jobId, type, payload = {}) {
+  const debugJob = ensureArchiveDebugJob({ jobId });
+  if (!debugJob) {
+    return null;
+  }
+
+  if (!Array.isArray(debugJob.events)) {
+    debugJob.events = [];
+  }
+
+  debugJob.events.push({
+    type,
+    timestamp: new Date().toISOString(),
+    ...payload,
+  });
+  if (debugJob.events.length > ARCHIVE_DEBUG_MAX_EVENTS) {
+    debugJob.events.splice(0, debugJob.events.length - ARCHIVE_DEBUG_MAX_EVENTS);
+  }
+
+  return debugJob;
+}
+
+function finalizeArchiveDebugJob(jobId, patch = {}) {
+  const debugJob = ensureArchiveDebugJob({ jobId });
+  if (!debugJob) {
+    return null;
+  }
+
+  Object.assign(debugJob, patch, {
+    completedAt: new Date().toISOString(),
+  });
+  return debugJob;
+}
+
+function createArchiveDebugPayload(details = {}) {
+  return {
+    itemKey: typeof details.itemKey === "string" ? details.itemKey : "",
+    id: typeof details.id === "string" ? details.id : "",
+    filename: typeof details.filename === "string" ? details.filename : "",
+    archivePath: typeof details.archivePath === "string" ? details.archivePath : "",
+    sourcePage: typeof details.sourcePage === "string" ? details.sourcePage : "",
+    downloadUrl: typeof details.downloadUrl === "string" ? details.downloadUrl : "",
+    attempts: Array.isArray(details.attempts)
+      ? details.attempts.map((attempt) => ({
+          attempt: Number(attempt && attempt.attempt) || 0,
+          downloadUrl: typeof attempt?.downloadUrl === "string" ? attempt.downloadUrl : "",
+          finalUrl: typeof attempt?.finalUrl === "string" ? attempt.finalUrl : "",
+          status: Number.isFinite(Number(attempt?.status)) ? Number(attempt.status) : null,
+          statusText: typeof attempt?.statusText === "string" ? attempt.statusText : "",
+          contentType: typeof attempt?.contentType === "string" ? attempt.contentType : "",
+          refreshed: attempt?.refreshed === true,
+          refreshedDownloadUrl:
+            typeof attempt?.refreshedDownloadUrl === "string" ? attempt.refreshedDownloadUrl : "",
+          error: typeof attempt?.error === "string" ? attempt.error : "",
+        }))
+      : [],
+  };
+}
 
 initializeZipLibrary();
 
@@ -121,16 +240,17 @@ void initializeBackgroundRuntime();
 chrome.runtime.onInstalled.addListener(() => {
   void persistState();
   void persistCatalogState();
-  void scheduleUpdateAlarm();
-  void restoreUpdaterState();
+  void ensureBackgroundRuntimeReady();
 });
 
 chrome.runtime.onStartup.addListener(() => {
-  void scheduleUpdateAlarm();
-  void restoreUpdaterState();
-  void runUpdateCheck({ trigger: "startup", interactive: false, applyIfAvailable: false }).catch((error) => {
-    console.warn("Failed to check for updates during startup.", error);
-  });
+  void ensureBackgroundRuntimeReady()
+    .then(() =>
+      runUpdateCheck({ trigger: "startup", interactive: false, applyIfAvailable: false }),
+    )
+    .catch((error) => {
+      console.warn("Failed to check for updates during startup.", error);
+    });
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
@@ -264,15 +384,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       return false;
     }
 
-    void resumeScan()
-      .then(() => {
-        sendResponse({ ok: true });
-      })
-      .catch((error) => {
-        console.error("Failed to resume the Sora fetch.", error);
-        sendResponse({ ok: false, error: getErrorMessage(error) });
-      });
-    return true;
+    void resumeScan().catch((error) => {
+      console.error("Failed to resume the Sora fetch.", error);
+    });
+    sendResponse({ ok: true });
+    return false;
   }
 
   if (message.type === "ABORT_SCAN") {
@@ -616,11 +732,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       return false;
     }
 
-    if (currentState.phase === "fetch-paused") {
-      sendResponse({ ok: false, error: "Resume or cancel the paused fetch before downloading." });
-      return false;
-    }
-
     if (!Array.isArray(currentState.items) || currentState.items.length === 0) {
       sendResponse({ ok: false, error: "Fetch videos first so you can choose what to download." });
       return false;
@@ -879,6 +990,7 @@ function createDefaultFetchProgress(overrides = {}) {
     sourceItemsFound: 0,
     processedCount: 0,
     totalCount: 0,
+    hasConcreteTotalCount: false,
     ...overrides,
   };
 }
@@ -928,6 +1040,35 @@ function mergeEstimatedFetchTotalCount(currentEstimate, nextEstimate, observedCo
   }
 
   return Math.min(normalizedMaxItems, normalizedEstimate || normalizedObservedCount);
+}
+
+function resolveFetchProgressCountEstimate(
+  currentEstimate,
+  nextEstimate,
+  observedCount = 0,
+  maxItems = null,
+) {
+  const normalizedObservedCount = normalizeEstimatedFetchCount(observedCount);
+  const normalizedMaxItems = normalizeMaxVideos(maxItems);
+  const strongestEstimate = Math.max(
+    normalizeEstimatedFetchCount(currentEstimate),
+    normalizeEstimatedFetchCount(nextEstimate),
+  );
+
+  if (strongestEstimate > 0) {
+    const totalCount = normalizedMaxItems
+      ? Math.min(normalizedMaxItems, strongestEstimate)
+      : strongestEstimate;
+    return {
+      totalCount,
+      hasConcreteTotalCount: totalCount > 0,
+    };
+  }
+
+  return {
+    totalCount: normalizedObservedCount,
+    hasConcreteTotalCount: false,
+  };
 }
 
 function getFetchSourceLabel(source) {
@@ -1316,6 +1457,13 @@ async function restoreUpdaterState() {
           metaRecord.phase !== "reloading"
         ? metaRecord.phase
         : "idle";
+  const effectiveRestoredPhase =
+    automaticUpdatesEnabled !== true &&
+    restoredPhase !== "downloading" &&
+    restoredPhase !== "applying" &&
+    restoredPhase !== "reloading"
+      ? "idle"
+      : restoredPhase;
 
   currentUpdateState = createDefaultUpdateState({
     ...(metaRecord && typeof metaRecord === "object" ? metaRecord : {}),
@@ -1367,13 +1515,17 @@ async function restoreUpdaterState() {
       pendingRecord && typeof pendingRecord.version === "string"
         ? compareSemver(pendingRecord.version, CURRENT_EXTENSION_VERSION) > 0
         : metaRecord && metaRecord.pendingUpdateReady === true,
-    phase: restoredPhase,
+    phase: effectiveRestoredPhase,
     message:
-      restoredPhase === "idle" && metaRecord && metaRecord.phase === "reloading" ? "" : metaRecord?.message,
+      effectiveRestoredPhase === "idle" && metaRecord && metaRecord.phase === "reloading"
+        ? ""
+        : metaRecord?.message,
     detail:
-      restoredPhase === "idle" && metaRecord && metaRecord.phase === "reloading" ? "" : metaRecord?.detail,
+      effectiveRestoredPhase === "idle" && metaRecord && metaRecord.phase === "reloading"
+        ? ""
+        : metaRecord?.detail,
     progress:
-      restoredPhase === "idle" && metaRecord && metaRecord.phase === "reloading"
+      effectiveRestoredPhase === "idle" && metaRecord && metaRecord.phase === "reloading"
         ? 0
         : metaRecord && Number.isFinite(Number(metaRecord.progress))
           ? Number(metaRecord.progress)
@@ -1440,6 +1592,18 @@ async function maybeReopenUpdatedAppShell() {
 
 async function scheduleUpdateAlarm() {
   if (!chrome.alarms) {
+    return;
+  }
+
+  const automaticUpdatesEnabled = normalizeAutomaticUpdatesEnabled(
+    currentState &&
+      currentState.settings &&
+      Object.prototype.hasOwnProperty.call(currentState.settings, "automaticUpdatesEnabled")
+      ? currentState.settings.automaticUpdatesEnabled
+      : true,
+  );
+  if (!automaticUpdatesEnabled) {
+    await chrome.alarms.clear(UPDATE_ALARM_NAME);
     return;
   }
 
@@ -2206,6 +2370,7 @@ async function installPendingUpdate(options = {}) {
 }
 
 async function runUpdateCheck(options = {}) {
+  await ensureBackgroundRuntimeReady();
   if (isUpdaterBusyPhase()) {
     return buildUpdateStatusSnapshot();
   }
@@ -2218,6 +2383,21 @@ async function runUpdateCheck(options = {}) {
       ? currentState.settings.automaticUpdatesEnabled
       : true,
   );
+  const isManualRequest =
+    options.interactive === true ||
+    options.trigger === "manual" ||
+    options.trigger === "folder-link";
+  if (!automaticUpdatesEnabled && !isManualRequest) {
+    await setUpdateState({
+      phase: "idle",
+      automaticUpdatesEnabled: false,
+      message: "",
+      detail: "",
+      progress: 0,
+      error: "",
+    });
+    return buildUpdateStatusSnapshot();
+  }
 
   await setUpdateState({
     phase: "checking",
@@ -3654,16 +3834,33 @@ async function buildPopupStateSnapshotForView(state = currentState, options = {}
     .filter(Boolean);
   const totalItemCount = fullItems.length;
   const visibleKeys = new Set(fullItems.map((item) => getCanonicalItemKey(item)));
-  const selectedKeysTotal = Array.isArray(sourceState.selectedKeys)
-    ? sourceState.selectedKeys.filter((key) => typeof key === "string").length
-    : 0;
+  const selectableSourceItemKeys = normalizeSelectedKeys(
+    sourceState.items,
+    (Array.isArray(sourceState.items) ? sourceState.items : []).map((item) => getCanonicalItemKey(item)),
+  );
+  const normalizedSelectedSourceKeys = normalizeSelectedKeys(
+    sourceState.items,
+    sourceState.selectedKeys,
+  );
+  const shouldExpandImplicitSelection =
+    fullItems.length > selectableSourceItemKeys.length &&
+    selectableSourceItemKeys.length > 0 &&
+    normalizedSelectedSourceKeys.length === selectableSourceItemKeys.length &&
+    (sourceState.phase === "fetching" ||
+      sourceState.phase === "fetch-paused" ||
+      Number(sourceState.backedUpItemCount) > 0);
+  const resolvedSelectedKeys = shouldExpandImplicitSelection
+    ? normalizeSelectedKeys(
+      fullItems,
+      fullItems.map((item) => getCanonicalItemKey(item)),
+    )
+    : normalizeSelectedKeys(fullItems, sourceState.selectedKeys);
+  const selectedKeysTotal = resolvedSelectedKeys.length;
 
   return {
     ...popupSnapshot,
     items: fullItems,
-    selectedKeys: Array.isArray(sourceState.selectedKeys)
-      ? sourceState.selectedKeys.filter((key) => typeof key === "string" && visibleKeys.has(key))
-      : [],
+    selectedKeys: resolvedSelectedKeys.filter((key) => typeof key === "string" && visibleKeys.has(key)),
     partialWarning: sourceState.partialWarning || "",
     popupItemsTruncated: false,
     popupVisibleItemCount: fullItems.length,
@@ -4736,6 +4933,10 @@ function buildArchiveFilename(mode, now = new Date()) {
   return mode === "retry" || mode === "archive-retry"
     ? `save-sora-retry-backup-${isoDate}.zip`
     : `save-sora-backup-${isoDate}.zip`;
+}
+
+function isFetchPausedDownloadMode(mode) {
+  return mode === "selected-from-fetch-paused" || mode === "archive-selected-from-fetch-paused";
 }
 
 function buildArchiveWorkItems(items) {
@@ -5859,6 +6060,20 @@ async function startOffscreenArchiveBuild(job) {
     throw new Error("The archive job could not be initialized.");
   }
 
+  ensureArchiveDebugJob(job, {
+    archiveFilename: job.archiveFilename,
+    totalItems: Array.isArray(job.pendingItems) ? job.pendingItems.length : 0,
+  });
+  pushArchiveDebugEvent(job.jobId, "job-start", {
+    archiveFilename: job.archiveFilename,
+    totalItems: Array.isArray(job.pendingItems) ? job.pendingItems.length : 0,
+  });
+  console.info("[Save Sora ZIP] Starting archive build.", {
+    jobId: job.jobId,
+    archiveFilename: job.archiveFilename,
+    totalItems: Array.isArray(job.pendingItems) ? job.pendingItems.length : 0,
+  });
+
   await ensureOffscreenDocument();
 
   const completionPromise = new Promise((resolve, reject) => {
@@ -5870,6 +6085,7 @@ async function startOffscreenArchiveBuild(job) {
     target: OFFSCREEN_TARGET,
     type: START_ARCHIVE_BUILD,
     jobId: job.jobId,
+    archiveFilename: job.archiveFilename,
     items: job.pendingItems.map(serializeArchiveItemForOffscreen),
     folderImages: job.folderImages,
   });
@@ -5886,6 +6102,9 @@ async function startOffscreenArchiveBuild(job) {
 function serializeArchiveItemForOffscreen(item) {
   return {
     key: item && typeof item.key === "string" ? item.key : getItemKey(item || {}),
+    id: item && typeof item.id === "string" ? item.id : "",
+    filename: item && typeof item.filename === "string" ? item.filename : "",
+    sourcePage: item && typeof item.sourcePage === "string" ? item.sourcePage : "",
     downloadUrl: getPreferredDownloadUrl(item),
     archivePath: item && typeof item.archivePath === "string" ? item.archivePath : "",
     createdAt: item && typeof item.createdAt === "string" ? item.createdAt : null,
@@ -5915,6 +6134,16 @@ async function handleOffscreenArchiveStage(message) {
     return;
   }
 
+  pushArchiveDebugEvent(message.jobId, "stage", {
+    stage: typeof message.stage === "string" ? message.stage : "",
+    message: typeof message.message === "string" ? message.message : "",
+  });
+  console.info("[Save Sora ZIP] Stage update.", {
+    jobId: message.jobId,
+    stage: message.stage,
+    message: message.message,
+  });
+
   await setState({
     message:
       typeof message.message === "string" && message.message
@@ -5933,8 +6162,42 @@ async function handleOffscreenArchiveItemResult(message) {
     return;
   }
 
+  const debugPayload = createArchiveDebugPayload(message && typeof message.debug === "object" ? message.debug : {});
+  const debugJob = ensureArchiveDebugJob(activeArchiveJob);
+  if (debugJob) {
+    if (!Array.isArray(debugJob.itemResults)) {
+      debugJob.itemResults = [];
+    }
+    debugJob.itemResults.push({
+      timestamp: new Date().toISOString(),
+      success: message.success === true,
+      error:
+        typeof message.error === "string" && message.error
+          ? message.error
+          : "",
+      ...debugPayload,
+    });
+    if (debugJob.itemResults.length > ARCHIVE_DEBUG_MAX_EVENTS) {
+      debugJob.itemResults.splice(0, debugJob.itemResults.length - ARCHIVE_DEBUG_MAX_EVENTS);
+    }
+  }
+
   if (message.success) {
     activeArchiveJob.successfulItems.push(item);
+    pushArchiveDebugEvent(message.jobId, "item-success", {
+      itemKey: item.key || getItemKey(item),
+      filename: item.filename,
+      archivePath: item.archivePath,
+      attempts: debugPayload.attempts,
+    });
+    if (debugPayload.attempts.some((attempt) => attempt.refreshed)) {
+      console.info("[Save Sora ZIP] Recovered archive item after refreshing its URL.", {
+        jobId: message.jobId,
+        itemKey: item.key || getItemKey(item),
+        filename: item.filename,
+        debug: debugPayload,
+      });
+    }
   } else {
     activeArchiveJob.failedItems.push(
       createQueueSnapshotItem(
@@ -5944,6 +6207,24 @@ async function handleOffscreenArchiveItemResult(message) {
           : "Could not add the item to the ZIP archive.",
       ),
     );
+    pushArchiveDebugEvent(message.jobId, "item-failure", {
+      itemKey: item.key || getItemKey(item),
+      filename: item.filename,
+      archivePath: item.archivePath,
+      error:
+        typeof message.error === "string" && message.error
+          ? message.error
+          : "Could not add the item to the ZIP archive.",
+      attempts: debugPayload.attempts,
+    });
+    console.warn("[Save Sora ZIP] Skipped archive item.", {
+      jobId: message.jobId,
+      itemKey: item.key || getItemKey(item),
+      filename: item.filename,
+      archivePath: item.archivePath,
+      error: message.error,
+      debug: debugPayload,
+    });
   }
 
   const completed = activeArchiveJob.successfulItems.length;
@@ -5979,6 +6260,18 @@ async function handleOffscreenArchiveComplete(message) {
     return;
   }
 
+  finalizeArchiveDebugJob(message.jobId, {
+    status: "complete",
+    objectUrl:
+      typeof message.objectUrl === "string" && message.objectUrl ? message.objectUrl : "",
+    sizeBytes: Number(message.sizeBytes) || 0,
+  });
+  console.info("[Save Sora ZIP] Archive build completed.", {
+    jobId: message.jobId,
+    sizeBytes: Number(message.sizeBytes) || 0,
+    debugRef: "globalThis.__SAVE_SORA_ZIP_DEBUG__",
+  });
+
   const resolve = activeArchiveJob.resolve;
   activeArchiveJob.resolve = null;
   activeArchiveJob.reject = null;
@@ -5997,6 +6290,21 @@ async function handleOffscreenArchiveError(message) {
   ) {
     return;
   }
+
+  finalizeArchiveDebugJob(message.jobId, {
+    status: message && message.aborted ? "aborted" : "error",
+    error: typeof message?.error === "string" ? message.error : "",
+  });
+  pushArchiveDebugEvent(message.jobId, "job-error", {
+    aborted: message && message.aborted === true,
+    error: typeof message?.error === "string" ? message.error : "",
+  });
+  console.error("[Save Sora ZIP] Archive build failed.", {
+    jobId: message.jobId,
+    aborted: message && message.aborted === true,
+    error: message && message.error,
+    debugRef: "globalThis.__SAVE_SORA_ZIP_DEBUG__",
+  });
 
   const reject = activeArchiveJob.reject;
   activeArchiveJob.resolve = null;
@@ -7673,9 +7981,23 @@ async function updateSettings(nextSettings) {
   await setState({
     settings,
   });
-  await setUpdateState({
+  const nextUpdateState = {
     automaticUpdatesEnabled: settings.automaticUpdatesEnabled,
-  });
+  };
+  if (
+    settings.automaticUpdatesEnabled !== true &&
+    currentUpdateState.phase !== "downloading" &&
+    currentUpdateState.phase !== "applying" &&
+    currentUpdateState.phase !== "reloading"
+  ) {
+    nextUpdateState.phase = "idle";
+    nextUpdateState.message = "";
+    nextUpdateState.detail = "";
+    nextUpdateState.progress = 0;
+    nextUpdateState.error = "";
+  }
+  await setUpdateState(nextUpdateState);
+  await scheduleUpdateAlarm();
   if (settings.automaticUpdatesEnabled === true) {
     maybeResumeDeferredUpdate();
   }
@@ -7753,6 +8075,7 @@ async function beginSelectedDownload() {
   if (!selectedItems.length) {
     throw new Error("Select at least one video before downloading.");
   }
+  const restorePausedFetch = currentState.phase === "fetch-paused";
   const downloadMode = normalizeDownloadMode(
     currentState &&
       currentState.settings &&
@@ -7761,7 +8084,13 @@ async function beginSelectedDownload() {
       : "archive",
   );
   const isArchiveDownloadMode = downloadMode !== "direct";
-  const selectedRunMode = isArchiveDownloadMode ? "archive-selected" : "selected";
+  const selectedRunMode = restorePausedFetch
+    ? isArchiveDownloadMode
+      ? "archive-selected-from-fetch-paused"
+      : "selected-from-fetch-paused"
+    : isArchiveDownloadMode
+      ? "archive-selected"
+      : "selected";
   const startingMessage = isArchiveDownloadMode
     ? `Building a ZIP archive for ${selectedItems.length} selected item(s)...`
     : `Starting ${selectedItems.length} selected download(s)...`;
@@ -7786,11 +8115,12 @@ async function beginSelectedDownload() {
     try {
       if (isArchiveDownloadMode) {
         await performArchiveDownloadRun(selectedItems, {
-          mode: "archive-selected",
+          mode: selectedRunMode,
           startingCompleted: 0,
           startingFailedItems: [],
           totalTarget: selectedItems.length,
           initialStateApplied: true,
+          restorePausedFetch,
           introMessage: `Building a ZIP archive for ${selectedItems.length} selected item(s)...`,
           completionMessage: (completed, failed) =>
             failed === 0
@@ -7799,11 +8129,12 @@ async function beginSelectedDownload() {
         });
       } else {
         await performDownloadRun(selectedItems, {
-          mode: "selected",
+          mode: selectedRunMode,
           startingCompleted: 0,
           startingFailedItems: [],
           totalTarget: selectedItems.length,
           initialStateApplied: true,
+          restorePausedFetch,
           introMessage: `Starting ${selectedItems.length} selected download(s)...`,
           progressMessage: (completed, total) => `Downloaded ${completed} of ${total}`,
           failureMessage: (item) => `Failed to download ${item.filename}`,
@@ -7841,7 +8172,10 @@ async function resumeDownloads() {
     throw new Error("There is no paused download queue to resume.");
   }
 
-  const mode = currentState.runMode === "retry" ? "retry" : "selected";
+  const mode =
+    currentState.runMode === "retry" || currentState.runMode === "selected-from-fetch-paused"
+      ? currentState.runMode
+      : "selected";
   const totalTarget =
     Number(currentState.runTotal) ||
     pendingItems.length +
@@ -7858,6 +8192,7 @@ async function resumeDownloads() {
           ? currentState.failedItems.map(stripFailureError)
           : [],
         totalTarget,
+        restorePausedFetch: isFetchPausedDownloadMode(mode),
         introMessage:
           mode === "retry"
             ? `Resuming retry for ${pendingItems.length} item(s)...`
@@ -7952,7 +8287,7 @@ async function requestRunControl(action) {
     message:
       action === "pause"
         ? "Pausing the active download..."
-        : currentState.runMode === "archive-selected" || currentState.runMode === "archive-retry"
+        : typeof currentState.runMode === "string" && currentState.runMode.startsWith("archive")
           ? "Stopping the active ZIP archive..."
           : "Aborting the active download...",
   }, { persist: false });
@@ -7970,7 +8305,60 @@ async function requestRunControl(action) {
   }
 }
 
+function buildPausedFetchRestorePatch(options = {}) {
+  const nextItems = Array.isArray(options.items) ? options.items : currentState.items;
+  const nextSelectedKeys = normalizeSelectedKeys(
+    nextItems,
+    Array.isArray(options.selectedKeys) ? options.selectedKeys : currentState.selectedKeys,
+  );
+  const backedUpCount = Math.max(
+    0,
+    Number(
+      Object.prototype.hasOwnProperty.call(options, "backedUpItemCount")
+        ? options.backedUpItemCount
+        : currentState.backedUpItemCount,
+    ) || 0,
+  );
+  const itemsFound = nextItems.length + backedUpCount;
+
+  return {
+    phase: "fetch-paused",
+    items: nextItems,
+    message:
+      nextItems.length > 0
+        ? "Fetch paused. Resume when you're ready."
+        : "Fetch paused before any results were loaded. Resume when you're ready.",
+    currentSource: null,
+    resumableFetchRequest: pausedFetchRequest,
+    fetchedCount: itemsFound,
+    selectedKeys: nextSelectedKeys,
+    queued: nextSelectedKeys.length,
+    completed: 0,
+    failed: 0,
+    failedItems: [],
+    pendingItems: [],
+    runMode: null,
+    runTotal: 0,
+    fetchProgress: getNextFetchProgress({
+      stage: "paused",
+      stageLabel: "Fetch paused",
+      detail:
+        nextItems.length > 0
+          ? "Your current preview stays available while this crawl is paused."
+          : "Resume the crawl to continue loading results.",
+      itemsFound,
+    }),
+    finishedAt: new Date().toISOString(),
+  };
+}
+
 async function abortPausedDownloads() {
+  if (isFetchPausedDownloadMode(currentState.runMode)) {
+    requestedControlAction = null;
+    await setState(buildPausedFetchRestorePatch());
+    return;
+  }
+
   const selectedCount = normalizeSelectedKeys(currentState.items, currentState.selectedKeys).length;
 
   requestedControlAction = null;
@@ -7989,6 +8377,7 @@ async function abortPausedDownloads() {
 async function performArchiveDownloadRun(downloadItems, options) {
   const archiveJob = createArchiveJobContext(downloadItems, options);
   const total = archiveJob.total;
+  const restorePausedFetch = Boolean(options && options.restorePausedFetch);
 
   requestedControlAction = null;
 
@@ -8066,6 +8455,17 @@ async function performArchiveDownloadRun(downloadItems, options) {
           ? `Saved a ZIP archive with ${completed} item(s).`
           : `Saved a ZIP archive with ${completed} item(s) and ${failureCount} skipped item(s).`;
 
+    if (restorePausedFetch) {
+      await setState({
+        ...buildPausedFetchRestorePatch({
+          items: nextItems,
+          selectedKeys: nextSelectedKeys,
+        }),
+        lastError: "",
+      });
+      return;
+    }
+
     await setState({
       phase: "complete",
       items: nextItems,
@@ -8084,6 +8484,13 @@ async function performArchiveDownloadRun(downloadItems, options) {
   } catch (error) {
     if (isControlError(error, "abort")) {
       requestedControlAction = null;
+      if (restorePausedFetch) {
+        await setState({
+          ...buildPausedFetchRestorePatch(),
+          lastError: "",
+        });
+        return;
+      }
       const selectedCount = normalizeSelectedKeys(currentState.items, currentState.selectedKeys).length;
       await setState({
         phase: currentState.items.length ? "ready" : "complete",
@@ -8102,6 +8509,13 @@ async function performArchiveDownloadRun(downloadItems, options) {
     }
 
     const message = getErrorMessage(error);
+    if (restorePausedFetch) {
+      await setState({
+        ...buildPausedFetchRestorePatch(),
+        lastError: message,
+      });
+      return;
+    }
     const selectedCount = normalizeSelectedKeys(currentState.items, currentState.selectedKeys).length;
 
     await setState({
@@ -8136,6 +8550,7 @@ async function performDownloadRun(downloadItems, options) {
   const total =
     Number(options && options.totalTarget) ||
     pendingItems.length + completed + failedItems.length;
+  const restorePausedFetch = Boolean(options && options.restorePausedFetch);
 
   requestedControlAction = null;
 
@@ -8178,6 +8593,13 @@ async function performDownloadRun(downloadItems, options) {
 
     if (requestedControlAction === "abort") {
       requestedControlAction = null;
+      if (restorePausedFetch) {
+        await setState({
+          ...buildPausedFetchRestorePatch(),
+          lastError: "",
+        });
+        return;
+      }
       const selectedCount = normalizeSelectedKeys(currentState.items, currentState.selectedKeys).length;
       await setState({
         phase: currentState.items.length ? "ready" : "complete",
@@ -8258,6 +8680,13 @@ async function performDownloadRun(downloadItems, options) {
 
       if (isControlError(error, "abort")) {
         requestedControlAction = null;
+        if (restorePausedFetch) {
+          await setState({
+            ...buildPausedFetchRestorePatch(),
+            lastError: "",
+          });
+          return;
+        }
         const selectedCount = normalizeSelectedKeys(currentState.items, currentState.selectedKeys).length;
         await setState({
           phase: currentState.items.length ? "ready" : "complete",
@@ -8301,6 +8730,14 @@ async function performDownloadRun(downloadItems, options) {
       : failureCount === 0
         ? `Finished downloading ${completed} item(s).`
         : `Finished with ${completed} success(es) and ${failureCount} failure(s).`;
+
+  if (restorePausedFetch) {
+    await setState({
+      ...buildPausedFetchRestorePatch(),
+      lastError: failureCount > 0 ? summary : "",
+    });
+    return;
+  }
 
   await setState({
     phase: "complete",
@@ -8439,6 +8876,7 @@ async function collectItems(sources, maxVideos, options = {}) {
         sourceItemsFound: 0,
         processedCount: 0,
         totalCount: sourceExpectedTotalCount,
+        hasConcreteTotalCount: sourceExpectedTotalCount > 0,
         displayRatio: 0,
       }),
     }, { persist: false });
@@ -8458,7 +8896,7 @@ async function collectItems(sources, maxVideos, options = {}) {
             ],
           baseCount: itemMap.size,
           onProgress: async ({ count, pageNumber, message, estimatedTotalCount }) => {
-            const progressTotalCount = mergeEstimatedFetchTotalCount(
+            const progressCountEstimate = resolveFetchProgressCountEstimate(
               sourceExpectedTotalCount,
               estimatedTotalCount,
               count,
@@ -8473,7 +8911,9 @@ async function collectItems(sources, maxVideos, options = {}) {
                 detail: message || `Fetching ${sourceLabel}...`,
                 progressRatio: getFetchSourceProgressRatio(sourceIndex, sources.length, pageNumber),
                 displayRatio:
-                  progressTotalCount > 0 ? clampFetchProgressRatio(count / progressTotalCount) : 0,
+                  progressCountEstimate.hasConcreteTotalCount && progressCountEstimate.totalCount > 0
+                    ? clampFetchProgressRatio(count / progressCountEstimate.totalCount)
+                    : 0,
                 currentSource: source,
                 currentSourceLabel: sourceLabel,
                 currentSourceIndex: sourceIndex + 1,
@@ -8481,7 +8921,8 @@ async function collectItems(sources, maxVideos, options = {}) {
                 itemsFound: itemMap.size + count,
                 sourceItemsFound: count,
                 processedCount: pageNumber,
-                totalCount: progressTotalCount,
+                totalCount: progressCountEstimate.totalCount,
+                hasConcreteTotalCount: progressCountEstimate.hasConcreteTotalCount,
               }),
             }, { persist: false });
           },
@@ -8500,7 +8941,7 @@ async function collectItems(sources, maxVideos, options = {}) {
               ],
             baseCount: itemMap.size,
             onProgress: async ({ count, pageNumber, message, estimatedTotalCount }) => {
-              const progressTotalCount = mergeEstimatedFetchTotalCount(
+              const progressCountEstimate = resolveFetchProgressCountEstimate(
                 sourceExpectedTotalCount,
                 estimatedTotalCount,
                 count,
@@ -8515,7 +8956,9 @@ async function collectItems(sources, maxVideos, options = {}) {
                   detail: message || `Fetching ${sourceLabel}...`,
                   progressRatio: getFetchSourceProgressRatio(sourceIndex, sources.length, pageNumber),
                   displayRatio:
-                    progressTotalCount > 0 ? clampFetchProgressRatio(count / progressTotalCount) : 0,
+                    progressCountEstimate.hasConcreteTotalCount && progressCountEstimate.totalCount > 0
+                      ? clampFetchProgressRatio(count / progressCountEstimate.totalCount)
+                      : 0,
                   currentSource: source,
                   currentSourceLabel: sourceLabel,
                   currentSourceIndex: sourceIndex + 1,
@@ -8523,7 +8966,8 @@ async function collectItems(sources, maxVideos, options = {}) {
                   itemsFound: itemMap.size + count,
                   sourceItemsFound: count,
                   processedCount: pageNumber,
-                  totalCount: progressTotalCount,
+                  totalCount: progressCountEstimate.totalCount,
+                  hasConcreteTotalCount: progressCountEstimate.hasConcreteTotalCount,
                 }),
               }, { persist: false });
             },
@@ -8542,7 +8986,7 @@ async function collectItems(sources, maxVideos, options = {}) {
                 ],
               baseCount: itemMap.size,
               onProgress: async ({ count, pageNumber, message, estimatedTotalCount }) => {
-                const progressTotalCount = mergeEstimatedFetchTotalCount(
+                const progressCountEstimate = resolveFetchProgressCountEstimate(
                   sourceExpectedTotalCount,
                   estimatedTotalCount,
                   count,
@@ -8557,7 +9001,9 @@ async function collectItems(sources, maxVideos, options = {}) {
                     detail: message || `Fetching ${sourceLabel}...`,
                     progressRatio: getFetchSourceProgressRatio(sourceIndex, sources.length, pageNumber),
                     displayRatio:
-                      progressTotalCount > 0 ? clampFetchProgressRatio(count / progressTotalCount) : 0,
+                      progressCountEstimate.hasConcreteTotalCount && progressCountEstimate.totalCount > 0
+                        ? clampFetchProgressRatio(count / progressCountEstimate.totalCount)
+                        : 0,
                     currentSource: source,
                     currentSourceLabel: sourceLabel,
                     currentSourceIndex: sourceIndex + 1,
@@ -8565,7 +9011,8 @@ async function collectItems(sources, maxVideos, options = {}) {
                     itemsFound: itemMap.size + count,
                     sourceItemsFound: count,
                     processedCount: pageNumber,
-                    totalCount: progressTotalCount,
+                    totalCount: progressCountEstimate.totalCount,
+                    hasConcreteTotalCount: progressCountEstimate.hasConcreteTotalCount,
                   }),
                 }, { persist: false });
               },
@@ -8579,7 +9026,7 @@ async function collectItems(sources, maxVideos, options = {}) {
                 volatileBackupResumeMeta: sourceVolatileBackupResumeMeta,
                 baseCount: itemMap.size,
                 onProgress: async ({ count, pageNumber, message, estimatedTotalCount }) => {
-                  const progressTotalCount = mergeEstimatedFetchTotalCount(
+                  const progressCountEstimate = resolveFetchProgressCountEstimate(
                     sourceExpectedTotalCount,
                     estimatedTotalCount,
                     count,
@@ -8594,7 +9041,9 @@ async function collectItems(sources, maxVideos, options = {}) {
                       detail: message || `Fetching ${sourceLabel}...`,
                       progressRatio: getFetchSourceProgressRatio(sourceIndex, sources.length, pageNumber),
                       displayRatio:
-                        progressTotalCount > 0 ? clampFetchProgressRatio(count / progressTotalCount) : 0,
+                        progressCountEstimate.hasConcreteTotalCount && progressCountEstimate.totalCount > 0
+                          ? clampFetchProgressRatio(count / progressCountEstimate.totalCount)
+                          : 0,
                       currentSource: source,
                       currentSourceLabel: sourceLabel,
                       currentSourceIndex: sourceIndex + 1,
@@ -8602,7 +9051,8 @@ async function collectItems(sources, maxVideos, options = {}) {
                       itemsFound: itemMap.size + count,
                       sourceItemsFound: count,
                       processedCount: pageNumber,
-                      totalCount: progressTotalCount,
+                      totalCount: progressCountEstimate.totalCount,
+                      hasConcreteTotalCount: progressCountEstimate.hasConcreteTotalCount,
                     }),
                   }, { persist: false });
                 },
@@ -8618,7 +9068,7 @@ async function collectItems(sources, maxVideos, options = {}) {
                 volatileBackupResumeMeta: sourceVolatileBackupResumeMeta,
                 baseCount: itemMap.size,
                 onProgress: async ({ count, pageNumber, message, estimatedTotalCount }) => {
-                  const progressTotalCount = mergeEstimatedFetchTotalCount(
+                  const progressCountEstimate = resolveFetchProgressCountEstimate(
                     sourceExpectedTotalCount,
                     estimatedTotalCount,
                     count,
@@ -8633,7 +9083,9 @@ async function collectItems(sources, maxVideos, options = {}) {
                       detail: message || `Fetching ${sourceLabel}...`,
                       progressRatio: getFetchSourceProgressRatio(sourceIndex, sources.length, pageNumber),
                       displayRatio:
-                        progressTotalCount > 0 ? clampFetchProgressRatio(count / progressTotalCount) : 0,
+                        progressCountEstimate.hasConcreteTotalCount && progressCountEstimate.totalCount > 0
+                          ? clampFetchProgressRatio(count / progressCountEstimate.totalCount)
+                          : 0,
                       currentSource: source,
                       currentSourceLabel: sourceLabel,
                       currentSourceIndex: sourceIndex + 1,
@@ -8641,7 +9093,8 @@ async function collectItems(sources, maxVideos, options = {}) {
                       itemsFound: itemMap.size + count,
                       sourceItemsFound: count,
                       processedCount: pageNumber,
-                      totalCount: progressTotalCount,
+                      totalCount: progressCountEstimate.totalCount,
+                      hasConcreteTotalCount: progressCountEstimate.hasConcreteTotalCount,
                     }),
                   }, { persist: false });
                 },
@@ -8664,7 +9117,7 @@ async function collectItems(sources, maxVideos, options = {}) {
                     backedUpItemCount: previewBackedUpItemCount,
                     estimatedTotalCount,
                   }) => {
-                    const progressTotalCount = mergeEstimatedFetchTotalCount(
+                    const progressCountEstimate = resolveFetchProgressCountEstimate(
                       sourceExpectedTotalCount,
                       estimatedTotalCount,
                       count,
@@ -8726,8 +9179,8 @@ async function collectItems(sources, maxVideos, options = {}) {
                         detail: message || `Fetching ${sourceLabel}...`,
                         progressRatio: getFetchSourceProgressRatio(sourceIndex, sources.length, pageNumber),
                         displayRatio:
-                          progressTotalCount > 0
-                            ? clampFetchProgressRatio(count / progressTotalCount)
+                          progressCountEstimate.hasConcreteTotalCount && progressCountEstimate.totalCount > 0
+                            ? clampFetchProgressRatio(count / progressCountEstimate.totalCount)
                             : 0,
                         currentSource: source,
                         currentSourceLabel: sourceLabel,
@@ -8736,7 +9189,8 @@ async function collectItems(sources, maxVideos, options = {}) {
                         itemsFound: itemMap.size + count,
                         sourceItemsFound: count,
                         processedCount: pageNumber,
-                        totalCount: progressTotalCount,
+                        totalCount: progressCountEstimate.totalCount,
+                        hasConcreteTotalCount: progressCountEstimate.hasConcreteTotalCount,
                       }),
                     }, { persist: false });
                   },
@@ -14154,13 +14608,13 @@ function injectedFetchSource(config) {
       for (const source of candidateObjects) {
         for (const key of weakKeys) {
           const candidate = readCount(source[key]);
-          if (candidate && candidate >= normalizedObservedRowCount) {
+          if (candidate && candidate > normalizedObservedRowCount) {
             return candidate;
           }
         }
       }
 
-      return normalizedObservedRowCount;
+      return 0;
     }
 
     function pickFirstBoolean(candidates) {

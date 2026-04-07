@@ -69,6 +69,7 @@ export function syncFetchProgressPanel(state) {
   const hasConcreteSourceEstimate =
     progress &&
     progress.stage === "fetching-source" &&
+    progress.hasConcreteTotalCount === true &&
     estimatedTotalCount > 0 &&
     sourceItemsFound >= 0;
   const progressRatio = clampProgressRatio(
@@ -102,7 +103,11 @@ export function syncFetchProgressPanel(state) {
     "hidden",
     !detailText || detailText === dom.fetchProgressStage.textContent,
   );
-  dom.fetchProgressPercent.textContent = `${progressPercent}%`;
+  dom.fetchProgressPercent.textContent = isPaused
+    ? "Paused"
+    : progress && progress.stage === "fetching-source" && !hasConcreteSourceEstimate
+      ? "Live"
+      : `${progressPercent}%`;
   dom.fetchProgressFill.style.width = `${visibleWidth}%`;
   dom.fetchProgressSource.textContent = `${toTitleCase(currentSourceLabel)} • ${currentSourceIndex} of ${totalSources}`;
   dom.fetchProgressCount.textContent = hasConcreteSourceEstimate
