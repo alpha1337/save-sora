@@ -88,21 +88,20 @@ export async function handleViewFullscreenClick() {
   try {
     await saveRuntimeSettings({
       preferredViewMode: nextViewMode,
+      hasExplicitPreferredViewModeChoice: true,
     });
     await openRuntimeShell({
       viewMode: nextViewMode,
       tab: popupState.activeTab,
     });
 
-    if (popupState.isFullscreenView) {
-      window.setTimeout(() => {
-        try {
-          window.close();
-        } catch (_error) {
-          // The alternate shell has already opened, so a close failure is harmless.
-        }
-      }, 40);
-    }
+    window.setTimeout(() => {
+      try {
+        window.close();
+      } catch (_error) {
+        // The alternate shell has already opened, so a close failure is harmless.
+      }
+    }, 40);
   } catch (error) {
     showNotice(dom.errorBox, error instanceof Error ? error.message : String(error));
   }
@@ -255,6 +254,7 @@ async function saveSettingsFromForm() {
       defaultSort,
       theme,
       preferredViewMode,
+      hasExplicitPreferredViewModeChoice: true,
       downloadMode,
       hasExplicitDownloadModeChoice: true,
       automaticUpdatesEnabled,

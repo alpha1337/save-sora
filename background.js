@@ -36,6 +36,8 @@ const UPDATE_META_RECORD_KEY = "updater-meta";
 const UPDATE_PENDING_RECORD_KEY = "pending-update";
 const UPDATE_ROLLBACK_RECORD_KEY = "rollback-snapshot";
 const UPDATE_REOPEN_RECORD_KEY = "post-update-reopen";
+const UPDATE_CHECK_REQUEST_TIMEOUT_MS = 20000;
+const UPDATE_PACKAGE_IDLE_TIMEOUT_MS = 45000;
 const UPDATE_MANAGED_ROOT_ENTRIES = [
   "assets",
   "background.js",
@@ -868,6 +870,7 @@ function createDefaultState(overrides = {}) {
       downloadMode: "archive",
       hasExplicitDownloadModeChoice: false,
       preferredViewMode: "fullscreen",
+      hasExplicitPreferredViewModeChoice: false,
       automaticUpdatesEnabled: true,
     },
     startedAt: null,
@@ -894,6 +897,10 @@ function normalizeResumableFetchRequest(request) {
 
 function normalizePreferredViewMode(value) {
   return value === "fullscreen" ? "fullscreen" : "windowed";
+}
+
+function normalizeExplicitPreferredViewModeChoice(value) {
+  return value === true;
 }
 
 function normalizeDownloadMode(value) {
@@ -1430,6 +1437,7 @@ async function restoreUpdaterState() {
   const pendingRecord = await readUpdaterRecord(UPDATE_PENDING_RECORD_KEY);
   const metaRecord = await readUpdaterRecord(UPDATE_META_RECORD_KEY);
   const installFolderLinked = hasStoredInstallFolderHandle(installRecord);
+  const installFolderAccessible = Boolean(await getLinkedInstallFolderRecord());
   const automaticUpdatesEnabled = normalizeAutomaticUpdatesEnabled(
     currentState &&
       currentState.settings &&
@@ -1441,15 +1449,22 @@ async function restoreUpdaterState() {
     pendingRecord &&
     typeof pendingRecord.version === "string" &&
     compareSemver(pendingRecord.version, CURRENT_EXTENSION_VERSION) > 0;
+  const restoredMetaPhase =
+    metaRecord && typeof metaRecord.phase === "string" ? metaRecord.phase : "";
+  const restoredTransientPhase =
+    restoredMetaPhase === "checking" ||
+    restoredMetaPhase === "downloading" ||
+    restoredMetaPhase === "applying" ||
+    restoredMetaPhase === "reloading";
   const restoredPhase =
-    hasPendingNewerUpdate &&
-    metaRecord &&
-    metaRecord.phase !== "downloading" &&
-    metaRecord.phase !== "applying" &&
-    metaRecord.phase !== "reloading"
-      ? metaRecord && metaRecord.pendingDeferred === true
+    hasPendingNewerUpdate
+      ? !installFolderAccessible
+        ? "awaiting-folder"
+        : metaRecord && metaRecord.pendingDeferred === true
         ? "deferred"
         : "update-available"
+      : restoredTransientPhase
+        ? "idle"
       : metaRecord &&
           typeof metaRecord.phase === "string" &&
           metaRecord.phase &&
@@ -1517,22 +1532,38 @@ async function restoreUpdaterState() {
         : metaRecord && metaRecord.pendingUpdateReady === true,
     phase: effectiveRestoredPhase,
     message:
-      effectiveRestoredPhase === "idle" && metaRecord && metaRecord.phase === "reloading"
+      restoredTransientPhase ||
+      (effectiveRestoredPhase === "idle" && metaRecord && metaRecord.phase === "reloading")
         ? ""
         : metaRecord?.message,
     detail:
-      effectiveRestoredPhase === "idle" && metaRecord && metaRecord.phase === "reloading"
+      restoredTransientPhase ||
+      (effectiveRestoredPhase === "idle" && metaRecord && metaRecord.phase === "reloading")
         ? ""
         : metaRecord?.detail,
     progress:
-      effectiveRestoredPhase === "idle" && metaRecord && metaRecord.phase === "reloading"
-        ? 0
+      restoredTransientPhase
+        ? getRecoveredUpdateProgress(effectiveRestoredPhase)
+        : effectiveRestoredPhase === "idle" && metaRecord && metaRecord.phase === "reloading"
+          ? 0
         : metaRecord && Number.isFinite(Number(metaRecord.progress))
           ? Number(metaRecord.progress)
           : undefined,
   });
 
   await persistUpdateMeta();
+}
+
+function getRecoveredUpdateProgress(phase) {
+  switch (phase) {
+    case "awaiting-folder":
+      return 0.28;
+    case "update-available":
+    case "deferred":
+      return 0.34;
+    default:
+      return 0;
+  }
 }
 
 async function maybeReopenUpdatedAppShell() {
@@ -1744,8 +1775,41 @@ async function fetchJson(url) {
   return response.json();
 }
 
+async function fetchUpdaterJson(url) {
+  const controller = new AbortController();
+  const timeoutId = globalThis.setTimeout(() => {
+    controller.abort();
+  }, UPDATE_CHECK_REQUEST_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(url, {
+      cache: "no-store",
+      headers: {
+        accept: "application/json",
+      },
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      const error = new Error(`Request failed (${response.status}) while loading ${url}.`);
+      error.status = response.status;
+      error.url = url;
+      throw error;
+    }
+    return response.json();
+  } catch (error) {
+    if (error && error.name === "AbortError") {
+      const timeoutError = new Error("Timed out while checking GitHub for updates.");
+      timeoutError.url = url;
+      throw timeoutError;
+    }
+    throw error;
+  } finally {
+    globalThis.clearTimeout(timeoutId);
+  }
+}
+
 async function fetchGitHubReleases() {
-  const releases = await fetchJson(GITHUB_RELEASES_URL);
+  const releases = await fetchUpdaterJson(GITHUB_RELEASES_URL);
   return Array.isArray(releases) ? releases : [];
 }
 
@@ -1795,7 +1859,7 @@ async function fetchLatestReleaseManifest() {
     throw error;
   }
 
-  const manifest = await fetchJson(manifestAsset.browser_download_url);
+  const manifest = await fetchUpdaterJson(manifestAsset.browser_download_url);
   if (!manifest || typeof manifest !== "object") {
     throw new Error("The GitHub update manifest is invalid.");
   }
@@ -1842,20 +1906,51 @@ async function fetchLatestReleaseManifest() {
 }
 
 async function downloadBinaryWithProgress(url, onProgress) {
-  const response = await fetch(url, {
-    cache: "no-store",
-  });
+  const controller = new AbortController();
+  let timeoutId = globalThis.setTimeout(() => {
+    controller.abort();
+  }, UPDATE_PACKAGE_IDLE_TIMEOUT_MS);
+  const resetTimeout = () => {
+    globalThis.clearTimeout(timeoutId);
+    timeoutId = globalThis.setTimeout(() => {
+      controller.abort();
+    }, UPDATE_PACKAGE_IDLE_TIMEOUT_MS);
+  };
+
+  let response;
+  try {
+    response = await fetch(url, {
+      cache: "no-store",
+      signal: controller.signal,
+    });
+  } catch (error) {
+    globalThis.clearTimeout(timeoutId);
+    if (error && error.name === "AbortError") {
+      throw new Error("Timed out while downloading the update package.");
+    }
+    throw error;
+  }
   if (!response.ok) {
+    globalThis.clearTimeout(timeoutId);
     throw new Error(`Request failed (${response.status}) while downloading the update package.`);
   }
 
   const totalBytes = Number(response.headers.get("content-length")) || 0;
   if (!response.body || typeof response.body.getReader !== "function") {
-    const arrayBuffer = await response.arrayBuffer();
-    if (typeof onProgress === "function") {
-      onProgress(1, arrayBuffer.byteLength, arrayBuffer.byteLength || totalBytes);
+    try {
+      const arrayBuffer = await response.arrayBuffer();
+      if (typeof onProgress === "function") {
+        onProgress(1, arrayBuffer.byteLength, arrayBuffer.byteLength || totalBytes);
+      }
+      return arrayBuffer;
+    } catch (error) {
+      if (error && error.name === "AbortError") {
+        throw new Error("Timed out while downloading the update package.");
+      }
+      throw error;
+    } finally {
+      globalThis.clearTimeout(timeoutId);
     }
-    return arrayBuffer;
   }
 
   const reader = response.body.getReader();
@@ -1863,12 +1958,23 @@ async function downloadBinaryWithProgress(url, onProgress) {
   let receivedBytes = 0;
 
   while (true) {
-    const { done, value } = await reader.read();
+    let chunk;
+    try {
+      chunk = await reader.read();
+    } catch (error) {
+      globalThis.clearTimeout(timeoutId);
+      if (error && error.name === "AbortError") {
+        throw new Error("Timed out while downloading the update package.");
+      }
+      throw error;
+    }
+    const { done, value } = chunk;
     if (done) {
       break;
     }
 
     if (value && value.byteLength > 0) {
+      resetTimeout();
       chunks.push(value);
       receivedBytes += value.byteLength;
       if (typeof onProgress === "function") {
@@ -1877,18 +1983,22 @@ async function downloadBinaryWithProgress(url, onProgress) {
     }
   }
 
-  const merged = new Uint8Array(receivedBytes);
-  let offset = 0;
-  for (const chunk of chunks) {
-    merged.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
+  try {
+    const merged = new Uint8Array(receivedBytes);
+    let offset = 0;
+    for (const chunk of chunks) {
+      merged.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
 
-  if (typeof onProgress === "function") {
-    onProgress(1, receivedBytes, totalBytes || receivedBytes);
-  }
+    if (typeof onProgress === "function") {
+      onProgress(1, receivedBytes, totalBytes || receivedBytes);
+    }
 
-  return merged.buffer;
+    return merged.buffer;
+  } finally {
+    globalThis.clearTimeout(timeoutId);
+  }
 }
 
 async function digestSha256Hex(arrayBuffer) {
@@ -2371,11 +2481,10 @@ async function installPendingUpdate(options = {}) {
 
 async function runUpdateCheck(options = {}) {
   await ensureBackgroundRuntimeReady();
+  await restoreUpdaterState();
   if (isUpdaterBusyPhase()) {
     return buildUpdateStatusSnapshot();
   }
-
-  await restoreUpdaterState();
   const automaticUpdatesEnabled = normalizeAutomaticUpdatesEnabled(
     currentState &&
       currentState.settings &&
@@ -4190,7 +4299,14 @@ async function restoreState() {
         hasExplicitDownloadModeChoice: normalizeExplicitDownloadModeChoice(
           currentState.settings.hasExplicitDownloadModeChoice,
         ),
-        preferredViewMode: normalizePreferredViewMode(currentState.settings.preferredViewMode),
+        hasExplicitPreferredViewModeChoice: normalizeExplicitPreferredViewModeChoice(
+          currentState.settings.hasExplicitPreferredViewModeChoice,
+        ),
+        preferredViewMode: normalizeExplicitPreferredViewModeChoice(
+          currentState.settings.hasExplicitPreferredViewModeChoice,
+        )
+          ? normalizePreferredViewMode(currentState.settings.preferredViewMode)
+          : "fullscreen",
         automaticUpdatesEnabled: normalizeAutomaticUpdatesEnabled(
           currentState.settings.automaticUpdatesEnabled,
         ),
@@ -7977,10 +8093,27 @@ async function updateSettings(nextSettings) {
     );
   }
 
+  if (
+    nextSettings &&
+    Object.prototype.hasOwnProperty.call(nextSettings, "hasExplicitPreferredViewModeChoice")
+  ) {
+    settings.hasExplicitPreferredViewModeChoice = normalizeExplicitPreferredViewModeChoice(
+      nextSettings.hasExplicitPreferredViewModeChoice,
+    );
+  } else {
+    settings.hasExplicitPreferredViewModeChoice = normalizeExplicitPreferredViewModeChoice(
+      settings.hasExplicitPreferredViewModeChoice,
+    );
+  }
+
   if (nextSettings && Object.prototype.hasOwnProperty.call(nextSettings, "preferredViewMode")) {
     settings.preferredViewMode = normalizePreferredViewMode(nextSettings.preferredViewMode);
   } else {
     settings.preferredViewMode = normalizePreferredViewMode(settings.preferredViewMode);
+  }
+
+  if (settings.hasExplicitPreferredViewModeChoice !== true) {
+    settings.preferredViewMode = "fullscreen";
   }
 
   if (

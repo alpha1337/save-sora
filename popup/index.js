@@ -42,30 +42,32 @@ async function maybeRedirectToPreferredShell(viewContext) {
     return false;
   }
 
+  let preferredViewMode = "fullscreen";
+
   try {
     const state = await fetchRuntimeState();
-    const preferredViewMode =
+    preferredViewMode =
       state &&
       state.settings &&
       typeof state.settings === "object" &&
       state.settings.preferredViewMode === "windowed"
         ? "windowed"
         : "fullscreen";
-
-    await openRuntimeShell({
-      viewMode: preferredViewMode,
-      tab: viewContext.initialTab,
-    });
-
-    window.setTimeout(() => {
-      try {
-        window.close();
-      } catch (_error) {
-        // The preferred shell has already opened, so a close failure is harmless.
-      }
-    }, 40);
-    return true;
   } catch (_error) {
-    return false;
+    preferredViewMode = "fullscreen";
   }
+
+  await openRuntimeShell({
+    viewMode: preferredViewMode,
+    tab: viewContext.initialTab,
+  });
+
+  window.setTimeout(() => {
+    try {
+      window.close();
+    } catch (_error) {
+      // The preferred shell has already opened, so a close failure is harmless.
+    }
+  }, 40);
+  return true;
 }
