@@ -306,6 +306,9 @@ export async function handleClearSelectionClick() {
  * Puts the popup into a temporary "fetch in progress" presentation.
  */
 function preparePendingFetchUi() {
+  popupState.resultsPageSize = popupState.resultsChunkSize;
+  popupState.resultsCanLoadMore = false;
+  popupState.resultsLoadInFlight = false;
   dom.itemsList?.classList.add("hidden");
   dom.characterSelectionGrid?.classList.add("hidden");
   dom.emptyState?.classList.add("hidden");

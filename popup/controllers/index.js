@@ -1,5 +1,5 @@
 import { dom } from "../dom.js";
-import { setActiveTab, updateBackToTopVisibility } from "../ui/layout.js";
+import { setActiveTab } from "../ui/layout.js";
 import {
   handleFetchProgressActionClick,
   handleFetchProgressPauseActionClick,
@@ -24,8 +24,7 @@ import {
   handleClearVolatileBackupsClick,
   handleCreatorResultsTabClick,
   handleMaxVideosInput,
-  handleResultsPageNextClick,
-  handleResultsPagePrevClick,
+  handlePickerScroll,
   handleSearchInput,
   handleSettingsBlur,
   handleSettingsChange,
@@ -89,8 +88,6 @@ export function initializeEventHandlers() {
   dom.itemsList?.addEventListener("focusout", handleItemsListFocusOut);
   dom.searchInput?.addEventListener("input", handleSearchInput);
   dom.creatorResultsTabs?.addEventListener("click", handleCreatorResultsTabClick);
-  dom.resultsPagePrev?.addEventListener("click", handleResultsPagePrevClick);
-  dom.resultsPageNext?.addEventListener("click", handleResultsPageNextClick);
   dom.sortSelect?.addEventListener("change", handleSortChange);
   dom.themeToggle?.addEventListener("change", handleThemeToggleChange);
   dom.viewFullscreenButton?.addEventListener("click", handleViewFullscreenClick);
@@ -131,7 +128,7 @@ export function initializeEventHandlers() {
   document.addEventListener("visibilitychange", handleVisibilityChange);
   document.addEventListener("click", handleSourceMenuDocumentClick);
   document.addEventListener("keydown", handleSourceMenuDocumentKeydown);
-  dom.pickerScrollRegion?.addEventListener("scroll", updateBackToTopVisibility);
+  dom.pickerScrollRegion?.addEventListener("scroll", handlePickerScroll);
   dom.backToTopButton?.addEventListener("click", handleBackToTopClick);
 
   syncSourceMenuLabels();

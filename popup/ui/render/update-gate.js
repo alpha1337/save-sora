@@ -12,6 +12,14 @@ const ACTIVE_UPDATE_PHASES = new Set([
   "error",
 ]);
 
+const FETCH_SAFE_BACKGROUND_UPDATE_PHASES = new Set([
+  "checking",
+  "awaiting-folder",
+  "update-available",
+  "deferred",
+  "error",
+]);
+
 export function syncUpdateSurfaces(updateStatus) {
   const normalizedStatus = normalizeUpdateStatus(updateStatus);
   popupState.latestUpdateStatus = normalizedStatus;
@@ -65,8 +73,13 @@ function syncUpdateGate(updateStatus) {
     popupState.skippedUpdateVersion &&
     popupState.skippedUpdateVersion === pendingVersion;
   const dismissedErrorForSession = popupState.updateGateHidden && updateStatus.phase === "error";
+  const activeFetchPhase =
+    popupState.currentPhase === "fetching" || popupState.currentPhase === "fetch-paused";
+  const shouldSuppressForActiveFetch =
+    activeFetchPhase && FETCH_SAFE_BACKGROUND_UPDATE_PHASES.has(updateStatus.phase);
   const shouldShow =
     ACTIVE_UPDATE_PHASES.has(updateStatus.phase) &&
+    !shouldSuppressForActiveFetch &&
     !dismissedErrorForSession &&
     !(skippedThisSession && (updateStatus.phase === "update-available" || updateStatus.phase === "deferred"));
 

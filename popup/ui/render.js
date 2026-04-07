@@ -65,9 +65,7 @@ export function renderState(state) {
   const selectedKeys = Array.isArray(state && state.selectedKeys) ? state.selectedKeys : [];
   const popupTotalItemCount = Number(state && state.popupTotalItemCount);
   const popupSelectedCountTotal = Number(state && state.popupSelectedCountTotal);
-  const popupPageIndex = Number(state && state.popupPageIndex);
-  const popupPageCount = Number(state && state.popupPageCount);
-  const popupPageSize = Number(state && state.popupPageSize);
+  const popupVisibleItemCount = Number(state && state.popupVisibleItemCount);
   const titleOverrides =
     state && state.titleOverrides && typeof state.titleOverrides === "object"
       ? state.titleOverrides
@@ -117,6 +115,8 @@ export function renderState(state) {
     stopFetchStatusRotation();
   }
 
+  popupState.currentPhase = phase;
+
   syncSettingsInputs(settings, {
     theme,
     defaultSource,
@@ -159,12 +159,11 @@ export function renderState(state) {
 
   popupState.latestBusy = isBusy;
   popupState.latestPaused = isPaused;
-  popupState.resultsPageIndex =
-    Number.isFinite(popupPageIndex) && popupPageIndex >= 0 ? popupPageIndex : 0;
-  popupState.resultsPageCount =
-    Number.isFinite(popupPageCount) && popupPageCount > 0 ? popupPageCount : 1;
-  popupState.resultsPageSize =
-    Number.isFinite(popupPageSize) && popupPageSize > 0 ? popupPageSize : popupState.resultsPageSize;
+  popupState.resultsCanLoadMore =
+    Number.isFinite(popupTotalItemCount) &&
+    popupTotalItemCount > items.length &&
+    (!Number.isFinite(popupVisibleItemCount) || popupVisibleItemCount <= popupTotalItemCount);
+  popupState.resultsLoadInFlight = false;
   popupState.latestRuntimeState = state && typeof state === "object" ? state : null;
   popupState.characterAccounts = Array.isArray(state && state.characterAccounts)
     ? state.characterAccounts
@@ -189,7 +188,6 @@ export function renderState(state) {
   };
 
   syncFetchProgressPanel(state);
-  syncResultsPager(state);
   updateDownloadOverlay(state);
 
   if (!isEditingTitleInput()) {
@@ -199,32 +197,6 @@ export function renderState(state) {
   updateAppScrollLock();
   updateBackToTopVisibility();
   syncPrimaryControls({ isBusy, isPaused, isFetching, isFetchPaused, hasResults });
-}
-
-function syncResultsPager(state) {
-  if (
-    !(dom.resultsPager instanceof HTMLElement) ||
-    !(dom.resultsPagePrev instanceof HTMLButtonElement) ||
-    !(dom.resultsPageStatus instanceof HTMLElement) ||
-    !(dom.resultsPageNext instanceof HTMLButtonElement)
-  ) {
-    return;
-  }
-
-  const pageCount = Number(state && state.popupPageCount);
-  const pageIndex = Number(state && state.popupPageIndex);
-  const isVisible = Number.isFinite(pageCount) && pageCount > 1;
-
-  dom.resultsPager.classList.toggle("hidden", !isVisible);
-  if (!isVisible) {
-    return;
-  }
-
-  const safePageCount = Math.max(1, Math.floor(pageCount));
-  const safePageIndex = Math.max(0, Math.min(safePageCount - 1, Math.floor(pageIndex || 0)));
-  dom.resultsPageStatus.textContent = `Page ${safePageIndex + 1} of ${safePageCount}`;
-  dom.resultsPagePrev.disabled = safePageIndex <= 0;
-  dom.resultsPageNext.disabled = safePageIndex >= safePageCount - 1;
 }
 
 /**

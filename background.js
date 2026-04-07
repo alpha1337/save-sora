@@ -860,12 +860,14 @@ function createDefaultFetchProgress(overrides = {}) {
     stageLabel: "",
     detail: "",
     progressRatio: 0,
+    displayRatio: 0,
     currentSource: null,
     currentSourceLabel: "",
     queueLabels: [],
     currentSourceIndex: 0,
     totalSources: 0,
     itemsFound: 0,
+    sourceItemsFound: 0,
     processedCount: 0,
     totalCount: 0,
     ...overrides,
@@ -894,6 +896,31 @@ function clampFetchProgressRatio(value) {
   return Math.max(0, Math.min(1, numeric));
 }
 
+function normalizeEstimatedFetchCount(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return 0;
+  }
+
+  return Math.max(0, Math.floor(numeric));
+}
+
+function mergeEstimatedFetchTotalCount(currentEstimate, nextEstimate, observedCount = 0, maxItems = null) {
+  const normalizedObservedCount = normalizeEstimatedFetchCount(observedCount);
+  const normalizedEstimate = Math.max(
+    normalizeEstimatedFetchCount(currentEstimate),
+    normalizeEstimatedFetchCount(nextEstimate),
+    normalizedObservedCount,
+  );
+
+  const normalizedMaxItems = normalizeMaxVideos(maxItems);
+  if (!normalizedMaxItems) {
+    return normalizedEstimate;
+  }
+
+  return Math.min(normalizedMaxItems, normalizedEstimate || normalizedObservedCount);
+}
+
 function getFetchSourceLabel(source) {
   if (source === "profile") {
     return "published videos";
@@ -920,6 +947,63 @@ function getFetchSourceLabel(source) {
   }
 
   return "videos";
+}
+
+function getExpectedCharacterAccountSelectionCount(characterAccounts, selectedCharacterAccountIds) {
+  const normalizedCharacterAccounts = normalizeCharacterAccounts(characterAccounts);
+  const selectedIds = new Set(
+    normalizeSelectedCharacterAccountIds(
+      normalizedCharacterAccounts,
+      selectedCharacterAccountIds,
+      [],
+      { allowEmpty: true },
+    ),
+  );
+
+  if (selectedIds.size === 0) {
+    return 0;
+  }
+
+  let expectedCount = 0;
+  for (const account of normalizedCharacterAccounts) {
+    if (!selectedIds.has(account.userId)) {
+      continue;
+    }
+
+    expectedCount += normalizeEstimatedFetchCount(account.postCount);
+    expectedCount += normalizeEstimatedFetchCount(account.cameoCount);
+  }
+
+  return expectedCount;
+}
+
+function getExpectedCharacterAppearanceCount(characterAccounts) {
+  return normalizeCharacterAccounts(characterAccounts).reduce(
+    (sum, account) => sum + normalizeEstimatedFetchCount(account.cameoCount),
+    0,
+  );
+}
+
+function getExpectedFetchCountForSource(source, options = {}) {
+  if (source === "creators") {
+    return getExpectedCreatorSelectionCount(
+      options.creatorProfiles,
+      options.selectedCreatorProfileIds,
+    );
+  }
+
+  if (source === "characterAccounts") {
+    return getExpectedCharacterAccountSelectionCount(
+      options.characterAccounts,
+      options.selectedCharacterAccountIds,
+    );
+  }
+
+  if (source === "characters") {
+    return getExpectedCharacterAppearanceCount(options.characterAccounts);
+  }
+
+  return 0;
 }
 
 function getFetchSourceProgressRatio(sourceIndex, totalSources, pageNumber = 0) {
@@ -3328,7 +3412,7 @@ function getPopupPageSize(value) {
     return 120;
   }
 
-  return Math.max(25, Math.min(250, Math.floor(numeric)));
+  return Math.max(25, Math.min(50000, Math.floor(numeric)));
 }
 
 function getCreatorScopedTabKey(item) {
@@ -3487,7 +3571,6 @@ async function buildPopupStateSnapshotForView(state = currentState, options = {}
   }
 
   const pageSize = getPopupPageSize(options.pageSize);
-  const requestedPageIndex = Math.max(0, Math.floor(Number(options.pageIndex) || 0));
   const sortKey = typeof options.sortKey === "string" && options.sortKey ? options.sortKey : "newest";
   const query = typeof options.query === "string" ? options.query : "";
   const creatorTab =
@@ -3518,11 +3601,8 @@ async function buildPopupStateSnapshotForView(state = currentState, options = {}
   );
   const sortedItems = getSortedPopupItems(queryFilteredItems, sortKey);
   const totalItemCount = sortedItems.length;
-  const pageCount = Math.max(1, Math.ceil(Math.max(0, totalItemCount) / pageSize));
-  const pageIndex = Math.min(requestedPageIndex, Math.max(0, pageCount - 1));
-  const pageStart = pageIndex * pageSize;
   const pageItems = sortedItems
-    .slice(pageStart, pageStart + pageSize)
+    .slice(0, pageSize)
     .map((item) => compactItemForPopup(item))
     .filter(Boolean);
   const visibleKeys = new Set(pageItems.map((item) => getCanonicalItemKey(item)));
@@ -3541,8 +3621,8 @@ async function buildPopupStateSnapshotForView(state = currentState, options = {}
     popupHiddenItemCount: Math.max(0, totalItemCount - pageItems.length),
     popupTotalItemCount: totalItemCount,
     popupSelectedCountTotal: selectedKeysTotal,
-    popupPageIndex: pageIndex,
-    popupPageCount: pageCount,
+    popupPageIndex: 0,
+    popupPageCount: 1,
     popupPageSize: pageSize,
   };
 }
@@ -8123,6 +8203,17 @@ async function collectItems(sources, maxVideos, options = {}) {
     }
 
     const sourceLabel = getFetchSourceLabel(source);
+    const sourceExpectedTotalCount = mergeEstimatedFetchTotalCount(
+      getExpectedFetchCountForSource(source, {
+        characterAccounts: currentState.characterAccounts,
+        selectedCharacterAccountIds,
+        creatorProfiles: currentState.creatorProfiles,
+        selectedCreatorProfileIds,
+      }),
+      0,
+      0,
+      maxRemaining,
+    );
     let sourceVolatileBackupSessionKey = "";
     let sourceVolatileBackupResumeMeta = null;
     let sourceVolatileBackupSelectionSignature = "";
@@ -8202,8 +8293,10 @@ async function collectItems(sources, maxVideos, options = {}) {
         currentSourceIndex: sourceIndex + 1,
         totalSources: sources.length,
         itemsFound: itemMap.size,
+        sourceItemsFound: 0,
         processedCount: 0,
-        totalCount: 0,
+        totalCount: sourceExpectedTotalCount,
+        displayRatio: 0,
       }),
     }, { persist: false });
 
@@ -8221,7 +8314,13 @@ async function collectItems(sources, maxVideos, options = {}) {
               getVolatileBackupProgressKey("profile", VOLATILE_BACKUP_DEFAULT_SCOPE_ID)
             ],
           baseCount: itemMap.size,
-          onProgress: async ({ count, pageNumber, message }) => {
+          onProgress: async ({ count, pageNumber, message, estimatedTotalCount }) => {
+            const progressTotalCount = mergeEstimatedFetchTotalCount(
+              sourceExpectedTotalCount,
+              estimatedTotalCount,
+              count,
+              maxRemaining,
+            );
             await setState({
               fetchedCount: itemMap.size + count,
               message: message || `Fetching published videos... ${itemMap.size + count} found so far.`,
@@ -8230,13 +8329,16 @@ async function collectItems(sources, maxVideos, options = {}) {
                 stageLabel: `Loading ${sourceLabel}`,
                 detail: message || `Fetching ${sourceLabel}...`,
                 progressRatio: getFetchSourceProgressRatio(sourceIndex, sources.length, pageNumber),
+                displayRatio:
+                  progressTotalCount > 0 ? clampFetchProgressRatio(count / progressTotalCount) : 0,
                 currentSource: source,
                 currentSourceLabel: sourceLabel,
                 currentSourceIndex: sourceIndex + 1,
                 totalSources: sources.length,
                 itemsFound: itemMap.size + count,
+                sourceItemsFound: count,
                 processedCount: pageNumber,
-                totalCount: 0,
+                totalCount: progressTotalCount,
               }),
             }, { persist: false });
           },
@@ -8254,7 +8356,13 @@ async function collectItems(sources, maxVideos, options = {}) {
                 getVolatileBackupProgressKey("drafts", VOLATILE_BACKUP_DEFAULT_SCOPE_ID)
               ],
             baseCount: itemMap.size,
-            onProgress: async ({ count, pageNumber, message }) => {
+            onProgress: async ({ count, pageNumber, message, estimatedTotalCount }) => {
+              const progressTotalCount = mergeEstimatedFetchTotalCount(
+                sourceExpectedTotalCount,
+                estimatedTotalCount,
+                count,
+                maxRemaining,
+              );
               await setState({
                 fetchedCount: itemMap.size + count,
                 message: message || `Fetching drafts... ${itemMap.size + count} found so far.`,
@@ -8263,13 +8371,16 @@ async function collectItems(sources, maxVideos, options = {}) {
                   stageLabel: `Loading ${sourceLabel}`,
                   detail: message || `Fetching ${sourceLabel}...`,
                   progressRatio: getFetchSourceProgressRatio(sourceIndex, sources.length, pageNumber),
+                  displayRatio:
+                    progressTotalCount > 0 ? clampFetchProgressRatio(count / progressTotalCount) : 0,
                   currentSource: source,
                   currentSourceLabel: sourceLabel,
                   currentSourceIndex: sourceIndex + 1,
                   totalSources: sources.length,
                   itemsFound: itemMap.size + count,
+                  sourceItemsFound: count,
                   processedCount: pageNumber,
-                  totalCount: 0,
+                  totalCount: progressTotalCount,
                 }),
               }, { persist: false });
             },
@@ -8287,7 +8398,13 @@ async function collectItems(sources, maxVideos, options = {}) {
                   getVolatileBackupProgressKey("likes", VOLATILE_BACKUP_DEFAULT_SCOPE_ID)
                 ],
               baseCount: itemMap.size,
-              onProgress: async ({ count, pageNumber, message }) => {
+              onProgress: async ({ count, pageNumber, message, estimatedTotalCount }) => {
+                const progressTotalCount = mergeEstimatedFetchTotalCount(
+                  sourceExpectedTotalCount,
+                  estimatedTotalCount,
+                  count,
+                  maxRemaining,
+                );
                 await setState({
                   fetchedCount: itemMap.size + count,
                   message: message || `Fetching liked videos... ${itemMap.size + count} found so far.`,
@@ -8296,13 +8413,16 @@ async function collectItems(sources, maxVideos, options = {}) {
                     stageLabel: `Loading ${sourceLabel}`,
                     detail: message || `Fetching ${sourceLabel}...`,
                     progressRatio: getFetchSourceProgressRatio(sourceIndex, sources.length, pageNumber),
+                    displayRatio:
+                      progressTotalCount > 0 ? clampFetchProgressRatio(count / progressTotalCount) : 0,
                     currentSource: source,
                     currentSourceLabel: sourceLabel,
                     currentSourceIndex: sourceIndex + 1,
                     totalSources: sources.length,
                     itemsFound: itemMap.size + count,
+                    sourceItemsFound: count,
                     processedCount: pageNumber,
-                    totalCount: 0,
+                    totalCount: progressTotalCount,
                   }),
                 }, { persist: false });
               },
@@ -8315,7 +8435,13 @@ async function collectItems(sources, maxVideos, options = {}) {
                 selectionSignature: sourceVolatileBackupSelectionSignature,
                 volatileBackupResumeMeta: sourceVolatileBackupResumeMeta,
                 baseCount: itemMap.size,
-                onProgress: async ({ count, pageNumber, message }) => {
+                onProgress: async ({ count, pageNumber, message, estimatedTotalCount }) => {
+                  const progressTotalCount = mergeEstimatedFetchTotalCount(
+                    sourceExpectedTotalCount,
+                    estimatedTotalCount,
+                    count,
+                    maxRemaining,
+                  );
                   await setState({
                     fetchedCount: itemMap.size + count,
                     message: message || `Fetching cameo videos... ${itemMap.size + count} found so far.`,
@@ -8324,13 +8450,16 @@ async function collectItems(sources, maxVideos, options = {}) {
                       stageLabel: `Loading ${sourceLabel}`,
                       detail: message || `Fetching ${sourceLabel}...`,
                       progressRatio: getFetchSourceProgressRatio(sourceIndex, sources.length, pageNumber),
+                      displayRatio:
+                        progressTotalCount > 0 ? clampFetchProgressRatio(count / progressTotalCount) : 0,
                       currentSource: source,
                       currentSourceLabel: sourceLabel,
                       currentSourceIndex: sourceIndex + 1,
                       totalSources: sources.length,
                       itemsFound: itemMap.size + count,
+                      sourceItemsFound: count,
                       processedCount: pageNumber,
-                      totalCount: 0,
+                      totalCount: progressTotalCount,
                     }),
                   }, { persist: false });
                 },
@@ -8345,7 +8474,13 @@ async function collectItems(sources, maxVideos, options = {}) {
                 selectionSignature: sourceVolatileBackupSelectionSignature,
                 volatileBackupResumeMeta: sourceVolatileBackupResumeMeta,
                 baseCount: itemMap.size,
-                onProgress: async ({ count, pageNumber, message }) => {
+                onProgress: async ({ count, pageNumber, message, estimatedTotalCount }) => {
+                  const progressTotalCount = mergeEstimatedFetchTotalCount(
+                    sourceExpectedTotalCount,
+                    estimatedTotalCount,
+                    count,
+                    maxRemaining,
+                  );
                   await setState({
                     fetchedCount: itemMap.size + count,
                     message: message || `Fetching character videos... ${itemMap.size + count} found so far.`,
@@ -8354,13 +8489,16 @@ async function collectItems(sources, maxVideos, options = {}) {
                       stageLabel: `Loading ${sourceLabel}`,
                       detail: message || `Fetching ${sourceLabel}...`,
                       progressRatio: getFetchSourceProgressRatio(sourceIndex, sources.length, pageNumber),
+                      displayRatio:
+                        progressTotalCount > 0 ? clampFetchProgressRatio(count / progressTotalCount) : 0,
                       currentSource: source,
                       currentSourceLabel: sourceLabel,
                       currentSourceIndex: sourceIndex + 1,
                       totalSources: sources.length,
                       itemsFound: itemMap.size + count,
+                      sourceItemsFound: count,
                       processedCount: pageNumber,
-                      totalCount: 0,
+                      totalCount: progressTotalCount,
                     }),
                   }, { persist: false });
                 },
@@ -8375,7 +8513,20 @@ async function collectItems(sources, maxVideos, options = {}) {
                     enableVolatileBackup === true ? sourceVolatileBackupSessionKey : "",
                   volatileBackupResumeMeta:
                     enableVolatileBackup === true ? sourceVolatileBackupResumeMeta : null,
-                  onProgress: async ({ count, pageNumber, message, previewItems, backedUpItemCount: previewBackedUpItemCount }) => {
+                  onProgress: async ({
+                    count,
+                    pageNumber,
+                    message,
+                    previewItems,
+                    backedUpItemCount: previewBackedUpItemCount,
+                    estimatedTotalCount,
+                  }) => {
+                    const progressTotalCount = mergeEstimatedFetchTotalCount(
+                      sourceExpectedTotalCount,
+                      estimatedTotalCount,
+                      count,
+                      maxRemaining,
+                    );
                     if (Array.isArray(previewItems) && previewItems.length > 0) {
                       const previewItemMap = new Map(
                         [...itemMap.values()].map((item) => [item.key || getItemKey(item), item]),
@@ -8431,13 +8582,18 @@ async function collectItems(sources, maxVideos, options = {}) {
                         stageLabel: `Loading ${sourceLabel}`,
                         detail: message || `Fetching ${sourceLabel}...`,
                         progressRatio: getFetchSourceProgressRatio(sourceIndex, sources.length, pageNumber),
+                        displayRatio:
+                          progressTotalCount > 0
+                            ? clampFetchProgressRatio(count / progressTotalCount)
+                            : 0,
                         currentSource: source,
                         currentSourceLabel: sourceLabel,
                         currentSourceIndex: sourceIndex + 1,
                         totalSources: sources.length,
                         itemsFound: itemMap.size + count,
+                        sourceItemsFound: count,
                         processedCount: pageNumber,
-                        totalCount: 0,
+                        totalCount: progressTotalCount,
                       }),
                     }, { persist: false });
                   },
@@ -8525,8 +8681,10 @@ async function collectItems(sources, maxVideos, options = {}) {
         currentSourceIndex: sourceIndex + 1,
         totalSources: sources.length,
         itemsFound: itemMap.size + backedUpItemCount,
+        sourceItemsFound: 0,
         processedCount: sourceIndex + 1,
         totalCount: sources.length,
+        displayRatio: 0,
       }),
     }, { persist: false });
     await yieldForUi();
@@ -8655,6 +8813,7 @@ async function fetchAllProfileItems(options = {}) {
   let cursor = null;
   let previousCursor = null;
   let totalItemCount = 0;
+  let estimatedTotalCount = normalizeEstimatedFetchCount(options && options.estimatedTotalCount);
   let backedUpItemCount = 0;
   let usesVolatileBackup = false;
 
@@ -8695,6 +8854,7 @@ async function fetchAllProfileItems(options = {}) {
     await options.onProgress({
       count: totalItemCount,
       pageNumber: 0,
+      estimatedTotalCount,
     });
   }
 
@@ -8711,6 +8871,12 @@ async function fetchAllProfileItems(options = {}) {
     }
     items.push(...page.items);
     totalItemCount = items.length;
+    estimatedTotalCount = mergeEstimatedFetchTotalCount(
+      estimatedTotalCount,
+      page.estimatedTotalCount,
+      totalItemCount,
+      maxItems,
+    );
 
     if (maxItems && items.length > maxItems) {
       items.length = maxItems;
@@ -8738,6 +8904,7 @@ async function fetchAllProfileItems(options = {}) {
       await options.onProgress({
         count: totalItemCount,
         pageNumber: pageNumber + 1,
+        estimatedTotalCount,
       });
     }
 
@@ -8789,6 +8956,7 @@ async function fetchAllProfileItems(options = {}) {
     partialWarning: "",
     isExhaustive,
     totalItemCount,
+    estimatedTotalCount,
     backedUpItemCount,
     usesVolatileBackup,
   };
@@ -8808,6 +8976,7 @@ async function fetchAllDraftItems(options = {}) {
   let previousCursor = null;
   let offset = 0;
   let totalItemCount = 0;
+  let estimatedTotalCount = normalizeEstimatedFetchCount(options && options.estimatedTotalCount);
   let backedUpItemCount = 0;
   let usesVolatileBackup = false;
 
@@ -8854,6 +9023,7 @@ async function fetchAllDraftItems(options = {}) {
     await options.onProgress({
       count: totalItemCount,
       pageNumber: 0,
+      estimatedTotalCount,
     });
   }
 
@@ -8883,6 +9053,12 @@ async function fetchAllDraftItems(options = {}) {
       items.length = maxItems;
     }
     totalItemCount = items.length;
+    estimatedTotalCount = mergeEstimatedFetchTotalCount(
+      estimatedTotalCount,
+      page.estimatedTotalCount,
+      totalItemCount,
+      maxItems,
+    );
 
     if (shouldBackupItems && page.items.length > 0) {
       try {
@@ -8905,6 +9081,7 @@ async function fetchAllDraftItems(options = {}) {
       await options.onProgress({
         count: totalItemCount,
         pageNumber: pageNumber + 1,
+        estimatedTotalCount,
       });
     }
 
@@ -8916,6 +9093,7 @@ async function fetchAllDraftItems(options = {}) {
         items,
         partialWarning: "",
         isExhaustive: false,
+        estimatedTotalCount,
       };
     }
 
@@ -8953,6 +9131,7 @@ async function fetchAllDraftItems(options = {}) {
         partialWarning: "",
         isExhaustive: false,
         totalItemCount,
+        estimatedTotalCount,
         backedUpItemCount,
         usesVolatileBackup,
       };
@@ -8965,6 +9144,7 @@ async function fetchAllDraftItems(options = {}) {
         partialWarning: "",
         isExhaustive: true,
         totalItemCount,
+        estimatedTotalCount,
         backedUpItemCount,
         usesVolatileBackup,
       };
@@ -8983,6 +9163,7 @@ async function fetchAllDraftItems(options = {}) {
         partialWarning: "",
         isExhaustive: true,
         totalItemCount,
+        estimatedTotalCount,
         backedUpItemCount,
         usesVolatileBackup,
       };
@@ -8997,6 +9178,7 @@ async function fetchAllDraftItems(options = {}) {
     partialWarning: "Stopped fetching drafts after many batches to avoid an infinite loop.",
     isExhaustive: false,
     totalItemCount: [...itemMap.values()].slice(0, maxItems || undefined).length,
+    estimatedTotalCount,
     backedUpItemCount,
     usesVolatileBackup,
   };
@@ -9016,6 +9198,7 @@ async function fetchAllLikesItems(options = {}) {
   let cursor = null;
   let previousCursor = null;
   let totalItemCount = 0;
+  let estimatedTotalCount = normalizeEstimatedFetchCount(options && options.estimatedTotalCount);
   let backedUpItemCount = 0;
   let usesVolatileBackup = false;
 
@@ -9056,6 +9239,7 @@ async function fetchAllLikesItems(options = {}) {
     await options.onProgress({
       count: totalItemCount,
       pageNumber: 0,
+      estimatedTotalCount,
     });
   }
 
@@ -9071,6 +9255,12 @@ async function fetchAllLikesItems(options = {}) {
     }
     items.push(...page.items);
     totalItemCount = items.length;
+    estimatedTotalCount = mergeEstimatedFetchTotalCount(
+      estimatedTotalCount,
+      page.estimatedTotalCount,
+      totalItemCount,
+      maxItems,
+    );
 
     if (maxItems && items.length > maxItems) {
       items.length = maxItems;
@@ -9098,6 +9288,7 @@ async function fetchAllLikesItems(options = {}) {
       await options.onProgress({
         count: totalItemCount,
         pageNumber: pageNumber + 1,
+        estimatedTotalCount,
       });
     }
 
@@ -9149,6 +9340,7 @@ async function fetchAllLikesItems(options = {}) {
     partialWarning: "",
     isExhaustive,
     totalItemCount,
+    estimatedTotalCount,
     backedUpItemCount,
     usesVolatileBackup,
   };
@@ -9172,6 +9364,7 @@ async function fetchAllCharacterAppearanceItems(options = {}) {
   let cursor = null;
   let previousCursor = null;
   let totalItemCount = 0;
+  let estimatedTotalCount = normalizeEstimatedFetchCount(options && options.estimatedTotalCount);
   let backedUpItemCount = 0;
   let usesVolatileBackup = false;
 
@@ -9212,6 +9405,7 @@ async function fetchAllCharacterAppearanceItems(options = {}) {
     await options.onProgress({
       count: totalItemCount,
       pageNumber: 0,
+      estimatedTotalCount,
     });
   }
 
@@ -9227,6 +9421,12 @@ async function fetchAllCharacterAppearanceItems(options = {}) {
     }
     items.push(...page.items);
     totalItemCount = items.length;
+    estimatedTotalCount = mergeEstimatedFetchTotalCount(
+      estimatedTotalCount,
+      page.estimatedTotalCount,
+      totalItemCount,
+      maxItems,
+    );
 
     if (maxItems && items.length > maxItems) {
       items.length = maxItems;
@@ -9254,6 +9454,7 @@ async function fetchAllCharacterAppearanceItems(options = {}) {
       await options.onProgress({
         count: totalItemCount,
         pageNumber: pageNumber + 1,
+        estimatedTotalCount,
       });
     }
 
@@ -9305,6 +9506,7 @@ async function fetchAllCharacterAppearanceItems(options = {}) {
     partialWarning: "",
     isExhaustive,
     totalItemCount,
+    estimatedTotalCount,
     backedUpItemCount,
     usesVolatileBackup,
   };
@@ -9327,6 +9529,7 @@ async function fetchAllCharacterDraftItems(options = {}) {
   let cursor = null;
   let previousCursor = null;
   let totalItemCount = 0;
+  let estimatedTotalCount = normalizeEstimatedFetchCount(options && options.estimatedTotalCount);
   let backedUpItemCount = 0;
   let usesVolatileBackup = false;
 
@@ -9367,6 +9570,7 @@ async function fetchAllCharacterDraftItems(options = {}) {
     await options.onProgress({
       count: totalItemCount,
       pageNumber: 0,
+      estimatedTotalCount,
     });
   }
 
@@ -9382,6 +9586,12 @@ async function fetchAllCharacterDraftItems(options = {}) {
     }
     items.push(...page.items);
     totalItemCount = items.length;
+    estimatedTotalCount = mergeEstimatedFetchTotalCount(
+      estimatedTotalCount,
+      page.estimatedTotalCount,
+      totalItemCount,
+      maxItems,
+    );
 
     if (maxItems && items.length > maxItems) {
       items.length = maxItems;
@@ -9409,6 +9619,7 @@ async function fetchAllCharacterDraftItems(options = {}) {
       await options.onProgress({
         count: totalItemCount,
         pageNumber: pageNumber + 1,
+        estimatedTotalCount,
       });
     }
 
@@ -9462,6 +9673,7 @@ async function fetchAllCharacterDraftItems(options = {}) {
     partialWarning: "",
     isExhaustive,
     totalItemCount,
+    estimatedTotalCount,
     backedUpItemCount,
     usesVolatileBackup,
   };
@@ -9787,6 +9999,10 @@ async function fetchAllCreatorFeedItems(creatorProfile, options = {}) {
   const ids = new Set();
   const itemMap = new Map();
   const maxItems = getMaxVideosSetting({ maxVideos: options.maxItems });
+  const previewLimit = Math.max(
+    1,
+    maxItems ? Math.min(maxItems, VOLATILE_SOURCE_PREVIEW_LIMIT) : VOLATILE_SOURCE_PREVIEW_LIMIT,
+  );
   const knownItemKeys = options.knownItemKeys instanceof Set ? options.knownItemKeys : null;
   const maxPageCount = getCreatorFeedPageCap(creatorProfile);
   const includeCommunityRows = options.includeCommunityRows === true;
@@ -9814,6 +10030,8 @@ async function fetchAllCreatorFeedItems(creatorProfile, options = {}) {
           ? item.detailUrl
           : `attachment:${Number.isInteger(item && item.attachmentIndex) ? item.attachmentIndex : 0}`,
     ].join("|");
+
+  const getPreviewItems = () => sortItemsByNewest([...itemMap.values()]).slice(0, previewLimit);
 
   if (shouldBackupItems && resumeState) {
     try {
@@ -9851,9 +10069,12 @@ async function fetchAllCreatorFeedItems(creatorProfile, options = {}) {
   }
 
   if (typeof options.onProgress === "function" && totalItemCount > 0 && itemMap.size > 0) {
+    const previewItems = getPreviewItems();
     await options.onProgress({
       count: totalItemCount,
       pageNumber: 0,
+      previewItems,
+      backedUpItemCount: Math.max(backedUpItemCount, totalItemCount - previewItems.length),
     });
   }
 
@@ -9928,9 +10149,12 @@ async function fetchAllCreatorFeedItems(creatorProfile, options = {}) {
     }
 
     if (typeof options.onProgress === "function") {
+      const previewItems = getPreviewItems();
       await options.onProgress({
         count: totalItemCount,
         pageNumber: pageNumber + 1,
+        previewItems,
+        backedUpItemCount: Math.max(backedUpItemCount, totalItemCount - previewItems.length),
       });
     }
 
@@ -9993,6 +10217,10 @@ async function fetchAllCreatorCameoItems(creatorProfile, options = {}) {
   const ids = new Set();
   const items = [];
   const maxItems = getMaxVideosSetting({ maxVideos: options.maxItems });
+  const previewLimit = Math.max(
+    1,
+    maxItems ? Math.min(maxItems, VOLATILE_SOURCE_PREVIEW_LIMIT) : VOLATILE_SOURCE_PREVIEW_LIMIT,
+  );
   const knownItemKeys = options.knownItemKeys instanceof Set ? options.knownItemKeys : null;
   const maxPageCount = getProfileFeedPageCap(getCreatorProfileExpectedCameoCount(creatorProfile));
   const backupSessionKey =
@@ -10009,6 +10237,8 @@ async function fetchAllCreatorCameoItems(creatorProfile, options = {}) {
   let totalItemCount = 0;
   let backedUpItemCount = 0;
   let usesVolatileBackup = false;
+
+  const getPreviewItems = () => sortItemsByNewest([...items]).slice(0, previewLimit);
 
   if (shouldBackupItems && resumeState) {
     try {
@@ -10044,9 +10274,12 @@ async function fetchAllCreatorCameoItems(creatorProfile, options = {}) {
   }
 
   if (typeof options.onProgress === "function" && totalItemCount > 0 && items.length > 0) {
+    const previewItems = getPreviewItems();
     await options.onProgress({
       count: totalItemCount,
       pageNumber: 0,
+      previewItems,
+      backedUpItemCount: Math.max(backedUpItemCount, totalItemCount - previewItems.length),
     });
   }
 
@@ -10099,9 +10332,12 @@ async function fetchAllCreatorCameoItems(creatorProfile, options = {}) {
     }
 
     if (typeof options.onProgress === "function") {
+      const previewItems = getPreviewItems();
       await options.onProgress({
         count: totalItemCount,
         pageNumber: pageNumber + 1,
+        previewItems,
+        backedUpItemCount: Math.max(backedUpItemCount, totalItemCount - previewItems.length),
       });
     }
 
@@ -11178,11 +11414,32 @@ async function fetchAllCharacterAccountDraftItems(characterAccount, options = {}
 
   for (let pageNumber = 0; pageNumber < 250; pageNumber += 1) {
     throwIfFetchAbortRequested();
-    const page = await fetchSourceDataFromTab("characterAccountDrafts", {
-      characterId: characterAccount.userId,
-      limit: CHARACTERS_BATCH_LIMIT,
-      cursor,
-    });
+    let page = null;
+
+    try {
+      page = await fetchSourceDataFromTab("characterAccountDrafts", {
+        characterId: characterAccount.userId,
+        limit: CHARACTERS_BATCH_LIMIT,
+        cursor,
+      });
+    } catch (error) {
+      if (shouldIgnoreCharacterAccountDraftFetchError(error)) {
+        return {
+          ids: [...ids],
+          items,
+          partialWarning:
+            items.length > 0
+              ? `${characterAccount.displayName} drafts could not be refreshed, so Save Sora kept the drafts already restored locally.`
+              : `${characterAccount.displayName} drafts could not be loaded, so Save Sora continued with published posts and appearances only.`,
+          isExhaustive: false,
+          totalItemCount,
+          backedUpItemCount,
+          usesVolatileBackup,
+        };
+      }
+
+      throw error;
+    }
 
     for (const id of page.ids) {
       ids.add(id);
@@ -11285,6 +11542,21 @@ async function fetchAllCharacterAccountDraftItems(characterAccount, options = {}
   };
 }
 
+function shouldIgnoreCharacterAccountDraftFetchError(error) {
+  const message = getErrorMessage(error);
+  if (!message) {
+    return false;
+  }
+
+  return (
+    /character account drafts data:/i.test(message) &&
+    (/non-json response/i.test(message) ||
+      /unexpected token\s*</i.test(message) ||
+      /status 40[134]/i.test(message) ||
+      /failed to fetch/i.test(message))
+  );
+}
+
 async function fetchAllCharacterItems(options = {}) {
   const maxItems = getMaxVideosSetting({ maxVideos: options.maxItems });
   const knownItemKeys = options.knownItemKeys instanceof Set ? options.knownItemKeys : null;
@@ -11299,6 +11571,15 @@ async function fetchAllCharacterItems(options = {}) {
   );
   const selectedCharacterAccounts = normalizedCharacterAccounts.filter((account) =>
     selectedCharacterAccountIds.includes(account.userId),
+  );
+  const expectedTotalCount = mergeEstimatedFetchTotalCount(
+    getExpectedCharacterAccountSelectionCount(
+      normalizedCharacterAccounts,
+      selectedCharacterAccountIds,
+    ),
+    options && options.estimatedTotalCount,
+    0,
+    maxItems,
   );
   const ids = new Set();
   const itemMap = new Map();
@@ -11340,6 +11621,7 @@ async function fetchAllCharacterItems(options = {}) {
       count: totalCount,
       pageNumber: 1,
       message: messagePrefix,
+      estimatedTotalCount: expectedTotalCount,
       ...extra,
     });
   };
@@ -11462,6 +11744,7 @@ async function fetchAllCharacterItems(options = {}) {
     ]),
     isExhaustive,
     totalItemCount: items.length + backedUpItemCount,
+    estimatedTotalCount: expectedTotalCount,
     backedUpItemCount,
     usesVolatileBackup,
   };
@@ -11481,6 +11764,12 @@ async function fetchAllCreatorItems(options = {}) {
   );
   const selectedCreatorProfiles = normalizedCreatorProfiles.filter((profile) =>
     selectedCreatorProfileIds.includes(profile.profileId),
+  );
+  const expectedTotalCount = mergeEstimatedFetchTotalCount(
+    getExpectedCreatorSelectionCount(normalizedCreatorProfiles, selectedCreatorProfileIds),
+    options && options.estimatedTotalCount,
+    0,
+    maxItems,
   );
   const ids = new Set();
   const itemMap = new Map();
@@ -11538,6 +11827,7 @@ async function fetchAllCreatorItems(options = {}) {
       count: totalCount,
       pageNumber: 1,
       message: messagePrefix,
+      estimatedTotalCount: expectedTotalCount,
       ...(extraProgress && typeof extraProgress === "object" ? extraProgress : {}),
     });
   };
@@ -11669,11 +11959,17 @@ async function fetchAllCreatorItems(options = {}) {
             resumeState: volatileBackupProgressByKey[
               getVolatileBackupProgressKey("creatorPublished", creatorProfileForFetch.profileId)
             ],
-            onProgress: async ({ count }) => {
+            onProgress: async ({ count, previewItems, backedUpItemCount: previewBackedUpItemCount }) => {
               totalCount = maxItems
                 ? Math.min(maxItems, publishedBaseCount + count)
                 : publishedBaseCount + count;
-              await reportProgress(`Fetching ${creatorProfileForFetch.displayName} official posts...`);
+              await reportProgress(
+                `Fetching ${creatorProfileForFetch.displayName} official posts...`,
+                {
+                  previewItems,
+                  backedUpItemCount: previewBackedUpItemCount,
+                },
+              );
             },
           },
         );
@@ -11699,11 +11995,17 @@ async function fetchAllCreatorItems(options = {}) {
             resumeState: volatileBackupProgressByKey[
               getVolatileBackupProgressKey("creatorCameos", creatorProfileForFetch.profileId)
             ],
-            onProgress: async ({ count }) => {
+            onProgress: async ({ count, previewItems, backedUpItemCount: previewBackedUpItemCount }) => {
               totalCount = maxItems
                 ? Math.min(maxItems, cameoBaseCount + count)
                 : cameoBaseCount + count;
-              await reportProgress(`Fetching ${creatorProfileForFetch.displayName} community cameo posts...`);
+              await reportProgress(
+                `Fetching ${creatorProfileForFetch.displayName} community cameo posts...`,
+                {
+                  previewItems,
+                  backedUpItemCount: previewBackedUpItemCount,
+                },
+              );
             },
           },
         );
@@ -11731,6 +12033,8 @@ async function fetchAllCreatorItems(options = {}) {
     items,
     partialWarning: joinPartialWarnings(partialWarnings),
     isExhaustive,
+    totalItemCount: items.length + backedUpItemCount,
+    estimatedTotalCount: expectedTotalCount,
     backedUpItemCount,
     usesVolatileBackup,
   };
@@ -11745,6 +12049,12 @@ async function fetchAllCameoItems(options = {}) {
     typeof options.volatileBackupSessionKey === "string" ? options.volatileBackupSessionKey : "";
   const volatileBackupProgressByKey = normalizeVolatileBackupProgressMap(
     options && options.volatileBackupResumeMeta && options.volatileBackupResumeMeta.progressByKey,
+  );
+  const expectedTotalCount = mergeEstimatedFetchTotalCount(
+    getExpectedCharacterAppearanceCount(currentState.characterAccounts),
+    options && options.estimatedTotalCount,
+    0,
+    maxItems,
   );
   let totalCount = 0;
   let backedUpItemCount = 0;
@@ -11777,6 +12087,7 @@ async function fetchAllCameoItems(options = {}) {
       count: totalCount,
       pageNumber: 1,
       message: messagePrefix,
+      estimatedTotalCount: expectedTotalCount,
     });
   };
 
@@ -13633,6 +13944,80 @@ function injectedFetchSource(config) {
       return null;
     }
 
+    function getEstimatedTotalCountFromPayload(payload, observedRowCount = 0) {
+      const normalizedObservedRowCount =
+        typeof observedRowCount === "number" && Number.isFinite(observedRowCount) && observedRowCount > 0
+          ? Math.floor(observedRowCount)
+          : 0;
+      const strongKeys = [
+        "total_count",
+        "totalCount",
+        "total_results",
+        "totalResults",
+        "estimated_total_count",
+        "estimatedTotalCount",
+        "item_count",
+        "itemCount",
+        "items_count",
+        "itemsCount",
+        "result_count",
+        "resultCount",
+        "post_count",
+        "postCount",
+        "appearance_count",
+        "appearanceCount",
+        "cameo_count",
+        "cameoCount",
+        "draft_count",
+        "draftCount",
+        "like_count",
+        "likeCount",
+        "likes_count",
+        "likesCount",
+      ];
+      const weakKeys = ["count", "total"];
+      const candidateObjects = [
+        payload,
+        payload && payload.meta,
+        payload && payload.pagination,
+        payload && payload.page_info,
+        payload && payload.pageInfo,
+        payload && payload.summary,
+        payload && payload.stats,
+        payload && payload.counts,
+      ].filter((value) => value && typeof value === "object");
+
+      const readCount = (value) =>
+        typeof value === "number" && Number.isFinite(value) && value > 0
+          ? Math.floor(value)
+          : null;
+
+      let bestStrongCount = 0;
+      for (const source of candidateObjects) {
+        for (const key of strongKeys) {
+          const candidate = readCount(source[key]);
+          if (candidate && candidate >= normalizedObservedRowCount) {
+            bestStrongCount = Math.max(bestStrongCount, candidate);
+          }
+        }
+      }
+
+      if (bestStrongCount > 0) {
+        return bestStrongCount;
+      }
+
+      for (const source of candidateObjects) {
+        for (const key of weakKeys) {
+          const candidate = readCount(source[key]);
+          if (candidate && candidate >= normalizedObservedRowCount) {
+            return candidate;
+          }
+        }
+      }
+
+      return normalizedObservedRowCount;
+    }
+
     function pickFirstBoolean(candidates) {
       for (const candidate of candidates) {
         if (typeof candidate === "boolean") {
@@ -14744,6 +15129,7 @@ function injectedFetchSource(config) {
         ids: [...new Set(ids)],
         items,
         rowCount: rows.length,
+        estimatedTotalCount: getEstimatedTotalCountFromPayload(payload, Math.max(rows.length, items.length)),
         nextCursor: getNextCursorForRows(payload, rows, config),
         partialWarning: "",
         unresolvedPosts,
@@ -14792,7 +15178,15 @@ function injectedFetchSource(config) {
               : typeof row.username === "string" && row.username
                 ? row.username
                 : row.user_id,
-          cameoCount: Number.isFinite(Number(row.cameo_count)) ? Number(row.cameo_count) : 0,
+          postCount:
+            pickFirstNumber([row.post_count, row.postCount, row.posts_count, row.postsCount]) || 0,
+          cameoCount:
+            pickFirstNumber([
+              row.cameo_count,
+              row.cameoCount,
+              row.appearance_count,
+              row.appearanceCount,
+            ]) || 0,
           permalink: typeof row.permalink === "string" ? row.permalink : null,
           profilePictureUrl:
             typeof row.profile_picture_url === "string" ? row.profile_picture_url : null,
@@ -14801,6 +15195,7 @@ function injectedFetchSource(config) {
       return {
         accounts,
         rowCount: rows.length,
+        estimatedTotalCount: getEstimatedTotalCountFromPayload(payload, rows.length),
         nextCursor: getNextCursorFromPayload(payload),
         partialWarning: "",
       };
@@ -15082,6 +15477,7 @@ function injectedFetchSource(config) {
         ids: [...new Set(ids)],
         items,
         rowCount: rows.length,
+        estimatedTotalCount: getEstimatedTotalCountFromPayload(payload, Math.max(rows.length, items.length)),
         nextCursor: getNextCursorFromPayload(payload),
         partialWarning: "",
       };

@@ -28,7 +28,6 @@ const CURRENT_EXTENSION_NAME =
 const BOOT_UPDATE_GATE_STEPS = 3;
 
 export async function bootstrapUpdaterGate() {
-  popupState.updateGateHidden = false;
   popupState.skippedUpdateVersion = "";
   const updatedVersionNotice = consumeUpdatedVersionNotice();
 
@@ -39,6 +38,30 @@ export async function bootstrapUpdaterGate() {
   }
 
   try {
+    await refreshStatus();
+    if (shouldRunStartupUpdateSilently()) {
+      popupState.updateGateHidden = true;
+      void requestUpdateCheck({
+        trigger: "startup",
+        interactive: false,
+        applyIfAvailable: false,
+      })
+        .then((updateStatus) => {
+          syncUpdateSurfaces(updateStatus);
+        })
+        .catch(() => {
+          // Keep background update discovery silent while the dashboard is already active.
+        });
+      if (updatedVersionNotice) {
+        showNotice(
+          dom.warningBox,
+          `Save Sora updated to v${updatedVersionNotice} and reopened automatically.`,
+        );
+      }
+      return;
+    }
+
+    popupState.updateGateHidden = false;
     setBootGateStep({
       step: 1,
       progress: 0.18,
@@ -381,6 +404,10 @@ function setBootGateStep({ step, progress, title, message }) {
   if (dom.updateGateActions instanceof HTMLElement) {
     dom.updateGateActions.classList.add("hidden");
   }
+}
+
+function shouldRunStartupUpdateSilently() {
+  return popupState.currentPhase === "fetching" || popupState.currentPhase === "fetch-paused";
 }
 
 async function awaitUpdateOperation(operationPromise, options = {}) {

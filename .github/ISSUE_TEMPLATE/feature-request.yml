@@ -1,0 +1,82 @@
+name: Feature request
+description: Suggest a feature or improvement for Save Sora
+title: "[Feature Request] "
+labels:
+  - feature-request
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping shape Save Sora.
+
+        Before submitting a new request, please check the existing feature-request board and add a 👍 reaction to anything you already want:
+        https://github.com/alpha1337/save-sora/issues?q=is%3Aissue+state%3Aopen+label%3Afeature-request
+
+  - type: input
+    id: summary
+    attributes:
+      label: Feature summary
+      description: Give the idea a short, specific name.
+      placeholder: Example: Queue multiple background fetches at once
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Which part of Save Sora does this mostly affect?
+      options:
+        - Fetching and resume behavior
+        - Downloads and ZIP exports
+        - Creators / Characters / Side Characters
+        - Search, browse, and selection UX
+        - Updater and install flow
+        - GitHub Pages site / docs
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: Explain the pain point or workflow that feels broken, slow, or missing.
+      placeholder: I want to...
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like Save Sora to do?
+      description: Describe the feature as clearly as you can.
+      placeholder: Save Sora should...
+    validations:
+      required: true
+
+  - type: textarea
+    id: value
+    attributes:
+      label: Why would this matter?
+      description: Tell us how this would improve your workflow.
+      placeholder: This would help because...
+    validations:
+      required: true
+
+  - type: textarea
+    id: examples
+    attributes:
+      label: Screenshots, links, or examples
+      description: Optional, but helpful when the feature request depends on a real feed, profile, UI state, or workflow example.
+      placeholder: Paste any links, screenshots, or examples here.
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched the existing feature requests first.
+          required: true
+        - label: I understand that vote totals come from 👍 reactions on the GitHub issue.
+          required: true

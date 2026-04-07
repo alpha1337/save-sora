@@ -56,15 +56,24 @@ export function syncFetchProgressPanel(state) {
   if (!isVisible) {
     dom.fetchProgressFill.style.width = "0%";
     dom.fetchProgressPauseAction.disabled = false;
-    dom.fetchProgressPauseAction.textContent = "Pause Fetch";
+    dom.fetchProgressPauseAction.textContent = "Pause";
     dom.fetchProgressAction.disabled = false;
-    dom.fetchProgressAction.textContent = "Cancel Fetch";
+    dom.fetchProgressAction.textContent = "Cancel";
     dom.fetchProgressQueue.replaceChildren();
     setFooterHeight(0);
     return;
   }
 
-  const progressRatio = clampProgressRatio(progress && progress.progressRatio);
+  const sourceItemsFound = Math.max(0, Number(progress && progress.sourceItemsFound) || 0);
+  const estimatedTotalCount = Math.max(0, Number(progress && progress.totalCount) || 0);
+  const hasConcreteSourceEstimate =
+    progress &&
+    progress.stage === "fetching-source" &&
+    estimatedTotalCount > 0 &&
+    sourceItemsFound >= 0;
+  const progressRatio = clampProgressRatio(
+    hasConcreteSourceEstimate ? progress && progress.displayRatio : progress && progress.progressRatio,
+  );
   const progressPercent = Math.round(progressRatio * 100);
   const visibleWidth = Math.max(4, progressPercent);
   const itemsFound = Math.max(
@@ -84,27 +93,35 @@ export function syncFetchProgressPanel(state) {
 
   dom.fetchProgressStage.textContent =
     (progress && progress.stageLabel) || "Fetching videos";
-  dom.fetchProgressDetail.textContent =
+  const detailText =
     (progress && progress.detail) ||
     (state && state.message) ||
     "Preparing your results...";
+  dom.fetchProgressDetail.textContent = detailText;
+  dom.fetchProgressDetail.classList.toggle(
+    "hidden",
+    !detailText || detailText === dom.fetchProgressStage.textContent,
+  );
   dom.fetchProgressPercent.textContent = `${progressPercent}%`;
   dom.fetchProgressFill.style.width = `${visibleWidth}%`;
   dom.fetchProgressSource.textContent = `${toTitleCase(currentSourceLabel)} • ${currentSourceIndex} of ${totalSources}`;
-  dom.fetchProgressCount.textContent =
-    itemsFound > 0 ? `${formatCompactCount(itemsFound)} found` : "Searching...";
-  dom.fetchProgressEta.textContent = isPaused ? "Paused" : getFetchEtaLabel(state, progressRatio);
+  dom.fetchProgressCount.textContent = hasConcreteSourceEstimate
+    ? `${formatCompactCount(sourceItemsFound)} of ${formatCompactCount(estimatedTotalCount)}`
+    : itemsFound > 0
+      ? `${formatCompactCount(itemsFound)} found`
+      : "Searching...";
+  dom.fetchProgressEta.textContent = getElapsedLabel(state, isPaused);
   dom.fetchProgressPauseAction.disabled =
     Boolean(progress && (progress.stage === "aborting" || progress.stage === "pausing"));
-  dom.fetchProgressPauseAction.textContent = isPaused ? "Resume Fetch" : "Pause Fetch";
+  dom.fetchProgressPauseAction.textContent = isPaused ? "Resume" : "Pause";
   dom.fetchProgressAction.disabled =
     Boolean(progress && (progress.stage === "aborting" || progress.stage === "pausing"));
   dom.fetchProgressAction.textContent =
     progress && progress.stage === "aborting"
-      ? "Stopping..."
+      ? "Stopping"
       : progress && progress.stage === "pausing"
-        ? "Pausing..."
-        : "Cancel Fetch";
+        ? "Pausing"
+        : "Cancel";
 
   renderQueue(queueLabels, currentSourceIndex);
   setFooterHeight(0);
@@ -133,10 +150,10 @@ function renderQueue(queueLabels, currentSourceIndex) {
     status.className = "fetch-progress-queue-status";
     status.textContent =
       index + 1 < currentSourceIndex
-        ? "Completed"
+        ? "Done"
         : index + 1 === currentSourceIndex
-          ? "In Progress"
-          : "Queued";
+          ? "Live"
+          : "Next";
 
     queueItem.append(title, status);
     dom.fetchProgressQueue.append(queueItem);
@@ -176,45 +193,36 @@ function clampProgressRatio(value) {
   return Math.max(0, Math.min(1, numeric));
 }
 
-function getFetchEtaLabel(state, progressRatio) {
-  if (progressRatio >= 0.985) {
-    return "Finishing up...";
-  }
-
+function getElapsedLabel(state, isPaused) {
   const startedAt =
     state && typeof state.startedAt === "string" && state.startedAt ? new Date(state.startedAt) : null;
   if (!(startedAt instanceof Date) || Number.isNaN(startedAt.getTime())) {
-    return "Estimating time left...";
+    return isPaused ? "Paused" : "Just started";
   }
 
   const elapsedMs = Date.now() - startedAt.getTime();
-  if (!Number.isFinite(elapsedMs) || elapsedMs < 1500 || progressRatio < 0.08) {
-    return "Estimating time left...";
+  if (!Number.isFinite(elapsedMs) || elapsedMs < 0) {
+    return isPaused ? "Paused" : "Just started";
   }
 
-  const remainingMs = (elapsedMs * (1 - progressRatio)) / progressRatio;
-  if (!Number.isFinite(remainingMs) || remainingMs <= 0) {
-    return "Finishing up...";
-  }
-
-  return `${formatDuration(remainingMs)} left`;
+  return `${formatElapsedDuration(elapsedMs)} elapsed`;
 }
 
-function formatDuration(value) {
+function formatElapsedDuration(value) {
   const totalSeconds = Math.max(1, Math.round(Number(value) / 1000));
   const hours = Math.floor(totalSeconds / 3600);
   const minutes = Math.floor((totalSeconds % 3600) / 60);
   const seconds = totalSeconds % 60;
 
   if (hours > 0) {
-    return `About ${hours}h ${minutes}m`;
+    return `${hours}h ${minutes}m`;
   }
 
   if (minutes > 0) {
-    return `About ${minutes}m ${seconds}s`;
+    return `${minutes}m ${seconds}s`;
   }
 
-  return `About ${seconds}s`;
+  return `${seconds}s`;
 }
 
 function formatCompactCount(value) {

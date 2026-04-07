@@ -56,22 +56,27 @@ export function handleCreatorResultsTabClick(event) {
   rerenderBrowseResults();
 }
 
-export function handleResultsPagePrevClick() {
-  if (popupState.resultsPageIndex <= 0) {
+export function handlePickerScroll() {
+  updateBackToTopVisibility();
+
+  if (
+    !(dom.pickerScrollRegion instanceof HTMLElement) ||
+    popupState.resultsLoadInFlight ||
+    popupState.resultsCanLoadMore !== true
+  ) {
     return;
   }
 
-  popupState.resultsPageIndex -= 1;
-  void refreshStatus();
-}
-
-export function handleResultsPageNextClick() {
-  const lastPageIndex = Math.max(0, popupState.resultsPageCount - 1);
-  if (popupState.resultsPageIndex >= lastPageIndex) {
+  const remainingDistance =
+    dom.pickerScrollRegion.scrollHeight -
+    dom.pickerScrollRegion.scrollTop -
+    dom.pickerScrollRegion.clientHeight;
+  if (remainingDistance > 280) {
     return;
   }
 
-  popupState.resultsPageIndex += 1;
+  popupState.resultsLoadInFlight = true;
+  popupState.resultsPageSize += popupState.resultsChunkSize;
   void refreshStatus();
 }
 
@@ -226,7 +231,12 @@ export async function handleClearVolatileBackupsClick() {
  * Re-renders the list after a local browse-state change.
  */
 function rerenderBrowseResults() {
-  popupState.resultsPageIndex = 0;
+  popupState.resultsPageSize = popupState.resultsChunkSize;
+  popupState.resultsCanLoadMore = false;
+  popupState.resultsLoadInFlight = false;
+  if (dom.pickerScrollRegion instanceof HTMLElement) {
+    dom.pickerScrollRegion.scrollTop = 0;
+  }
   void refreshStatus();
 }
 
