@@ -100,6 +100,7 @@ export const dom = {
   downloadOverlayCancel: document.getElementById("download-overlay-cancel"),
   tabButtons: [...document.querySelectorAll(".tab-button")],
   tabPanels: [...document.querySelectorAll(".tab-panel")],
+  kofiFrame: document.getElementById("kofiframe"),
   maxVideosInput: document.getElementById("max-videos-input"),
   defaultSourceControl: document.getElementById("default-source-control"),
   defaultSourceButton: document.getElementById("default-source-button"),

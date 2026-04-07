@@ -87,13 +87,39 @@
             <button
               id="view-fullscreen-button"
               type="button"
-              class="ghost button-small topbar-utility-button"
+              class="ghost button-small topbar-utility-button icon-utility-button"
+              aria-label="View Fullscreen"
+              title="View Fullscreen"
             >
-              View Fullscreen
+              <span class="icon-utility-button-icon icon-utility-button-icon-expand" aria-hidden="true">
+                <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+                  <path
+                    d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.8"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  ></path>
+                </svg>
+              </span>
+              <span class="icon-utility-button-icon icon-utility-button-icon-collapse" aria-hidden="true">
+                <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+                  <path
+                    d="M9 4H4v5M15 4h5v5M9 20H4v-5M15 20h5v-5M8 8 4 4M16 8l4-4M8 16l-4 4M16 16l4 4"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.8"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  ></path>
+                </svg>
+              </span>
+              <span class="visually-hidden">View Fullscreen</span>
             </button>
             <label class="theme-toggle" for="theme-toggle">
               <span class="theme-toggle-label">Theme Picker</span>
-              <input id="theme-toggle" class="theme-toggle-input" type="checkbox" />
+              <input id="theme-toggle" class="theme-toggle-input" type="checkbox" name="theme-toggle" />
               <span class="theme-toggle-track" aria-hidden="true">
                 <span class="theme-toggle-icon theme-toggle-icon-dark">
                   <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
@@ -124,6 +150,7 @@
                   <span class="label">Search</span>
                     <input
                       id="search-input"
+                      name="search"
                       class="search-input"
                       type="search"
                       inputmode="search"
@@ -148,27 +175,63 @@
                       </button>
                       <div id="source-select-menu" class="multi-select-menu hidden" role="group" aria-label="Sources">
                         <label class="multi-select-option">
-                          <input type="checkbox" value="profile" data-source-group="overview" />
+                          <input
+                            id="overview-source-profile"
+                            name="overview-sources"
+                            type="checkbox"
+                            value="profile"
+                            data-source-group="overview"
+                          />
                           <span>Published</span>
                         </label>
                         <label class="multi-select-option">
-                          <input type="checkbox" value="drafts" data-source-group="overview" />
+                          <input
+                            id="overview-source-drafts"
+                            name="overview-sources"
+                            type="checkbox"
+                            value="drafts"
+                            data-source-group="overview"
+                          />
                           <span>Drafts</span>
                         </label>
                         <label class="multi-select-option">
-                          <input type="checkbox" value="likes" data-source-group="overview" />
+                          <input
+                            id="overview-source-likes"
+                            name="overview-sources"
+                            type="checkbox"
+                            value="likes"
+                            data-source-group="overview"
+                          />
                           <span>Likes</span>
                         </label>
                         <label class="multi-select-option">
-                          <input type="checkbox" value="characters" data-source-group="overview" />
+                          <input
+                            id="overview-source-characters"
+                            name="overview-sources"
+                            type="checkbox"
+                            value="characters"
+                            data-source-group="overview"
+                          />
                           <span>Cameos</span>
                         </label>
                         <label class="multi-select-option">
-                          <input type="checkbox" value="characterAccounts" data-source-group="overview" />
+                          <input
+                            id="overview-source-character-accounts"
+                            name="overview-sources"
+                            type="checkbox"
+                            value="characterAccounts"
+                            data-source-group="overview"
+                          />
                           <span>Characters</span>
                         </label>
                         <label class="multi-select-option">
-                          <input type="checkbox" value="creators" data-source-group="overview" />
+                          <input
+                            id="overview-source-creators"
+                            name="overview-sources"
+                            type="checkbox"
+                            value="creators"
+                            data-source-group="overview"
+                          />
                           <span>Creators</span>
                         </label>
                       </div>
@@ -178,7 +241,7 @@
                   <div class="picker-toolbar hidden">
                     <label class="sort-field" for="sort-select">
                       <span class="label">Sort</span>
-                      <select id="sort-select" class="sort-select" aria-label="Sort videos">
+                      <select id="sort-select" class="sort-select" name="sort" aria-label="Sort videos">
                         <option value="newest">Newest</option>
                         <option value="oldest">Oldest</option>
                         <option value="likes">Most Likes</option>
@@ -355,6 +418,7 @@
                     <label class="settings-label" for="max-videos-input">Max videos</label>
                     <input
                       id="max-videos-input"
+                      name="maxVideos"
                       class="settings-input"
                       type="number"
                       min="1"
@@ -386,27 +450,63 @@
                         aria-label="Default sources"
                       >
                         <label class="multi-select-option">
-                          <input type="checkbox" value="profile" data-source-group="settings" />
+                          <input
+                            id="settings-source-profile"
+                            name="default-sources"
+                            type="checkbox"
+                            value="profile"
+                            data-source-group="settings"
+                          />
                           <span>Published</span>
                         </label>
                         <label class="multi-select-option">
-                          <input type="checkbox" value="drafts" data-source-group="settings" />
+                          <input
+                            id="settings-source-drafts"
+                            name="default-sources"
+                            type="checkbox"
+                            value="drafts"
+                            data-source-group="settings"
+                          />
                           <span>Drafts</span>
                         </label>
                         <label class="multi-select-option">
-                          <input type="checkbox" value="likes" data-source-group="settings" />
+                          <input
+                            id="settings-source-likes"
+                            name="default-sources"
+                            type="checkbox"
+                            value="likes"
+                            data-source-group="settings"
+                          />
                           <span>Likes</span>
                         </label>
                         <label class="multi-select-option">
-                          <input type="checkbox" value="characters" data-source-group="settings" />
+                          <input
+                            id="settings-source-characters"
+                            name="default-sources"
+                            type="checkbox"
+                            value="characters"
+                            data-source-group="settings"
+                          />
                           <span>Cameos</span>
                         </label>
                         <label class="multi-select-option">
-                          <input type="checkbox" value="characterAccounts" data-source-group="settings" />
+                          <input
+                            id="settings-source-character-accounts"
+                            name="default-sources"
+                            type="checkbox"
+                            value="characterAccounts"
+                            data-source-group="settings"
+                          />
                           <span>Characters</span>
                         </label>
                         <label class="multi-select-option">
-                          <input type="checkbox" value="creators" data-source-group="settings" />
+                          <input
+                            id="settings-source-creators"
+                            name="default-sources"
+                            type="checkbox"
+                            value="creators"
+                            data-source-group="settings"
+                          />
                           <span>Creators</span>
                         </label>
                       </div>
@@ -416,7 +516,7 @@
 
                   <div class="settings-group">
                     <label class="settings-label" for="default-sort-input">Default sort</label>
-                    <select id="default-sort-input" class="settings-input">
+                    <select id="default-sort-input" class="settings-input" name="defaultSort">
                       <option value="newest">Newest</option>
                       <option value="oldest">Oldest</option>
                       <option value="likes">Most Likes</option>
@@ -428,7 +528,7 @@
 
                   <div class="settings-group">
                     <label class="settings-label" for="default-theme-input">Default theme</label>
-                    <select id="default-theme-input" class="settings-input">
+                    <select id="default-theme-input" class="settings-input" name="defaultTheme">
                       <option value="dark">Dark</option>
                       <option value="light">Light</option>
                     </select>
@@ -437,11 +537,11 @@
 
                   <div class="settings-group">
                     <label class="settings-label" for="download-mode-input">Download mode</label>
-                    <select id="download-mode-input" class="settings-input">
+                    <select id="download-mode-input" class="settings-input" name="downloadMode">
                       <option value="archive">ZIP archive</option>
                       <option value="direct">Individual files</option>
                     </select>
-                    <p class="settings-help">ZIP stays the default. Brave switches to individual files automatically unless you choose otherwise.</p>
+                    <p class="settings-help">ZIP stays the default until you explicitly switch this setting.</p>
                   </div>
                 </div>
               </section>
@@ -461,7 +561,12 @@
                         <span class="settings-switch-copy">
                           Install new GitHub releases automatically after the unpacked Save Sora folder has been linked once.
                         </span>
-                        <input id="automatic-updates-input" class="settings-switch-input" type="checkbox" />
+                        <input
+                          id="automatic-updates-input"
+                          class="settings-switch-input"
+                          type="checkbox"
+                          name="automaticUpdatesEnabled"
+                        />
                         <span class="settings-switch-track" aria-hidden="true">
                           <span class="settings-switch-thumb"></span>
                         </span>
@@ -609,9 +714,8 @@
             <iframe
               id="kofiframe"
               class="kofi-frame"
-              src="https://ko-fi.com/savesora/?hidefeed=true&widget=true&embed=true&preview=true"
+              data-src="https://ko-fi.com/savesora/?hidefeed=true&widget=true&embed=true&preview=true"
               title="savesora"
-              loading="lazy"
             ></iframe>
           </div>
         </section>
@@ -632,6 +736,7 @@
             <span class="settings-label">Creator username(s) or URL(s)</span>
             <textarea
               id="creator-dialog-input"
+              name="creatorProfiles"
               class="creator-dialog-input"
               rows="6"
               spellcheck="false"

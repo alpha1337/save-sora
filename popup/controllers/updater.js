@@ -208,7 +208,7 @@ async function installPendingUpdateFromUi() {
 
 async function linkInstallFolderFromUserGesture() {
   if (typeof window.showDirectoryPicker !== "function") {
-    showNotice(dom.errorBox, "This version of Chrome cannot grant access to the unpacked extension folder.");
+    presentInstallFolderLinkError(getInstallFolderUnavailableMessage());
     return;
   }
 
@@ -232,10 +232,55 @@ async function linkInstallFolderFromUserGesture() {
     if (/aborted|cancelled|canceled/i.test(message)) {
       return;
     }
-    showNotice(dom.errorBox, message);
+    presentInstallFolderLinkError(message);
   } finally {
     await refreshStatus();
   }
+}
+
+function presentInstallFolderLinkError(message) {
+  const resolvedMessage =
+    typeof message === "string" && message.trim()
+      ? message.trim()
+      : "Save Sora could not link the unpacked extension folder.";
+
+  showNotice(dom.errorBox, resolvedMessage);
+
+  if (dom.settingsStatus instanceof HTMLElement) {
+    dom.settingsStatus.textContent = resolvedMessage;
+  }
+
+  if (typeof window.alert === "function") {
+    window.alert(resolvedMessage);
+  }
+}
+
+function getInstallFolderUnavailableMessage() {
+  if (isLikelyBraveBrowser()) {
+    return "Brave currently has the File System Access API disabled for this extension, so Save Sora cannot open the folder chooser here. Enable brave://flags/#file-system-access-api, restart Brave, and then try Link folder again.";
+  }
+
+  return "This browser cannot grant access to the unpacked extension folder from Save Sora.";
+}
+
+function isLikelyBraveBrowser() {
+  try {
+    if (navigator.brave) {
+      return true;
+    }
+  } catch (_error) {
+    // Ignore access issues and continue with user-agent heuristics.
+  }
+
+  const brands =
+    navigator.userAgentData && Array.isArray(navigator.userAgentData.brands)
+      ? navigator.userAgentData.brands
+      : [];
+  if (brands.some((brand) => typeof brand.brand === "string" && /brave/i.test(brand.brand))) {
+    return true;
+  }
+
+  return /brave/i.test(navigator.userAgent);
 }
 
 async function requestInstallFolderHandleFromUserGesture() {

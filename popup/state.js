@@ -84,5 +84,4 @@ export const popupState = {
     visibleSelectedCount: 0,
     phase: "idle",
   },
-  downloadModeAutoChecked: false,
 };

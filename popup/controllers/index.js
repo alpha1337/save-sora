@@ -18,7 +18,7 @@ import {
   handleItemsListFocusOut,
   handleItemsListInput,
 } from "./item-events.js";
-import { startPolling, stopPolling } from "./polling.js";
+import { refreshStatus, stopPolling } from "./polling.js";
 import {
   handleClearStorageClick,
   handleClearVolatileBackupsClick,
@@ -145,7 +145,7 @@ function handleVisibilityChange() {
     return;
   }
 
-  startPolling();
+  void refreshStatus();
 }
 
 /**

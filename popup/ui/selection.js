@@ -12,7 +12,7 @@ import {
   getCreatorResultsTabs,
   getActiveSelectableCount,
   getDownloadedCount,
-  getSelectedBatchMetrics,
+  getTotalBatchMetrics,
 } from "../utils/items.js";
 
 /**
@@ -282,18 +282,17 @@ export function syncSelectionControls(totalCount, selectedCount, visibleCount = 
 }
 
 /**
- * Updates the left summary count with selection totals and aggregate file size.
+ * Updates the left summary card with total result count and aggregate file size.
  *
  * @param {object[]} items
- * @param {string[]} selectedKeys
  */
-export function updateTotalSummary(items, selectedKeys) {
+export function updateTotalSummary(items) {
   if (!(dom.totalCount instanceof HTMLElement)) {
     return;
   }
 
-  const { selectedCount, totalBytes } = getSelectedBatchMetrics(items, selectedKeys);
+  const { totalCount, totalBytes } = getTotalBatchMetrics(items);
   const formattedSize = formatFileSize(totalBytes);
   dom.totalCount.textContent =
-    formattedSize ? `${formatWholeNumber(selectedCount)} / ${formattedSize}` : formatWholeNumber(selectedCount);
+    formattedSize ? `${formatWholeNumber(totalCount)} / ${formattedSize}` : formatWholeNumber(totalCount);
 }

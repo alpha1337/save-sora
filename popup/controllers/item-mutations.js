@@ -5,7 +5,7 @@ import { getItemKey } from "../utils/items.js";
 import { hideNotice, showNotice, updateBackToTopVisibility } from "../ui/layout.js";
 import { renderCurrentItems, renderState } from "../ui/render.js";
 import { applyCurrentSelectionUi } from "../ui/selection.js";
-import { refreshStatus, startPolling, stopPolling } from "./polling.js";
+import { refreshStatus, stopPolling, syncPollingForState } from "./polling.js";
 import { flushPendingTitleSaves } from "./title-edits.js";
 
 /**
@@ -40,6 +40,7 @@ export async function handleRemoveButtonClick(event, removeButton) {
 
     if (response.state) {
       renderState(response.state);
+      syncPollingForState(response.state);
     } else {
       await refreshStatus();
     }
@@ -49,11 +50,8 @@ export async function handleRemoveButtonClick(event, removeButton) {
     }
 
     showNotice(dom.errorBox, error instanceof Error ? error.message : String(error));
-    startPolling();
     return;
   }
-
-  startPolling();
 }
 
 /**

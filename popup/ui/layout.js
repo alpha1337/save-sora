@@ -23,6 +23,10 @@ export function setActiveTab(nextTab) {
     panel.classList.toggle("is-active", isActive);
   }
 
+  if (nextTab === "donate") {
+    ensureDonateEmbedLoaded();
+  }
+
   updateAppScrollLock();
   updateBackToTopVisibility();
 }
@@ -181,7 +185,11 @@ function syncViewModeButtonLabel() {
   }
 
   const label = popupState.isFullscreenView ? "Open Windowed" : "View Fullscreen";
-  dom.viewFullscreenButton.textContent = label;
+  dom.viewFullscreenButton.dataset.viewAction = popupState.isFullscreenView ? "windowed" : "fullscreen";
+  const labelElement = dom.viewFullscreenButton.querySelector(".visually-hidden");
+  if (labelElement instanceof HTMLElement) {
+    labelElement.textContent = label;
+  }
   dom.viewFullscreenButton.setAttribute("aria-label", label);
   dom.viewFullscreenButton.title = label;
 }
@@ -209,4 +217,17 @@ function setSourceControlDisabled(button, inputs, disabled) {
       input.disabled = disabled;
     }
   }
+}
+
+function ensureDonateEmbedLoaded() {
+  if (!(dom.kofiFrame instanceof HTMLIFrameElement)) {
+    return;
+  }
+
+  const src = dom.kofiFrame.dataset.src;
+  if (!src || dom.kofiFrame.src === src) {
+    return;
+  }
+
+  dom.kofiFrame.src = src;
 }

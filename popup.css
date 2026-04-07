@@ -344,14 +344,54 @@ body[data-theme="light"] .update-gate-changelog {
 
 .topbar-utilities {
   display: inline-flex;
-  align-items: flex-start;
+  align-items: flex-end;
   gap: 10px;
   flex: 0 0 auto;
 }
 
 .topbar-utility-button {
-  min-width: 142px;
-  white-space: nowrap;
+  flex: 0 0 auto;
+}
+
+.icon-utility-button {
+  position: relative;
+  width: 34px;
+  min-width: 34px;
+  min-height: 34px;
+  padding: 0;
+  border-color: var(--border);
+  background: rgba(29, 32, 33, 0.8);
+  color: var(--text);
+}
+
+.icon-utility-button:hover:not(:disabled) {
+  background: rgba(69, 133, 136, 0.14);
+  border-color: var(--border-strong);
+}
+
+.icon-utility-button-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+}
+
+.icon-utility-button-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.icon-utility-button-icon-collapse {
+  display: none;
+}
+
+.icon-utility-button[data-view-action="windowed"] .icon-utility-button-icon-expand {
+  display: none;
+}
+
+.icon-utility-button[data-view-action="windowed"] .icon-utility-button-icon-collapse {
+  display: inline-flex;
 }
 
 .app-icon,
@@ -4169,6 +4209,10 @@ body[data-theme="light"] .theme-toggle-track {
 body[data-theme="light"] .theme-toggle-thumb {
   background: linear-gradient(180deg, rgba(69, 133, 136, 0.18) 0%, rgba(69, 133, 136, 0.1) 100%);
   border-color: rgba(69, 133, 136, 0.34);
+}
+
+body[data-theme="light"] .icon-utility-button {
+  background: rgba(255, 248, 226, 0.96);
 }
 
 body[data-theme="light"] button.ghost:hover:not(:disabled) {

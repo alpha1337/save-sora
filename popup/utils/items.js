@@ -243,6 +243,37 @@ export function getSelectedBatchMetrics(items, selectedKeys) {
 }
 
 /**
+ * Computes total result metrics for the current working set, excluding only items the
+ * user explicitly removed from the batch.
+ *
+ * @param {object[]} items
+ * @returns {{totalCount:number,totalBytes:number|null}}
+ */
+export function getTotalBatchMetrics(items) {
+  let totalCount = 0;
+  let totalBytes = 0;
+  let hasKnownSize = false;
+
+  for (const item of Array.isArray(items) ? items : []) {
+    if (!item || item.isRemoved) {
+      continue;
+    }
+
+    totalCount += 1;
+    const fileSizeBytes = Number(item && item.fileSizeBytes);
+    if (Number.isFinite(fileSizeBytes) && fileSizeBytes > 0) {
+      totalBytes += fileSizeBytes;
+      hasKnownSize = true;
+    }
+  }
+
+  return {
+    totalCount,
+    totalBytes: hasKnownSize ? totalBytes : null,
+  };
+}
+
+/**
  * Returns whether the item should be presented as a draft-state result.
  *
  * @param {object} item

@@ -246,6 +246,9 @@ function getUpdateGateMessage(updateStatus) {
   }
 
   if (updateStatus.phase === "awaiting-folder") {
+    if (!updateStatus.installFolderLinked && isDirectoryPickerUnavailable()) {
+      return getDirectoryPickerUnavailableMessage();
+    }
     return updateStatus.installFolderLinked
       ? "Save Sora already remembers the linked install folder. Chrome still needs a quick confirmation before Save Sora can write this update into that folder."
       : "Choose the unpacked Save Sora folder once to turn on automatic updates. Save Sora will remember that folder for future releases, although Chrome may occasionally ask you to confirm access again.";
@@ -265,6 +268,10 @@ function getUpdateGateMessage(updateStatus) {
 }
 
 function getUpdaterStatusDetail(updateStatus) {
+  if (!updateStatus.installFolderLinked && isDirectoryPickerUnavailable()) {
+    return getDirectoryPickerUnavailableMessage();
+  }
+
   if (updateStatus.phase === "update-available" || updateStatus.phase === "deferred") {
     return `Update ${updateStatus.pendingUpdateVersion || updateStatus.latestVersion} is available from GitHub.`;
   }
@@ -287,7 +294,40 @@ function getUpdaterDiagnosticsText(updateStatus) {
   const manifestState = updateStatus.latestManifestDetected ? "found" : "missing";
   const zipState = updateStatus.latestZipDetected ? "found" : "missing";
   const pendingState = updateStatus.pendingUpdateReady ? "ready" : "not ready";
-  return `Latest GitHub version: ${latestVersion} · Manifest: ${manifestState} · Package zip: ${zipState} · Pending update: ${pendingState}`;
+  const pickerState = isDirectoryPickerUnavailable() ? "unavailable" : "available";
+  return `Latest GitHub version: ${latestVersion} · Manifest: ${manifestState} · Package zip: ${zipState} · Pending update: ${pendingState} · Folder API: ${pickerState}`;
+}
+
+function isDirectoryPickerUnavailable() {
+  return typeof window.showDirectoryPicker !== "function";
+}
+
+function getDirectoryPickerUnavailableMessage() {
+  if (isLikelyBraveBrowser()) {
+    return "Brave appears to have the File System Access API disabled, so Save Sora cannot open the folder chooser from the extension. Enable brave://flags/#file-system-access-api, restart Brave, and then try Link folder again.";
+  }
+
+  return "This browser cannot open the folder chooser Save Sora needs for automatic updates.";
+}
+
+function isLikelyBraveBrowser() {
+  try {
+    if (navigator.brave) {
+      return true;
+    }
+  } catch (_error) {
+    // Ignore access issues and continue with user-agent heuristics.
+  }
+
+  const brands =
+    navigator.userAgentData && Array.isArray(navigator.userAgentData.brands)
+      ? navigator.userAgentData.brands
+      : [];
+  if (brands.some((brand) => typeof brand.brand === "string" && /brave/i.test(brand.brand))) {
+    return true;
+  }
+
+  return /brave/i.test(navigator.userAgent);
 }
 
 function getUpdateGateProgressLabel(updateStatus) {

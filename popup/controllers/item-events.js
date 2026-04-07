@@ -1,7 +1,7 @@
 import { dom } from "../dom.js";
 import { showNotice } from "../ui/layout.js";
 import { handleRemoveButtonClick } from "./item-mutations.js";
-import { refreshStatus, startPolling, stopPolling } from "./polling.js";
+import { refreshStatus, stopPolling } from "./polling.js";
 import { updateSelectionFromDom } from "./selection-sync.js";
 import {
   isTitleInput,
@@ -100,7 +100,6 @@ export function handleItemsListFocusOut(event) {
 
   window.setTimeout(() => {
     if (!isTitleInput(document.activeElement)) {
-      startPolling();
       void refreshStatus();
     }
   }, 0);

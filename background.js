@@ -3799,32 +3799,8 @@ async function buildPopupStateSnapshotForView(state = currentState, options = {}
   const query = typeof options.query === "string" ? options.query : "";
   const creatorTab =
     typeof options.creatorTab === "string" && options.creatorTab ? options.creatorTab : "all";
-  const mergedItems = new Map();
-
-  for (const item of Array.isArray(sourceState.items) ? sourceState.items : []) {
-    mergedItems.set(getCanonicalItemKey(item), item);
-  }
-
-  const shouldMergeBackupItems =
-    Number(sourceState.backedUpItemCount) > 0 ||
-    sourceState.phase === "fetching" ||
-    sourceState.phase === "fetch-paused" ||
-    Boolean(normalizeResumableFetchRequest(sourceState.resumableFetchRequest));
-  if (shouldMergeBackupItems) {
-    try {
-      const backupMeta = await findArchiveVolatileBackupMeta(sourceState);
-      if (backupMeta && typeof backupMeta.sessionKey === "string" && backupMeta.sessionKey) {
-        const backupItems = await loadVolatileBackupItemsBySessionKey(backupMeta.sessionKey);
-        for (const item of backupItems) {
-          mergedItems.set(getCanonicalItemKey(item), item);
-        }
-      }
-    } catch (error) {
-      console.warn("Failed to load paged popup results from the persistent backup.", error);
-    }
-  }
-
-  const creatorFilteredItems = filterPopupItemsForCreatorTab([...mergedItems.values()], creatorTab);
+  const mergedItems = await loadMergedFetchItemsForState(sourceState);
+  const creatorFilteredItems = filterPopupItemsForCreatorTab(mergedItems, creatorTab);
   const queryFilteredItems = creatorFilteredItems.filter((item) =>
     matchesPopupSearch(item, sourceState.titleOverrides, query),
   );
@@ -3871,6 +3847,38 @@ async function buildPopupStateSnapshotForView(state = currentState, options = {}
     popupPageCount: 1,
     popupPageSize: totalItemCount,
   };
+}
+
+async function loadMergedFetchItemsForState(state = currentState) {
+  const sourceState = state && typeof state === "object" ? state : createDefaultState();
+  const mergedItems = new Map();
+
+  for (const item of Array.isArray(sourceState.items) ? sourceState.items : []) {
+    mergedItems.set(getCanonicalItemKey(item), item);
+  }
+
+  const shouldMergeBackupItems =
+    Number(sourceState.backedUpItemCount) > 0 ||
+    sourceState.phase === "fetching" ||
+    sourceState.phase === "fetch-paused" ||
+    Boolean(normalizeResumableFetchRequest(sourceState.resumableFetchRequest));
+  if (!shouldMergeBackupItems) {
+    return sortItemsByNewest([...mergedItems.values()]);
+  }
+
+  try {
+    const backupMeta = await findArchiveVolatileBackupMeta(sourceState);
+    if (backupMeta && typeof backupMeta.sessionKey === "string" && backupMeta.sessionKey) {
+      const backupItems = await loadVolatileBackupItemsBySessionKey(backupMeta.sessionKey);
+      for (const item of backupItems) {
+        mergedItems.set(getCanonicalItemKey(item), item);
+      }
+    }
+  } catch (error) {
+    console.warn("Failed to load paged popup results from the persistent backup.", error);
+  }
+
+  return sortItemsByNewest([...mergedItems.values()]);
 }
 
 function setKeepAwakeEnabled(enabled) {
@@ -6830,9 +6838,10 @@ async function scanSources(sources, searchQuery = "") {
   } catch (error) {
     if (isControlError(error, "pause")) {
       requestedControlAction = null;
-      const activeItems = Array.isArray(currentState.items) ? currentState.items : [];
+      const activeItems = await loadMergedFetchItemsForState(currentState);
+      const activeSourceIds = deriveSourceIdsFromItems(activeItems);
       const nextSelectedKeys = normalizeSelectedKeys(activeItems, currentState.selectedKeys);
-      const backedUpCount = Number(currentState.backedUpItemCount) || 0;
+      const backedUpCount = activeItems.length > 0 ? 0 : Number(currentState.backedUpItemCount) || 0;
       const fetchMessage = activeItems.length
         ? "Fetch paused. Resume when you're ready."
         : "Fetch paused before any results were loaded. Resume when you're ready.";
@@ -6847,12 +6856,21 @@ async function scanSources(sources, searchQuery = "") {
 
       await setState({
         phase: "fetch-paused",
+        profileIds: activeSourceIds.profileIds,
+        draftIds: activeSourceIds.draftIds,
+        likesIds: activeSourceIds.likesIds,
+        cameoIds: activeSourceIds.cameoIds,
+        characterIds: activeSourceIds.characterIds,
+        creatorIds: activeSourceIds.creatorIds,
+        items: activeItems,
         message: fetchMessage,
         currentSource: null,
         resumableFetchRequest: pausedFetchRequest,
         fetchedCount: activeItems.length + backedUpCount,
+        backedUpItemCount: backedUpCount,
         selectedKeys: nextSelectedKeys,
         queued: nextSelectedKeys.length,
+        titleOverrides: pruneLegacyTitleOverrides(activeItems, currentState.titleOverrides),
         fetchProgress,
         lastError: "",
         finishedAt: new Date().toISOString(),
@@ -13096,6 +13114,7 @@ async function waitForDownloadCompletion(downloadId, filename, timeoutMs = 30000
       }
       finished = true;
       chrome.downloads.onChanged.removeListener(handleChanged);
+      clearInterval(statePoll);
       reject(new Error(`Timed out while downloading ${filename}.`));
     }, timeoutMs);
 
@@ -13106,6 +13125,7 @@ async function waitForDownloadCompletion(downloadId, filename, timeoutMs = 30000
       finished = true;
       clearTimeout(timeout);
       chrome.downloads.onChanged.removeListener(handleChanged);
+      clearInterval(statePoll);
       resolve();
     }
 
@@ -13116,6 +13136,7 @@ async function waitForDownloadCompletion(downloadId, filename, timeoutMs = 30000
       finished = true;
       clearTimeout(timeout);
       chrome.downloads.onChanged.removeListener(handleChanged);
+      clearInterval(statePoll);
       if (reason instanceof Error) {
         reject(reason);
         return;
@@ -13123,42 +13144,72 @@ async function waitForDownloadCompletion(downloadId, filename, timeoutMs = 30000
       reject(new Error(`${filename}: ${reason}`));
     }
 
-    async function handleChanged(delta) {
-      if (finished || delta.id !== downloadId || !delta.state) {
+    function resolveInterruptedDownload(downloadItem, fallbackReason = "download interrupted") {
+      if (requestedControlAction === "pause") {
+        finishFailure(createControlError("pause", "Download paused."));
         return;
       }
 
-      if (delta.state.current === "complete") {
+      if (requestedControlAction === "abort") {
+        finishFailure(createControlError("abort", "Download aborted."));
+        return;
+      }
+
+      finishFailure(
+        (downloadItem && typeof downloadItem.error === "string" && downloadItem.error) ||
+          fallbackReason,
+      );
+    }
+
+    async function handleChanged(delta) {
+      if (finished || delta.id !== downloadId) {
+        return;
+      }
+
+      if (delta.state && delta.state.current === "complete") {
         finishSuccess();
         return;
       }
 
-      if (delta.state.current === "interrupted") {
-        if (requestedControlAction === "pause") {
-          finishFailure(createControlError("pause", "Download paused."));
-          return;
-        }
-
-        if (requestedControlAction === "abort") {
-          finishFailure(createControlError("abort", "Download aborted."));
-          return;
-        }
-
+      const interruptedByState = delta.state && delta.state.current === "interrupted";
+      const interruptedByError = delta.error && typeof delta.error.current === "string";
+      if (interruptedByState || interruptedByError) {
         let reason = delta.error && delta.error.current ? delta.error.current : "download interrupted";
         try {
           const [downloadItem] = await chrome.downloads.search({ id: downloadId });
-          if (downloadItem && downloadItem.error) {
-            reason = downloadItem.error;
-          }
+          resolveInterruptedDownload(downloadItem, reason);
+          return;
         } catch (_error) {
           // Ignore lookup errors and keep the current reason.
         }
 
-        finishFailure(reason);
+        resolveInterruptedDownload(null, reason);
       }
     }
 
     chrome.downloads.onChanged.addListener(handleChanged);
+
+    const statePoll = setInterval(() => {
+      void chrome.downloads
+        .search({ id: downloadId })
+        .then(([downloadItem]) => {
+          if (!downloadItem || finished) {
+            return;
+          }
+
+          if (downloadItem.state === "complete") {
+            finishSuccess();
+            return;
+          }
+
+          if (downloadItem.state === "interrupted") {
+            resolveInterruptedDownload(downloadItem, downloadItem.error || "download interrupted");
+          }
+        })
+        .catch(() => {
+          // Ignore transient lookup failures and keep polling.
+        });
+    }, 750);
 
     void chrome.downloads
       .search({ id: downloadId })
@@ -13173,17 +13224,7 @@ async function waitForDownloadCompletion(downloadId, filename, timeoutMs = 30000
         }
 
         if (downloadItem.state === "interrupted") {
-          if (requestedControlAction === "pause") {
-            finishFailure(createControlError("pause", "Download paused."));
-            return;
-          }
-
-          if (requestedControlAction === "abort") {
-            finishFailure(createControlError("abort", "Download aborted."));
-            return;
-          }
-
-          finishFailure(downloadItem.error || "download interrupted");
+          resolveInterruptedDownload(downloadItem, downloadItem.error || "download interrupted");
         }
       })
       .catch(() => {
