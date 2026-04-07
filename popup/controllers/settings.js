@@ -58,26 +58,6 @@ export function handleCreatorResultsTabClick(event) {
 
 export function handlePickerScroll() {
   updateBackToTopVisibility();
-
-  if (
-    !(dom.pickerScrollRegion instanceof HTMLElement) ||
-    popupState.resultsLoadInFlight ||
-    popupState.resultsCanLoadMore !== true
-  ) {
-    return;
-  }
-
-  const remainingDistance =
-    dom.pickerScrollRegion.scrollHeight -
-    dom.pickerScrollRegion.scrollTop -
-    dom.pickerScrollRegion.clientHeight;
-  if (remainingDistance > 280) {
-    return;
-  }
-
-  popupState.resultsLoadInFlight = true;
-  popupState.resultsPageSize += popupState.resultsChunkSize;
-  void refreshStatus();
 }
 
 /**
@@ -231,9 +211,6 @@ export async function handleClearVolatileBackupsClick() {
  * Re-renders the list after a local browse-state change.
  */
 function rerenderBrowseResults() {
-  popupState.resultsPageSize = popupState.resultsChunkSize;
-  popupState.resultsCanLoadMore = false;
-  popupState.resultsLoadInFlight = false;
   if (dom.pickerScrollRegion instanceof HTMLElement) {
     dom.pickerScrollRegion.scrollTop = 0;
   }
@@ -250,6 +227,7 @@ async function saveSettingsFromForm() {
     !(dom.maxVideosInput instanceof HTMLInputElement) ||
     !(dom.defaultSortInput instanceof HTMLSelectElement) ||
     !(dom.defaultThemeInput instanceof HTMLSelectElement) ||
+    !(dom.downloadModeInput instanceof HTMLSelectElement) ||
     !(dom.automaticUpdatesInput instanceof HTMLInputElement) ||
     !(dom.defaultSourceLabel instanceof HTMLElement) ||
     !(dom.settingsStatus instanceof HTMLElement)
@@ -264,6 +242,7 @@ async function saveSettingsFromForm() {
   const defaultSource = getSelectedSourceValues(dom.defaultSourceInputs);
   const defaultSort = normalizeSortValue(dom.defaultSortInput.value);
   const theme = dom.defaultThemeInput.value === "light" ? "light" : "dark";
+  const downloadMode = dom.downloadModeInput.value === "direct" ? "direct" : "archive";
   const automaticUpdatesEnabled = dom.automaticUpdatesInput.checked;
 
   try {
@@ -272,6 +251,8 @@ async function saveSettingsFromForm() {
       defaultSource,
       defaultSort,
       theme,
+      downloadMode,
+      hasExplicitDownloadModeChoice: true,
       automaticUpdatesEnabled,
     });
   } catch (error) {

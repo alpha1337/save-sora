@@ -12,10 +12,6 @@ export const popupState = {
   fetchDrawerExpanded: false,
   fetchDrawerUserToggled: false,
   isFullscreenView: false,
-  resultsPageSize: 120,
-  resultsChunkSize: 120,
-  resultsCanLoadMore: false,
-  resultsLoadInFlight: false,
   activeTab: "overview",
   activeFetchStatusMessage: "",
   lastRenderedSignature: "",
@@ -88,4 +84,5 @@ export const popupState = {
     visibleSelectedCount: 0,
     phase: "idle",
   },
+  downloadModeAutoChecked: false,
 };

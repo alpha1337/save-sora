@@ -108,6 +108,7 @@ export function initializeEventHandlers() {
   dom.defaultSourceMenu?.addEventListener("change", handleSettingsSourceMenuChange);
   dom.defaultSortInput?.addEventListener("change", handleSettingsChange);
   dom.defaultThemeInput?.addEventListener("change", handleSettingsChange);
+  dom.downloadModeInput?.addEventListener("change", handleSettingsChange);
   dom.automaticUpdatesInput?.addEventListener("change", handleSettingsChange);
   dom.clearStorageButton?.addEventListener("click", handleClearStorageClick);
   dom.clearVolatileBackupsButton?.addEventListener("click", handleClearVolatileBackupsClick);

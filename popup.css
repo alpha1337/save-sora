@@ -112,7 +112,7 @@ body::-webkit-scrollbar {
   grid-template-rows: minmax(0, 1fr);
   height: 100%;
   min-height: 0;
-  padding: 14px;
+  padding: 16px;
   overflow-y: hidden;
   overflow-x: hidden;
   scroll-behavior: smooth;
@@ -520,9 +520,9 @@ body[data-theme="light"] .tab-button.is-active {
 }
 
 .tab-panel {
-  height: 446px;
-  min-height: 446px;
-  max-height: 446px;
+  height: 100%;
+  min-height: 0;
+  max-height: none;
   overflow: hidden;
   padding-bottom: 0;
 }
@@ -577,10 +577,11 @@ body.is-fullscreen-view .tab-panel {
 
 body.is-fullscreen-view .dashboard-grid {
   grid-template-columns: 260px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) auto;
   gap: 18px;
-  height: auto;
-  min-height: calc(100vh - 182px);
-  overflow: visible;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
 }
 
 body.is-fullscreen-view .left-rail {
@@ -589,7 +590,7 @@ body.is-fullscreen-view .left-rail {
 
 body.is-fullscreen-view .picker-panel {
   gap: 16px;
-  min-height: calc(100vh - 222px);
+  min-height: 0;
 }
 
 body.is-fullscreen-view .picker-scroll-region.is-scrollable {
@@ -616,8 +617,8 @@ body.is-fullscreen-view .empty-state {
 }
 
 #panel-overview.tab-panel.is-active {
-  grid-template-rows: minmax(0, 1fr) auto;
-  gap: 12px;
+  grid-template-rows: minmax(0, 1fr);
+  gap: 0;
   min-height: 0;
   overflow: hidden;
 }
@@ -626,7 +627,7 @@ body.is-fullscreen-view .empty-state {
 .dashboard-grid {
   display: grid;
   grid-template-columns: 220px minmax(0, 1fr);
-  grid-template-rows: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) auto;
   gap: 14px;
   height: 100%;
   min-height: 0;
@@ -635,13 +636,14 @@ body.is-fullscreen-view .empty-state {
 }
 
 .left-rail {
+  grid-column: 1;
+  grid-row: 1;
   display: grid;
   align-content: start;
   gap: 12px;
   min-width: 0;
-  position: sticky;
-  top: 0;
-  align-self: start;
+  min-height: 0;
+  align-self: stretch;
 }
 
 .panel {
@@ -1144,6 +1146,8 @@ body[data-theme="light"] .export-split-option:hover:not(:disabled) {
 }
 
 .picker-panel {
+  grid-column: 2;
+  grid-row: 1 / span 2;
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -1269,6 +1273,9 @@ body[data-theme="light"] .export-split-option:hover:not(:disabled) {
 }
 
 .fetch-progress-panel {
+  grid-column: 1;
+  grid-row: 2;
+  align-self: end;
   position: relative;
   z-index: 8;
   display: grid;

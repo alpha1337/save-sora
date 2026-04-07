@@ -108,6 +108,7 @@ export const dom = {
   defaultSourceInputs: [...document.querySelectorAll('input[data-source-group="settings"]')],
   defaultSortInput: document.getElementById("default-sort-input"),
   defaultThemeInput: document.getElementById("default-theme-input"),
+  downloadModeInput: document.getElementById("download-mode-input"),
   automaticUpdatesInput: document.getElementById("automatic-updates-input"),
   updaterStatusSummary: document.getElementById("updater-status-summary"),
   updaterStatusDetail: document.getElementById("updater-status-detail"),

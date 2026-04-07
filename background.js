@@ -209,7 +209,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       .then(() =>
         buildPopupStateSnapshotForView(currentState, {
           pageIndex: message.pageIndex,
-          pageSize: message.pageSize,
           sortKey: message.sortKey,
           query: message.query,
           creatorTab: message.creatorTab,
@@ -755,6 +754,8 @@ function createDefaultState(overrides = {}) {
       defaultSource: [...DEFAULT_SOURCE_VALUES],
       defaultSort: "newest",
       theme: "dark",
+      downloadMode: "archive",
+      hasExplicitDownloadModeChoice: false,
       preferredViewMode: "windowed",
       automaticUpdatesEnabled: true,
     },
@@ -782,6 +783,14 @@ function normalizeResumableFetchRequest(request) {
 
 function normalizePreferredViewMode(value) {
   return value === "fullscreen" ? "fullscreen" : "windowed";
+}
+
+function normalizeDownloadMode(value) {
+  return value === "direct" ? "direct" : "archive";
+}
+
+function normalizeExplicitDownloadModeChoice(value) {
+  return value === true;
 }
 
 function buildPopupShellUrl(options = {}) {
@@ -2575,7 +2584,6 @@ function getVolatileBackupProgressDescriptorsForSource(source, options = {}) {
             shouldFetchCreatorCommunityPosts(profile)
               ? createVolatileBackupProgressDescriptor(
                 getVolatileBackupProgressKey("creatorCharacterCameos", profile.profileId),
-                { loadAllItems: false },
               )
               : null,
           ].filter(Boolean);
@@ -2602,28 +2610,69 @@ function getVolatileBackupProgressDescriptorsForSource(source, options = {}) {
 
 async function findUsableVolatileBackupMetaForSource(source, options = {}) {
   const selectionSignature = getSourceSelectionSignature(source, options);
-  const existingMeta = await findLatestVolatileBackupMeta({
-    source,
-    selectionSignature,
-    statuses: ["running", "paused", "error", "completed"],
-  });
-
-  if (!existingMeta || typeof existingMeta.sessionKey !== "string" || !existingMeta.sessionKey) {
-    return null;
-  }
-
-  const progressMap = normalizeVolatileBackupProgressMap(existingMeta.progressByKey);
   const descriptors = getVolatileBackupProgressDescriptorsForSource(source, options);
-  for (const descriptor of descriptors) {
-    if (
-      descriptor &&
-      (await hasUsableVolatileBackupProgress(
-        existingMeta.sessionKey,
-        descriptor.progressKey,
-        progressMap[descriptor.progressKey],
-      ))
-    ) {
-      return existingMeta;
+  const statuses = ["running", "paused", "error", "completed"];
+  const candidateMetas = (await listVolatileBackupMetas())
+    .filter((meta) => {
+      if (!meta || typeof meta !== "object") {
+        return false;
+      }
+
+      if (source && meta.source !== source) {
+        return false;
+      }
+
+      if (!statuses.includes(meta.status)) {
+        return false;
+      }
+
+      return typeof meta.sessionKey === "string" && meta.sessionKey;
+    })
+    .sort((left, right) => {
+      const leftExactMatch = selectionSignature && left.selectionSignature === selectionSignature ? 1 : 0;
+      const rightExactMatch = selectionSignature && right.selectionSignature === selectionSignature ? 1 : 0;
+      if (leftExactMatch !== rightExactMatch) {
+        return rightExactMatch - leftExactMatch;
+      }
+
+      const leftProgressMap = normalizeVolatileBackupProgressMap(left.progressByKey);
+      const rightProgressMap = normalizeVolatileBackupProgressMap(right.progressByKey);
+      const leftTotal = descriptors.reduce(
+        (sum, descriptor) =>
+          descriptor
+            ? sum + (Number(leftProgressMap[descriptor.progressKey]?.totalItemCount) || 0)
+            : sum,
+        0,
+      );
+      const rightTotal = descriptors.reduce(
+        (sum, descriptor) =>
+          descriptor
+            ? sum + (Number(rightProgressMap[descriptor.progressKey]?.totalItemCount) || 0)
+            : sum,
+        0,
+      );
+      if (leftTotal !== rightTotal) {
+        return rightTotal - leftTotal;
+      }
+
+      const leftTime = new Date(left.updatedAt || left.startedAt || 0).getTime();
+      const rightTime = new Date(right.updatedAt || right.startedAt || 0).getTime();
+      return rightTime - leftTime;
+    });
+
+  for (const candidateMeta of candidateMetas) {
+    const progressMap = normalizeVolatileBackupProgressMap(candidateMeta.progressByKey);
+    for (const descriptor of descriptors) {
+      if (
+        descriptor &&
+        (await hasUsableVolatileBackupProgress(
+          candidateMeta.sessionKey,
+          descriptor.progressKey,
+          progressMap[descriptor.progressKey],
+        ))
+      ) {
+        return candidateMeta;
+      }
     }
   }
 
@@ -3566,11 +3615,6 @@ function matchesPopupSearch(item, titleOverrides, query) {
 async function buildPopupStateSnapshotForView(state = currentState, options = {}) {
   const sourceState = state && typeof state === "object" ? state : createDefaultState();
   const popupSnapshot = buildPopupStateSnapshot(sourceState);
-  if (popupSnapshot.popupItemsTruncated !== true) {
-    return popupSnapshot;
-  }
-
-  const pageSize = getPopupPageSize(options.pageSize);
   const sortKey = typeof options.sortKey === "string" && options.sortKey ? options.sortKey : "newest";
   const query = typeof options.query === "string" ? options.query : "";
   const creatorTab =
@@ -3581,7 +3625,12 @@ async function buildPopupStateSnapshotForView(state = currentState, options = {}
     mergedItems.set(getCanonicalItemKey(item), item);
   }
 
-  if (Number(sourceState.backedUpItemCount) > 0) {
+  const shouldMergeBackupItems =
+    Number(sourceState.backedUpItemCount) > 0 ||
+    sourceState.phase === "fetching" ||
+    sourceState.phase === "fetch-paused" ||
+    Boolean(normalizeResumableFetchRequest(sourceState.resumableFetchRequest));
+  if (shouldMergeBackupItems) {
     try {
       const backupMeta = await findArchiveVolatileBackupMeta(sourceState);
       if (backupMeta && typeof backupMeta.sessionKey === "string" && backupMeta.sessionKey) {
@@ -3600,30 +3649,30 @@ async function buildPopupStateSnapshotForView(state = currentState, options = {}
     matchesPopupSearch(item, sourceState.titleOverrides, query),
   );
   const sortedItems = getSortedPopupItems(queryFilteredItems, sortKey);
-  const totalItemCount = sortedItems.length;
-  const pageItems = sortedItems
-    .slice(0, pageSize)
+  const fullItems = sortedItems
     .map((item) => compactItemForPopup(item))
     .filter(Boolean);
-  const visibleKeys = new Set(pageItems.map((item) => getCanonicalItemKey(item)));
+  const totalItemCount = fullItems.length;
+  const visibleKeys = new Set(fullItems.map((item) => getCanonicalItemKey(item)));
   const selectedKeysTotal = Array.isArray(sourceState.selectedKeys)
     ? sourceState.selectedKeys.filter((key) => typeof key === "string").length
     : 0;
 
   return {
     ...popupSnapshot,
-    items: pageItems,
+    items: fullItems,
     selectedKeys: Array.isArray(sourceState.selectedKeys)
       ? sourceState.selectedKeys.filter((key) => typeof key === "string" && visibleKeys.has(key))
       : [],
     partialWarning: sourceState.partialWarning || "",
-    popupVisibleItemCount: pageItems.length,
-    popupHiddenItemCount: Math.max(0, totalItemCount - pageItems.length),
+    popupItemsTruncated: false,
+    popupVisibleItemCount: fullItems.length,
+    popupHiddenItemCount: 0,
     popupTotalItemCount: totalItemCount,
     popupSelectedCountTotal: selectedKeysTotal,
     popupPageIndex: 0,
     popupPageCount: 1,
-    popupPageSize: pageSize,
+    popupPageSize: totalItemCount,
   };
 }
 
@@ -3700,6 +3749,11 @@ function buildPersistedItemKeys(items) {
 }
 
 function serializeStateForPersistence(state = currentState) {
+  const phase =
+    state && typeof state === "object" && typeof state.phase === "string"
+      ? state.phase
+      : "idle";
+  const isFetchResumeState = phase === "fetching" || phase === "fetch-paused";
   const persistedItemKeys = buildPersistedItemKeys(state && state.items);
   const persistedItemKeySet = new Set(persistedItemKeys);
   const nextState = {
@@ -3711,7 +3765,7 @@ function serializeStateForPersistence(state = currentState) {
     characterIds: [],
     creatorIds: [],
     items: [],
-    itemKeys: persistedItemKeys,
+    itemKeys: isFetchResumeState ? [] : persistedItemKeys,
     pendingItems: normalizePersistedItems(state && state.pendingItems),
     failedItems: normalizePersistedItems(state && state.failedItems),
     resumableFetchRequest: normalizeResumableFetchRequest(
@@ -3722,13 +3776,16 @@ function serializeStateForPersistence(state = currentState) {
 
   nextState.selectedKeys = Array.isArray(nextState.selectedKeys)
     ? nextState.selectedKeys.filter(
-      (value) => typeof value === "string" && persistedItemKeySet.has(value),
+      (value) =>
+        typeof value === "string" && (isFetchResumeState || persistedItemKeySet.has(value)),
     )
     : [];
-  nextState.titleOverrides = pruneLegacyTitleOverrides(
-    normalizeCatalogItems(state && state.items).filter((item) => shouldPersistCatalogItem(item)),
-    nextState.titleOverrides,
-  );
+  nextState.titleOverrides = isFetchResumeState
+    ? {}
+    : pruneLegacyTitleOverrides(
+      normalizeCatalogItems(state && state.items).filter((item) => shouldPersistCatalogItem(item)),
+      nextState.titleOverrides,
+    );
   nextState.queued = nextState.selectedKeys.length;
 
   return nextState;
@@ -3788,9 +3845,7 @@ async function restoreInterruptedFetchState(state) {
   }
 
   try {
-    const restoredItems = new Map(
-      normalizeCatalogItems(nextState.items).map((item) => [getCanonicalItemKey(item), item]),
-    );
+    const restoredItems = new Map();
     let restoredTotalItemCount = 0;
     let restoredBackedUpItemCount = 0;
     let activeBackupMeta = null;
@@ -3855,7 +3910,11 @@ async function restoreInterruptedFetchState(state) {
     activeVolatileBackupResumeMeta = activeBackupMeta;
 
     const restoredSourceIds = deriveSourceIdsFromItems(restoredPreviewItems);
-    const restoredSelectedKeys = normalizeSelectedKeys(restoredPreviewItems, nextState.selectedKeys);
+    const restoredSelectionSeed =
+      Array.isArray(nextState.selectedKeys) && nextState.selectedKeys.length > 0
+        ? nextState.selectedKeys
+        : restoredPreviewItems.map((item) => getCanonicalItemKey(item));
+    const restoredSelectedKeys = normalizeSelectedKeys(restoredPreviewItems, restoredSelectionSeed);
     const backedUpItemCount = Math.max(
       restoredBackedUpItemCount,
       restoredTotalItemCount - restoredPreviewItems.length,
@@ -3922,6 +3981,10 @@ async function restoreState() {
         defaultSource: normalizeDefaultSource(currentState.settings.defaultSource),
         defaultSort: normalizeDefaultSort(currentState.settings.defaultSort),
         theme: normalizeTheme(currentState.settings.theme),
+        downloadMode: normalizeDownloadMode(currentState.settings.downloadMode),
+        hasExplicitDownloadModeChoice: normalizeExplicitDownloadModeChoice(
+          currentState.settings.hasExplicitDownloadModeChoice,
+        ),
         preferredViewMode: normalizePreferredViewMode(currentState.settings.preferredViewMode),
         automaticUpdatesEnabled: normalizeAutomaticUpdatesEnabled(
           currentState.settings.automaticUpdatesEnabled,
@@ -3996,8 +4059,17 @@ async function restoreState() {
       });
     }
 
-    const restoredItems = restorePersistedItems(savedState, currentCatalog.items);
-    if (restoredItems.length > 0 || (savedState && Array.isArray(savedState.itemKeys))) {
+    const shouldRestorePersistedPreview =
+      currentState.phase !== "fetching" &&
+      currentState.phase !== "fetch-paused" &&
+      !currentState.resumableFetchRequest;
+    const restoredItems = shouldRestorePersistedPreview
+      ? restorePersistedItems(savedState, currentCatalog.items)
+      : [];
+    if (
+      shouldRestorePersistedPreview &&
+      (restoredItems.length > 0 || (savedState && Array.isArray(savedState.itemKeys)))
+    ) {
       const restoredSourceIds = deriveSourceIdsFromItems(restoredItems);
       currentState = {
         ...currentState,
@@ -7560,6 +7632,25 @@ async function updateSettings(nextSettings) {
     settings.theme = normalizeTheme(settings.theme);
   }
 
+  if (nextSettings && Object.prototype.hasOwnProperty.call(nextSettings, "downloadMode")) {
+    settings.downloadMode = normalizeDownloadMode(nextSettings.downloadMode);
+  } else {
+    settings.downloadMode = normalizeDownloadMode(settings.downloadMode);
+  }
+
+  if (
+    nextSettings &&
+    Object.prototype.hasOwnProperty.call(nextSettings, "hasExplicitDownloadModeChoice")
+  ) {
+    settings.hasExplicitDownloadModeChoice = normalizeExplicitDownloadModeChoice(
+      nextSettings.hasExplicitDownloadModeChoice,
+    );
+  } else {
+    settings.hasExplicitDownloadModeChoice = normalizeExplicitDownloadModeChoice(
+      settings.hasExplicitDownloadModeChoice,
+    );
+  }
+
   if (nextSettings && Object.prototype.hasOwnProperty.call(nextSettings, "preferredViewMode")) {
     settings.preferredViewMode = normalizePreferredViewMode(nextSettings.preferredViewMode);
   } else {
@@ -7599,21 +7690,44 @@ async function downloadSelected() {
   if (!selectedItems.length) {
     throw new Error("Select at least one video before downloading.");
   }
+  const downloadMode = normalizeDownloadMode(
+    currentState &&
+      currentState.settings &&
+      Object.prototype.hasOwnProperty.call(currentState.settings, "downloadMode")
+      ? currentState.settings.downloadMode
+      : "archive",
+  );
 
   setKeepAwakeEnabled(true);
   activeRun = (async () => {
     try {
-      await performArchiveDownloadRun(selectedItems, {
-        mode: "archive-selected",
-        startingCompleted: 0,
-        startingFailedItems: [],
-        totalTarget: selectedItems.length,
-        introMessage: `Building a ZIP archive for ${selectedItems.length} selected item(s)...`,
-        completionMessage: (completed, failed) =>
-          failed === 0
-            ? `Saved a ZIP archive with ${completed} item(s).`
-            : `Saved a ZIP archive with ${completed} item(s) and ${failed} skipped item(s).`,
-      });
+      if (downloadMode === "direct") {
+        await performDownloadRun(selectedItems, {
+          mode: "selected",
+          startingCompleted: 0,
+          startingFailedItems: [],
+          totalTarget: selectedItems.length,
+          introMessage: `Starting ${selectedItems.length} selected download(s)...`,
+          progressMessage: (completed, total) => `Downloaded ${completed} of ${total}`,
+          failureMessage: (item) => `Failed to download ${item.filename}`,
+          completionMessage: (completed, failed) =>
+            failed === 0
+              ? `Finished downloading ${completed} item(s).`
+              : `Finished with ${completed} success(es) and ${failed} failure(s).`,
+        });
+      } else {
+        await performArchiveDownloadRun(selectedItems, {
+          mode: "archive-selected",
+          startingCompleted: 0,
+          startingFailedItems: [],
+          totalTarget: selectedItems.length,
+          introMessage: `Building a ZIP archive for ${selectedItems.length} selected item(s)...`,
+          completionMessage: (completed, failed) =>
+            failed === 0
+              ? `Saved a ZIP archive with ${completed} item(s).`
+              : `Saved a ZIP archive with ${completed} item(s) and ${failed} skipped item(s).`,
+        });
+      }
     } finally {
       try {
         await cleanupHiddenTab();
@@ -7639,6 +7753,18 @@ async function beginSelectedDownload() {
   if (!selectedItems.length) {
     throw new Error("Select at least one video before downloading.");
   }
+  const downloadMode = normalizeDownloadMode(
+    currentState &&
+      currentState.settings &&
+      Object.prototype.hasOwnProperty.call(currentState.settings, "downloadMode")
+      ? currentState.settings.downloadMode
+      : "archive",
+  );
+  const isArchiveDownloadMode = downloadMode !== "direct";
+  const selectedRunMode = isArchiveDownloadMode ? "archive-selected" : "selected";
+  const startingMessage = isArchiveDownloadMode
+    ? `Building a ZIP archive for ${selectedItems.length} selected item(s)...`
+    : `Starting ${selectedItems.length} selected download(s)...`;
 
   await setState({
     phase: "downloading",
@@ -7648,28 +7774,45 @@ async function beginSelectedDownload() {
     failed: 0,
     failedItems: [],
     pendingItems: createQueueSnapshots(selectedItems),
-    runMode: "archive-selected",
+    runMode: selectedRunMode,
     runTotal: selectedItems.length,
     lastError: "",
     finishedAt: null,
-    message: `Building a ZIP archive for ${selectedItems.length} selected item(s)...`,
+    message: startingMessage,
   });
 
   setKeepAwakeEnabled(true);
   activeRun = (async () => {
     try {
-      await performArchiveDownloadRun(selectedItems, {
-        mode: "archive-selected",
-        startingCompleted: 0,
-        startingFailedItems: [],
-        totalTarget: selectedItems.length,
-        initialStateApplied: true,
-        introMessage: `Building a ZIP archive for ${selectedItems.length} selected item(s)...`,
-        completionMessage: (completed, failed) =>
-          failed === 0
-            ? `Saved a ZIP archive with ${completed} item(s).`
-            : `Saved a ZIP archive with ${completed} item(s) and ${failed} skipped item(s).`,
-      });
+      if (isArchiveDownloadMode) {
+        await performArchiveDownloadRun(selectedItems, {
+          mode: "archive-selected",
+          startingCompleted: 0,
+          startingFailedItems: [],
+          totalTarget: selectedItems.length,
+          initialStateApplied: true,
+          introMessage: `Building a ZIP archive for ${selectedItems.length} selected item(s)...`,
+          completionMessage: (completed, failed) =>
+            failed === 0
+              ? `Saved a ZIP archive with ${completed} item(s).`
+              : `Saved a ZIP archive with ${completed} item(s) and ${failed} skipped item(s).`,
+        });
+      } else {
+        await performDownloadRun(selectedItems, {
+          mode: "selected",
+          startingCompleted: 0,
+          startingFailedItems: [],
+          totalTarget: selectedItems.length,
+          initialStateApplied: true,
+          introMessage: `Starting ${selectedItems.length} selected download(s)...`,
+          progressMessage: (completed, total) => `Downloaded ${completed} of ${total}`,
+          failureMessage: (item) => `Failed to download ${item.filename}`,
+          completionMessage: (completed, failed) =>
+            failed === 0
+              ? `Finished downloading ${completed} item(s).`
+              : `Finished with ${completed} success(es) and ${failed} failure(s).`,
+        });
+      }
     } finally {
       try {
         await cleanupHiddenTab();
@@ -10031,7 +10174,7 @@ async function fetchAllCreatorFeedItems(creatorProfile, options = {}) {
           : `attachment:${Number.isInteger(item && item.attachmentIndex) ? item.attachmentIndex : 0}`,
     ].join("|");
 
-  const getPreviewItems = () => sortItemsByNewest([...itemMap.values()]).slice(0, previewLimit);
+  const getPreviewItems = () => sortItemsByNewest([...itemMap.values()]);
 
   if (shouldBackupItems && resumeState) {
     try {
@@ -10148,6 +10291,32 @@ async function fetchAllCreatorFeedItems(creatorProfile, options = {}) {
       }
     }
 
+    const didReachKnownItems = didPageContainOnlyKnownItems(pageItems, knownItemKeys);
+    const nextCursor = resolveNextProfileFeedCursor(page, allPageItems, cursor, previousCursor);
+    const didReachTerminalPage =
+      didReachKnownItems ||
+      page.rowCount === 0 ||
+      !nextCursor ||
+      Boolean(maxItems && totalItemCount >= maxItems);
+
+    if (shouldBackupItems) {
+      try {
+        await updateVolatileBackupProgress(backupSessionKey, progressKey, {
+          sourcePage: "creatorPublished",
+          creatorProfileId: creatorProfile.profileId,
+          creatorProfileUsername: creatorProfile.username,
+          cursor: didReachKnownItems ? cursor || "" : nextCursor || "",
+          previousCursor: cursor || "",
+          totalItemCount,
+          backedUpItemCount,
+          previewCount: totalItemCount,
+          isComplete: didReachTerminalPage,
+        });
+      } catch (error) {
+        console.warn(`Failed to checkpoint ${creatorProfile.displayName} creator posts.`, error);
+      }
+    }
+
     if (typeof options.onProgress === "function") {
       const previewItems = getPreviewItems();
       await options.onProgress({
@@ -10160,33 +10329,8 @@ async function fetchAllCreatorFeedItems(creatorProfile, options = {}) {
 
     throwIfFetchAbortRequested();
 
-    if (didPageContainOnlyKnownItems(pageItems, knownItemKeys)) {
+    if (didReachKnownItems) {
       break;
-    }
-
-    const nextCursor = resolveNextProfileFeedCursor(page, allPageItems, cursor, previousCursor);
-    const didReachTerminalPage =
-      didPageContainOnlyKnownItems(pageItems, knownItemKeys) ||
-      page.rowCount === 0 ||
-      !nextCursor ||
-      Boolean(maxItems && totalItemCount >= maxItems);
-
-    if (shouldBackupItems) {
-      try {
-        await updateVolatileBackupProgress(backupSessionKey, progressKey, {
-          sourcePage: "creatorPublished",
-          creatorProfileId: creatorProfile.profileId,
-          creatorProfileUsername: creatorProfile.username,
-          cursor: didPageContainOnlyKnownItems(pageItems, knownItemKeys) ? cursor || "" : nextCursor || "",
-          previousCursor: cursor || "",
-          totalItemCount,
-          backedUpItemCount,
-          previewCount: totalItemCount,
-          isComplete: didReachTerminalPage,
-        });
-      } catch (error) {
-        console.warn(`Failed to checkpoint ${creatorProfile.displayName} creator posts.`, error);
-      }
     }
 
     if (page.rowCount === 0 || !nextCursor) {
@@ -10238,7 +10382,7 @@ async function fetchAllCreatorCameoItems(creatorProfile, options = {}) {
   let backedUpItemCount = 0;
   let usesVolatileBackup = false;
 
-  const getPreviewItems = () => sortItemsByNewest([...items]).slice(0, previewLimit);
+  const getPreviewItems = () => sortItemsByNewest([...items]);
 
   if (shouldBackupItems && resumeState) {
     try {
@@ -10331,6 +10475,32 @@ async function fetchAllCreatorCameoItems(creatorProfile, options = {}) {
       }
     }
 
+    const didReachKnownItems = didPageContainOnlyKnownItems(pageItems, knownItemKeys);
+    const nextCursor = resolveNextProfileFeedCursor(page, pageItems, cursor, previousCursor);
+    const didReachTerminalPage =
+      didReachKnownItems ||
+      page.rowCount === 0 ||
+      !nextCursor ||
+      Boolean(maxItems && totalItemCount >= maxItems);
+
+    if (shouldBackupItems) {
+      try {
+        await updateVolatileBackupProgress(backupSessionKey, progressKey, {
+          sourcePage: "creatorCameos",
+          creatorProfileId: creatorProfile.profileId,
+          creatorProfileUsername: creatorProfile.username,
+          cursor: didReachKnownItems ? cursor || "" : nextCursor || "",
+          previousCursor: cursor || "",
+          totalItemCount,
+          backedUpItemCount,
+          previewCount: items.length,
+          isComplete: didReachTerminalPage,
+        });
+      } catch (error) {
+        console.warn(`Failed to checkpoint ${creatorProfile.displayName} creator cameos.`, error);
+      }
+    }
+
     if (typeof options.onProgress === "function") {
       const previewItems = getPreviewItems();
       await options.onProgress({
@@ -10343,33 +10513,8 @@ async function fetchAllCreatorCameoItems(creatorProfile, options = {}) {
 
     throwIfFetchAbortRequested();
 
-    if (didPageContainOnlyKnownItems(pageItems, knownItemKeys)) {
+    if (didReachKnownItems) {
       break;
-    }
-
-    const nextCursor = resolveNextProfileFeedCursor(page, pageItems, cursor, previousCursor);
-    const didReachTerminalPage =
-      didPageContainOnlyKnownItems(pageItems, knownItemKeys) ||
-      page.rowCount === 0 ||
-      !nextCursor ||
-      Boolean(maxItems && totalItemCount >= maxItems);
-
-    if (shouldBackupItems) {
-      try {
-        await updateVolatileBackupProgress(backupSessionKey, progressKey, {
-          sourcePage: "creatorCameos",
-          creatorProfileId: creatorProfile.profileId,
-          creatorProfileUsername: creatorProfile.username,
-          cursor: didPageContainOnlyKnownItems(pageItems, knownItemKeys) ? cursor || "" : nextCursor || "",
-          previousCursor: cursor || "",
-          totalItemCount,
-          backedUpItemCount,
-          previewCount: items.length,
-          isComplete: didReachTerminalPage,
-        });
-      } catch (error) {
-        console.warn(`Failed to checkpoint ${creatorProfile.displayName} creator cameos.`, error);
-      }
     }
 
     if (page.rowCount === 0 || !nextCursor) {

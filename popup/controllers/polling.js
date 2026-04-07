@@ -17,7 +17,6 @@ import { renderState } from "../ui/render.js";
 export async function refreshStatus() {
   try {
     const state = await fetchRuntimeState({
-      pageSize: popupState.resultsPageSize,
       sortKey: popupState.browseState.sort,
       query: popupState.browseState.query,
       creatorTab: popupState.activeCreatorResultsTab,

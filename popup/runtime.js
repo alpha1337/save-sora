@@ -51,7 +51,6 @@ export async function fetchRuntimeState(options = {}) {
   const response = await sendPopupMessage(
     {
       type: "GET_STATUS",
-      pageSize: options.pageSize,
       sortKey: options.sortKey,
       query: options.query,
       creatorTab: options.creatorTab,

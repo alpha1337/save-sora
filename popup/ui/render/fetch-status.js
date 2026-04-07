@@ -47,10 +47,7 @@ function applyFetchStatusMessage() {
   }
 
   const flavor = popupState.activeFetchStatusMessage || "Finding videos...";
-  dom.selectionSummary.textContent =
-    popupState.latestSummaryContext.totalCount > 0
-      ? `${flavor} ${popupState.latestSummaryContext.totalCount} found so far.`
-      : flavor;
+  dom.selectionSummary.textContent = flavor;
 }
 
 /**

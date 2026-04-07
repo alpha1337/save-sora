@@ -77,6 +77,7 @@ export function renderState(state) {
   const theme = settings && settings.theme === "light" ? "light" : "dark";
   const defaultSource = normalizeSourceValues(settings.defaultSource);
   const defaultSort = normalizeSortValue(settings.defaultSort);
+  const downloadMode = settings && settings.downloadMode === "direct" ? "direct" : "archive";
   const automaticUpdatesEnabled = settings && settings.automaticUpdatesEnabled !== false;
   const totalVideos =
     Number.isFinite(popupTotalItemCount) && popupTotalItemCount >= 0
@@ -121,6 +122,7 @@ export function renderState(state) {
     theme,
     defaultSource,
     defaultSort,
+    downloadMode,
     automaticUpdatesEnabled,
   });
   syncUpdateSurfaces(updateStatus);
@@ -159,11 +161,6 @@ export function renderState(state) {
 
   popupState.latestBusy = isBusy;
   popupState.latestPaused = isPaused;
-  popupState.resultsCanLoadMore =
-    Number.isFinite(popupTotalItemCount) &&
-    popupTotalItemCount > items.length &&
-    (!Number.isFinite(popupVisibleItemCount) || popupVisibleItemCount <= popupTotalItemCount);
-  popupState.resultsLoadInFlight = false;
   popupState.latestRuntimeState = state && typeof state === "object" ? state : null;
   popupState.characterAccounts = Array.isArray(state && state.characterAccounts)
     ? state.characterAccounts

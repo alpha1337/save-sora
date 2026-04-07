@@ -81,10 +81,20 @@ export async function handleDownloadButtonClick() {
   popupState.downloadOverlaySessionActive = true;
 
   const selectedCount = getSelectedKeysFromDom().length;
+  const runtimeSettings =
+    popupState.latestRuntimeState &&
+    popupState.latestRuntimeState.settings &&
+    typeof popupState.latestRuntimeState.settings === "object"
+      ? popupState.latestRuntimeState.settings
+      : {};
+  const downloadMode = runtimeSettings.downloadMode === "direct" ? "direct" : "archive";
+  const isArchiveMode = downloadMode !== "direct";
   updateDownloadOverlay({
     phase: "preparing-download",
-    runMode: "archive-selected",
-    message: "Saving your latest titles and preparing the ZIP archive...",
+    runMode: isArchiveMode ? "archive-selected" : "selected",
+    message: isArchiveMode
+      ? "Saving your latest titles and preparing the ZIP archive..."
+      : "Saving your latest titles and preparing the download queue...",
     runTotal: selectedCount,
     completed: 0,
     failed: 0,
@@ -306,9 +316,6 @@ export async function handleClearSelectionClick() {
  * Puts the popup into a temporary "fetch in progress" presentation.
  */
 function preparePendingFetchUi() {
-  popupState.resultsPageSize = popupState.resultsChunkSize;
-  popupState.resultsCanLoadMore = false;
-  popupState.resultsLoadInFlight = false;
   dom.itemsList?.classList.add("hidden");
   dom.characterSelectionGrid?.classList.add("hidden");
   dom.emptyState?.classList.add("hidden");

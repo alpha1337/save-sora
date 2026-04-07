@@ -136,6 +136,13 @@ export function updateSelectionSummary({
     return;
   }
 
+  if (dom.pickerPanelLabel instanceof HTMLElement) {
+    dom.pickerPanelLabel.textContent =
+      totalCount > 0
+        ? `Search Results (${formatWholeNumber(totalCount)})`
+        : "Search Results";
+  }
+
   const downloadedCount = getDownloadedCount(popupState.latestRenderState.items);
   const selectedSources = getSelectedSourceValues(dom.sourceSelectInputs);
   const creatorResultTabs = getCreatorResultsTabs(popupState.latestRenderState.items);
@@ -161,8 +168,7 @@ export function updateSelectionSummary({
 
   if (phase === "fetching") {
     const flavor = popupState.activeFetchStatusMessage || "Finding videos...";
-    dom.selectionSummary.textContent =
-      totalCount > 0 ? `${flavor} ${formatWholeNumber(totalCount)} found so far.` : flavor;
+    dom.selectionSummary.textContent = flavor;
     return;
   }
 
