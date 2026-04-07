@@ -1,5 +1,10 @@
 import { dom } from "../dom.js";
 import { popupState } from "../state.js";
+import {
+  createLucideIcon,
+  FullscreenIcon,
+  PictureInPicture2Icon,
+} from "../../vendor/lucide.js";
 
 /**
  * Generic layout and notice helpers shared across the popup.
@@ -121,6 +126,9 @@ export function setControlsDisabled(disabled) {
   if (dom.defaultThemeInput) {
     dom.defaultThemeInput.disabled = disabled;
   }
+  if (dom.defaultShellInput) {
+    dom.defaultShellInput.disabled = disabled;
+  }
 }
 
 /**
@@ -155,9 +163,11 @@ export function hideNotice(element) {
 function readShellViewContext() {
   let requestedTab = "overview";
   let requestedViewMode = "windowed";
+  let hasExplicitViewMode = false;
 
   try {
     const url = new URL(window.location.href);
+    hasExplicitViewMode = url.searchParams.has("view");
     requestedViewMode = url.searchParams.get("view") === "fullscreen" ? "fullscreen" : "windowed";
     const tabParam = url.searchParams.get("tab");
     if (isKnownTopLevelTab(tabParam)) {
@@ -169,6 +179,7 @@ function readShellViewContext() {
 
   return {
     initialTab: requestedTab,
+    hasExplicitViewMode,
     viewMode: requestedViewMode,
   };
 }
@@ -184,14 +195,33 @@ function syncViewModeButtonLabel() {
     return;
   }
 
+  syncViewModeButtonIcon();
   const label = popupState.isFullscreenView ? "Open Windowed" : "View Fullscreen";
-  dom.viewFullscreenButton.dataset.viewAction = popupState.isFullscreenView ? "windowed" : "fullscreen";
   const labelElement = dom.viewFullscreenButton.querySelector(".visually-hidden");
   if (labelElement instanceof HTMLElement) {
     labelElement.textContent = label;
   }
   dom.viewFullscreenButton.setAttribute("aria-label", label);
   dom.viewFullscreenButton.title = label;
+}
+
+function syncViewModeButtonIcon() {
+  const iconContainer = dom.viewFullscreenButton?.querySelector(".icon-utility-button-icon");
+  if (!(iconContainer instanceof HTMLElement)) {
+    return;
+  }
+
+  const iconNode = popupState.isFullscreenView ? PictureInPicture2Icon : FullscreenIcon;
+  const iconClassName = popupState.isFullscreenView
+    ? "lucide lucide-picture-in-picture-2"
+    : "lucide lucide-fullscreen";
+
+  iconContainer.replaceChildren(
+    createLucideIcon(iconNode, {
+      className: iconClassName,
+      size: 18,
+    }),
+  );
 }
 
 function isKnownTopLevelTab(tabName) {

@@ -73,6 +73,16 @@
           <button id="tab-donate" class="tab-button" type="button" data-tab="donate">
             Donate
           </button>
+          <button
+            id="view-fullscreen-button"
+            type="button"
+            class="top-tabs-shell-toggle"
+            aria-label="View Fullscreen"
+            title="View Fullscreen"
+          >
+            <span class="icon-utility-button-icon" aria-hidden="true"></span>
+            <span class="visually-hidden">View Fullscreen</span>
+          </button>
         </nav>
         <div class="brand-lockup">
           <div class="brand-main">
@@ -84,39 +94,6 @@
             </div>
           </div>
           <div class="topbar-utilities">
-            <button
-              id="view-fullscreen-button"
-              type="button"
-              class="ghost button-small topbar-utility-button icon-utility-button"
-              aria-label="View Fullscreen"
-              title="View Fullscreen"
-            >
-              <span class="icon-utility-button-icon icon-utility-button-icon-expand" aria-hidden="true">
-                <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
-                  <path
-                    d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="1.8"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  ></path>
-                </svg>
-              </span>
-              <span class="icon-utility-button-icon icon-utility-button-icon-collapse" aria-hidden="true">
-                <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
-                  <path
-                    d="M9 4H4v5M15 4h5v5M9 20H4v-5M15 20h5v-5M8 8 4 4M16 8l4-4M8 16l-4 4M16 16l4 4"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="1.8"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  ></path>
-                </svg>
-              </span>
-              <span class="visually-hidden">View Fullscreen</span>
-            </button>
             <label class="theme-toggle" for="theme-toggle">
               <span class="theme-toggle-label">Theme Picker</span>
               <input id="theme-toggle" class="theme-toggle-input" type="checkbox" name="theme-toggle" />
@@ -533,6 +510,15 @@
                       <option value="light">Light</option>
                     </select>
                     <p class="settings-help">Used the next time you open the popup.</p>
+                  </div>
+
+                  <div class="settings-group">
+                    <label class="settings-label" for="default-shell-input">Default shell</label>
+                    <select id="default-shell-input" class="settings-input" name="defaultShell">
+                      <option value="fullscreen">Fullscreen tab</option>
+                      <option value="windowed">Windowed popup</option>
+                    </select>
+                    <p class="settings-help">The launcher opens Save Sora in this shell by default.</p>
                   </div>
 
                   <div class="settings-group">

@@ -227,6 +227,7 @@ async function saveSettingsFromForm() {
     !(dom.maxVideosInput instanceof HTMLInputElement) ||
     !(dom.defaultSortInput instanceof HTMLSelectElement) ||
     !(dom.defaultThemeInput instanceof HTMLSelectElement) ||
+    !(dom.defaultShellInput instanceof HTMLSelectElement) ||
     !(dom.downloadModeInput instanceof HTMLSelectElement) ||
     !(dom.automaticUpdatesInput instanceof HTMLInputElement) ||
     !(dom.defaultSourceLabel instanceof HTMLElement) ||
@@ -242,6 +243,8 @@ async function saveSettingsFromForm() {
   const defaultSource = getSelectedSourceValues(dom.defaultSourceInputs);
   const defaultSort = normalizeSortValue(dom.defaultSortInput.value);
   const theme = dom.defaultThemeInput.value === "light" ? "light" : "dark";
+  const preferredViewMode =
+    dom.defaultShellInput.value === "windowed" ? "windowed" : "fullscreen";
   const downloadMode = dom.downloadModeInput.value === "direct" ? "direct" : "archive";
   const automaticUpdatesEnabled = dom.automaticUpdatesInput.checked;
 
@@ -251,6 +254,7 @@ async function saveSettingsFromForm() {
       defaultSource,
       defaultSort,
       theme,
+      preferredViewMode,
       downloadMode,
       hasExplicitDownloadModeChoice: true,
       automaticUpdatesEnabled,

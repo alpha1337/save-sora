@@ -73,6 +73,8 @@ export function renderState(state) {
   const theme = settings && settings.theme === "light" ? "light" : "dark";
   const defaultSource = normalizeSourceValues(settings.defaultSource);
   const defaultSort = normalizeSortValue(settings.defaultSort);
+  const preferredViewMode =
+    settings && settings.preferredViewMode === "windowed" ? "windowed" : "fullscreen";
   const downloadMode = settings && settings.downloadMode === "direct" ? "direct" : "archive";
   const automaticUpdatesEnabled = settings && settings.automaticUpdatesEnabled !== false;
   const totalVideos = items.length;
@@ -108,6 +110,7 @@ export function renderState(state) {
     theme,
     defaultSource,
     defaultSort,
+    preferredViewMode,
     downloadMode,
     automaticUpdatesEnabled,
   });

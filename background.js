@@ -867,7 +867,7 @@ function createDefaultState(overrides = {}) {
       theme: "dark",
       downloadMode: "archive",
       hasExplicitDownloadModeChoice: false,
-      preferredViewMode: "windowed",
+      preferredViewMode: "fullscreen",
       automaticUpdatesEnabled: true,
     },
     startedAt: null,

@@ -11,12 +11,13 @@ import {
  * Synchronizes the settings UI without overwriting a currently focused input.
  *
  * @param {object} settings
- * @param {{theme: string, defaultSource: string[], defaultSort: string, downloadMode: string, automaticUpdatesEnabled: boolean}} defaults
+ * @param {{theme: string, defaultSource: string[], defaultSort: string, preferredViewMode: string, downloadMode: string, automaticUpdatesEnabled: boolean}} defaults
  */
 export function syncSettingsInputs(settings, {
   theme,
   defaultSource,
   defaultSort,
+  preferredViewMode,
   downloadMode,
   automaticUpdatesEnabled,
 }) {
@@ -46,6 +47,10 @@ export function syncSettingsInputs(settings, {
 
   if (dom.defaultThemeInput && !isFocusedElement(dom.defaultThemeInput)) {
     dom.defaultThemeInput.value = theme;
+  }
+
+  if (dom.defaultShellInput && !isFocusedElement(dom.defaultShellInput)) {
+    dom.defaultShellInput.value = preferredViewMode === "windowed" ? "windowed" : "fullscreen";
   }
 
   if (dom.downloadModeInput && !isFocusedElement(dom.downloadModeInput)) {
