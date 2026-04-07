@@ -27,9 +27,17 @@ import { syncSourceSelectionScreen } from "./character-selection.js";
  */
 export function renderCurrentItems() {
   syncCharacterMenu();
+  const phase = popupState.latestRenderState.phase || "idle";
+  const isFetching = phase === "fetching";
+  const isFetchPaused = phase === "fetch-paused";
+  const isBusy = phase === "fetching" || phase === "downloading";
+  const isPaused = phase === "paused";
+  const hasResults = Array.isArray(popupState.latestRenderState.items)
+    ? popupState.latestRenderState.items.length > 0
+    : false;
   if (
     syncSourceSelectionScreen(
-      popupState.latestRenderState.phase,
+      phase,
       popupState.latestRenderState.items,
     )
   ) {
@@ -37,6 +45,7 @@ export function renderCurrentItems() {
       dom.creatorResultsTabs.replaceChildren();
       dom.creatorResultsTabs.classList.add("hidden");
     }
+    syncPrimaryControls({ isBusy, isPaused, isFetching, isFetchPaused, hasResults });
     return;
   }
 
@@ -45,8 +54,9 @@ export function renderCurrentItems() {
     popupState.latestRenderState.selectedKeys,
     popupState.latestRenderState.titleOverrides,
     popupState.latestRenderState.disableInputs,
-    popupState.latestRenderState.phase,
+    phase,
   );
+  syncPrimaryControls({ isBusy, isPaused, isFetching, isFetchPaused, hasResults });
 }
 
 /**

@@ -18,10 +18,19 @@ import {
  */
 export function syncPrimaryControls({ isBusy, isPaused, isFetching, isFetchPaused, hasResults }) {
   const hasSelectedSources = getSelectedSourceValues(dom.sourceSelectInputs).length > 0;
+  const selectionScreenState = getSelectionScreenActionState();
+  const isSourceSelectionVisible = isSourceSelectionScreenVisible();
+  const hasRequiredScopedSelection =
+    !isSourceSelectionVisible ||
+    selectionScreenState.totalCount === 0 ||
+    selectionScreenState.selectedCount > 0;
   const isResetMode = hasResults && !isFetching;
 
   if (dom.fetchButton) {
-    dom.fetchButton.disabled = isBusy || isFetchPaused || (!isResetMode && !hasSelectedSources);
+    dom.fetchButton.disabled =
+      isBusy ||
+      isFetchPaused ||
+      (!isResetMode && (!hasSelectedSources || !hasRequiredScopedSelection));
     dom.fetchButton.dataset.mode = isResetMode ? "reset" : "scan";
     dom.fetchButton.dataset.loading = String(isFetching);
     dom.fetchButton.classList.toggle("is-danger", isResetMode);
@@ -45,9 +54,6 @@ export function syncPrimaryControls({ isBusy, isPaused, isFetching, isFetchPause
   }
 
   applyCurrentSelectionUi();
-
-  const selectionScreenState = getSelectionScreenActionState();
-  const isSourceSelectionVisible = isSourceSelectionScreenVisible();
 
   if (dom.selectAllButton) {
     dom.selectAllButton.disabled =
