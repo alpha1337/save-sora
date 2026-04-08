@@ -77,6 +77,10 @@ export async function handleRunFormSubmit(event) {
 }
 
 async function persistScopedSelectionBeforeScan(sources) {
+  if (popupState.pendingScopedSelectionSave) {
+    await popupState.pendingScopedSelectionSave;
+  }
+
   if (!isSourceSelectionScreenVisible()) {
     return;
   }

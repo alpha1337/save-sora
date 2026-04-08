@@ -35,6 +35,7 @@ export const popupState = {
   titleDialogItemKey: "",
   titleDialogDefaultTitle: "",
   titleDialogInitialTitle: "",
+  pendingScopedSelectionSave: null,
   currentPhase: "idle",
   updateGateHidden: false,
   skippedUpdateVersion: "",

@@ -816,10 +816,17 @@ async function applyCharacterSelection(selectedIds) {
   updateCharacterMenuLabel();
   renderCurrentItems();
 
+  const persistPromise = saveCharacterSelection(popupState.selectedCharacterAccountIds);
+  popupState.pendingScopedSelectionSave = persistPromise;
+
   try {
-    await saveCharacterSelection(popupState.selectedCharacterAccountIds);
+    await persistPromise;
   } catch (error) {
     showNotice(dom.errorBox, error instanceof Error ? error.message : String(error));
+  } finally {
+    if (popupState.pendingScopedSelectionSave === persistPromise) {
+      popupState.pendingScopedSelectionSave = null;
+    }
   }
 }
 
@@ -827,10 +834,17 @@ async function applyCreatorSelection(selectedIds) {
   popupState.selectedCreatorProfileIds = normalizeRequestedCreatorProfileIds(selectedIds);
   renderCurrentItems();
 
+  const persistPromise = saveCreatorSelection(popupState.selectedCreatorProfileIds);
+  popupState.pendingScopedSelectionSave = persistPromise;
+
   try {
-    await saveCreatorSelection(popupState.selectedCreatorProfileIds);
+    await persistPromise;
   } catch (error) {
     showNotice(dom.errorBox, error instanceof Error ? error.message : String(error));
+  } finally {
+    if (popupState.pendingScopedSelectionSave === persistPromise) {
+      popupState.pendingScopedSelectionSave = null;
+    }
   }
 }
 
