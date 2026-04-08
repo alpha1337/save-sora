@@ -1,5 +1,6 @@
 import { dom } from "../../dom.js";
 import { popupState } from "../../state.js";
+import { getFetchUiState } from "../../utils/runtime-state.js";
 import { CircleChevronUpIcon, createLucideIcon } from "../../../vendor/lucide.js";
 
 /**
@@ -29,13 +30,14 @@ export function syncFetchProgressPanel(state) {
     return;
   }
 
-  const phase = state && state.phase ? state.phase : "idle";
+  const fetchUiState = getFetchUiState(state, popupState.latestRenderState);
+  const phase = fetchUiState.phase;
   const progress =
     state && state.fetchProgress && typeof state.fetchProgress === "object"
       ? state.fetchProgress
       : null;
-  const isPaused = phase === "fetch-paused";
-  const isVisible = phase === "fetching" || isPaused;
+  const isPaused = fetchUiState.isFetchPaused;
+  const isVisible = fetchUiState.isFetching || isPaused;
 
   dom.fetchProgressPanel.classList.toggle("hidden", !isVisible);
   dom.fetchProgressPanel.classList.toggle("is-expanded", isVisible && popupState.fetchDrawerExpanded);

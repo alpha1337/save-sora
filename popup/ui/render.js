@@ -1,5 +1,6 @@
 import { dom } from "../dom.js";
 import { popupState } from "../state.js";
+import { getFetchUiState } from "../utils/runtime-state.js";
 import {
   normalizeResultsViewMode,
   normalizeSortValue,
@@ -14,7 +15,7 @@ import {
   updateBackToTopVisibility,
 } from "./layout.js";
 import { updateDownloadOverlay } from "./overlay.js";
-import { renderItemsList } from "./list/index.js";
+import { renderItemsList, resetResultsPresentation } from "./list/index.js";
 import { startFetchStatusRotation, stopFetchStatusRotation } from "./render/fetch-status.js";
 import { syncFetchProgressPanel } from "./render/fetch-progress.js";
 import { syncPrimaryControls } from "./render/primary-controls.js";
@@ -32,25 +33,23 @@ import { syncSourceSelectionScreen } from "./character-selection.js";
  */
 export function renderCurrentItems() {
   syncCharacterMenu();
-  const phase = popupState.latestRenderState.phase || "idle";
-  const isFetching = phase === "fetching";
-  const isFetchPaused = phase === "fetch-paused";
-  const isBusy = phase === "fetching" || phase === "downloading";
-  const isPaused = phase === "paused";
-  const hasResults = Array.isArray(popupState.latestRenderState.items)
-    ? popupState.latestRenderState.items.length > 0
-    : false;
+  const fetchUiState = getFetchUiState(
+    popupState.latestRuntimeState,
+    popupState.latestRenderState,
+  );
+  const { phase } = fetchUiState;
   if (
     syncSourceSelectionScreen(
       phase,
       popupState.latestRenderState.items,
     )
   ) {
+    resetResultsPresentation();
     if (dom.creatorResultsTabs instanceof HTMLElement) {
       dom.creatorResultsTabs.replaceChildren();
       dom.creatorResultsTabs.classList.add("hidden");
     }
-    syncPrimaryControls({ isBusy, isPaused, isFetching, isFetchPaused, hasResults });
+    syncPrimaryControls();
     return;
   }
 
@@ -61,7 +60,7 @@ export function renderCurrentItems() {
     popupState.latestRenderState.disableInputs,
     phase,
   );
-  syncPrimaryControls({ isBusy, isPaused, isFetching, isFetchPaused, hasResults });
+  syncPrimaryControls();
 }
 
 /**
@@ -71,9 +70,6 @@ export function renderCurrentItems() {
  */
 export function renderState(state) {
   const previousPhase = popupState.latestRenderState.phase;
-  const previousItemCount = Array.isArray(popupState.latestRenderState.items)
-    ? popupState.latestRenderState.items.length
-    : 0;
   const phase = state && state.phase ? state.phase : "idle";
   const items = Array.isArray(state && state.items) ? state.items : [];
   const selectedKeys = getImplicitSelectedKeys(items);
@@ -121,6 +117,7 @@ export function renderState(state) {
   }
 
   popupState.currentPhase = phase;
+  popupState.latestRuntimeState = state && typeof state === "object" ? state : null;
 
   syncSettingsInputs(settings, {
     theme,
@@ -149,11 +146,16 @@ export function renderState(state) {
     hideNotice(dom.errorBox);
   }
 
-  const isFetchPaused = phase === "fetch-paused";
-  const isBusy = phase === "fetching" || phase === "downloading";
-  const isPaused = phase === "paused";
-  const isFetching = phase === "fetching";
-  const hasResults = items.length > 0;
+  const fetchUiState = getFetchUiState(state, {
+    ...popupState.latestRenderState,
+    items,
+    phase,
+  });
+  const {
+    isBusy,
+    isPaused,
+    isAnyPaused,
+  } = fetchUiState;
 
   if (phase === "fetch-paused" && previousPhase !== "fetch-paused" && !popupState.fetchDrawerUserToggled) {
     popupState.fetchDrawerExpanded = false;
@@ -166,8 +168,7 @@ export function renderState(state) {
   }
 
   popupState.latestBusy = isBusy;
-  popupState.latestPaused = isPaused;
-  popupState.latestRuntimeState = state && typeof state === "object" ? state : null;
+  popupState.latestPaused = isAnyPaused;
   popupState.characterAccounts = Array.isArray(state && state.characterAccounts)
     ? state.characterAccounts
     : [];
@@ -198,5 +199,4 @@ export function renderState(state) {
 
   updateAppScrollLock();
   updateBackToTopVisibility();
-  syncPrimaryControls({ isBusy, isPaused, isFetching, isFetchPaused, hasResults });
 }

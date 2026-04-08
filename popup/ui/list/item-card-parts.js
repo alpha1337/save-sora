@@ -38,7 +38,6 @@ export function createTitleRow(item, context) {
   titleButton.className = "item-title-shell item-title-button";
   titleButton.dataset.itemKey = context.key;
   titleButton.dataset.defaultTitle = getDefaultItemTitle(item);
-  titleButton.disabled = context.disableInputs;
   titleButton.title = "Click to rename this video";
   titleButton.setAttribute("aria-label", `Rename title: ${resolvedTitle}`);
 
@@ -177,18 +176,19 @@ export function createFooter(item, context) {
 }
 
 /**
- * Creates the hover detail panel used by grid-mode cards.
+ * Creates the shared textual content surface for an item card.
+ *
+ * List and grid modes should render the same item content once and only change
+ * how that content is presented.
  *
  * @param {object} item
  * @param {{key: string, disableInputs: boolean, titleOverrides: Record<string, string>}} context
+ * @param {string} className
  * @returns {HTMLDivElement}
  */
-export function createGridTooltip(item, context) {
-  const tooltip = document.createElement("div");
-  tooltip.className = "item-grid-tooltip";
-
+export function createItemContentSurface(item, context, className) {
   const surface = document.createElement("div");
-  surface.className = "item-grid-tooltip-surface";
+  surface.className = className;
 
   surface.append(
     createTitleRow(item, context),
@@ -202,8 +202,7 @@ export function createGridTooltip(item, context) {
   }
 
   surface.append(createFooter(item, context));
-  tooltip.append(surface);
-  return tooltip;
+  return surface;
 }
 
 function createArchiveToggle(item, context) {

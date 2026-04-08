@@ -204,6 +204,22 @@ export async function requestResumeScan() {
   );
 }
 
+export async function requestRestoreInterruptedSession() {
+  const response = await sendPopupMessage(
+    { type: "RESTORE_INTERRUPTED_SESSION" },
+    "Could not restore the previous fetch session.",
+  );
+  return response.state;
+}
+
+export async function requestDismissInterruptedSession() {
+  const response = await sendPopupMessage(
+    { type: "DISMISS_INTERRUPTED_SESSION" },
+    "Could not dismiss the previous fetch session.",
+  );
+  return response.state;
+}
+
 /**
  * Resets the current working set in the background worker.
  *

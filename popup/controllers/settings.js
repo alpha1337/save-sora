@@ -16,6 +16,10 @@ import {
 } from "../utils/settings.js";
 import { applyTheme, showNotice, updateBackToTopVisibility } from "../ui/layout.js";
 import { renderCurrentItems } from "../ui/render.js";
+import {
+  hideSharedGridTooltip,
+  scheduleVisibleItemsWindowRender,
+} from "../ui/list/index.js";
 import { refreshStatus } from "./polling.js";
 
 /**
@@ -98,6 +102,8 @@ export function handleCreatorResultsTabClick(event) {
 }
 
 export function handlePickerScroll() {
+  hideSharedGridTooltip({ immediate: true });
+  scheduleVisibleItemsWindowRender();
   updateBackToTopVisibility();
 }
 

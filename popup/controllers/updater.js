@@ -1,7 +1,12 @@
 import { dom } from "../dom.js";
 import {
+  fetchRuntimeState,
   fetchUpdateStatus,
   installPendingRuntimeUpdate,
+  requestDismissInterruptedSession,
+  requestResetState,
+  requestResumeScan,
+  requestRestoreInterruptedSession,
   requestUpdateCheck,
   saveRuntimeSettings,
 } from "../runtime.js";
@@ -14,8 +19,9 @@ const UPDATE_GATE_MIN_STARTUP_DWELL_MS = 900;
 const UPDATE_GATE_AUTO_INSTALL_DWELL_MS = 3200;
 const UPDATE_GATE_POLL_INTERVAL_MS = 220;
 const UPDATE_GATE_RELOAD_FALLBACK_MS = 1200;
+const RESTORE_RESUME_SETTLE_TIMEOUT_MS = 12000;
 const VOLATILE_BACKUP_DB_NAME = "saveSoraVolatileBackup";
-const VOLATILE_BACKUP_DB_VERSION = 3;
+const VOLATILE_BACKUP_DB_VERSION = 4;
 const VOLATILE_BACKUP_ITEM_STORE = "items";
 const VOLATILE_BACKUP_META_STORE = "meta";
 const VOLATILE_BACKUP_UPDATER_STORE = "updater";
@@ -29,6 +35,7 @@ const BOOT_UPDATE_GATE_STEPS = 3;
 
 export async function bootstrapUpdaterGate() {
   popupState.skippedUpdateVersion = "";
+  setStartupGateLocked(true);
   const updatedVersionNotice = consumeUpdatedVersionNotice();
 
   try {
@@ -41,6 +48,8 @@ export async function bootstrapUpdaterGate() {
     await refreshStatus();
     if (shouldBypassAutomaticUpdateStartup()) {
       popupState.updateGateHidden = true;
+      setStartupGateLocked(false);
+      syncUpdateSurfaces(popupState.latestUpdateStatus);
       if (updatedVersionNotice) {
         showNotice(
           dom.warningBox,
@@ -51,6 +60,7 @@ export async function bootstrapUpdaterGate() {
     }
     if (shouldRunStartupUpdateSilently()) {
       popupState.updateGateHidden = true;
+      setStartupGateLocked(false);
       void requestUpdateCheck({
         trigger: "startup",
         interactive: false,
@@ -62,6 +72,7 @@ export async function bootstrapUpdaterGate() {
         .catch(() => {
           // Keep background update discovery silent while the dashboard is already active.
         });
+      syncUpdateSurfaces(popupState.latestUpdateStatus);
       if (updatedVersionNotice) {
         showNotice(
           dom.warningBox,
@@ -110,6 +121,7 @@ export async function bootstrapUpdaterGate() {
       message: "Restoring your saved settings, working set, and recent extension state.",
     });
     await waitForMs(140);
+    setStartupGateLocked(false);
     await refreshStatus();
     if (updatedVersionNotice) {
       showNotice(
@@ -128,6 +140,10 @@ export function handleUpdateGateLinkClick() {
 }
 
 export function handleUpdateGateInstallClick() {
+  if (popupState.restoreGateVisible) {
+    void restorePreviousSessionFromGate();
+    return;
+  }
   void installPendingUpdateFromUi();
 }
 
@@ -136,6 +152,10 @@ export function handleUpdateGateRetryClick() {
 }
 
 export function handleUpdateGateSkipClick() {
+  if (popupState.restoreGateVisible) {
+    void dismissPreviousSessionFromGate();
+    return;
+  }
   popupState.skippedUpdateVersion =
     popupState.latestUpdateStatus.pendingUpdateVersion || popupState.latestUpdateStatus.latestVersion || "";
   popupState.updateGateHidden = true;
@@ -143,6 +163,10 @@ export function handleUpdateGateSkipClick() {
 }
 
 export function handleUpdateGateContinueClick() {
+  if (popupState.restoreGateVisible) {
+    void startOverInterruptedSessionFromGate();
+    return;
+  }
   void continueWithoutBlockingUpdateGate();
 }
 
@@ -184,9 +208,133 @@ async function continueWithoutBlockingUpdateGate() {
       });
     }
     popupState.updateGateHidden = true;
+    setStartupGateLocked(false);
   } catch (error) {
     showNotice(dom.errorBox, error instanceof Error ? error.message : String(error));
   } finally {
+    syncUpdateSurfaces(popupState.latestUpdateStatus);
+    await refreshStatus();
+  }
+}
+
+async function restorePreviousSessionFromGate() {
+  if (popupState.restoreGatePhase === "restoring") {
+    return;
+  }
+
+  try {
+    popupState.restoreGatePhase = "restoring";
+    popupState.restoreGateVisible = true;
+    setStartupGateLocked(true);
+    if (popupState.latestRuntimeState && typeof popupState.latestRuntimeState === "object") {
+      popupState.latestRuntimeState = {
+        ...popupState.latestRuntimeState,
+        restoreStatus: {
+          ...(popupState.latestRuntimeState.restoreStatus || {}),
+          phase: "restoring",
+          promptVisible: false,
+          loadedItems: 0,
+          totalItems: Number(popupState.latestRuntimeState.restoreStatus?.totalItems) || 0,
+          message: "Loading your previously fetched videos from local storage before Save Sora opens.",
+        },
+      };
+      syncUpdateSurfaces(popupState.latestUpdateStatus);
+    }
+
+    const restoredState = await requestRestoreInterruptedSession();
+    if (restoredState) {
+      popupState.latestRuntimeState = restoredState;
+    }
+    syncUpdateSurfaces(popupState.latestUpdateStatus);
+
+    await requestResumeScan();
+    const resumedState = await waitForResumedFetchState();
+
+    popupState.restoreGatePhase = "idle";
+    popupState.restoreGateVisible = false;
+    popupState.updateGateHidden = true;
+    setStartupGateLocked(false);
+    if (resumedState) {
+      popupState.latestRuntimeState = resumedState;
+    }
+    syncUpdateSurfaces(popupState.latestUpdateStatus);
+    await refreshStatus();
+  } catch (error) {
+    popupState.restoreGatePhase = "prompt";
+    popupState.restoreGateVisible = true;
+    setStartupGateLocked(true);
+    showNotice(dom.errorBox, error instanceof Error ? error.message : String(error));
+    syncUpdateSurfaces(popupState.latestUpdateStatus);
+    await refreshStatus();
+  }
+}
+
+async function waitForResumedFetchState() {
+  const startedAt = Date.now();
+  let lastState = null;
+
+  while (Date.now() - startedAt < RESTORE_RESUME_SETTLE_TIMEOUT_MS) {
+    await waitForMs(UPDATE_GATE_POLL_INTERVAL_MS);
+    const state = await fetchRuntimeState({
+      sortKey: popupState.browseState.sort,
+      query: popupState.browseState.query,
+      creatorTab: popupState.activeCreatorResultsTab,
+    });
+    lastState = state;
+
+    const phase = state && typeof state.phase === "string" ? state.phase : "idle";
+    const syncStatus =
+      state && typeof state.syncStatus === "string" ? state.syncStatus : "idle";
+    const restorePhase =
+      state &&
+      state.restoreStatus &&
+      typeof state.restoreStatus === "object" &&
+      typeof state.restoreStatus.phase === "string"
+        ? state.restoreStatus.phase
+        : "idle";
+
+    if (phase === "fetching" || syncStatus === "running") {
+      return state;
+    }
+
+    if (restorePhase === "error" || (state && typeof state.lastError === "string" && state.lastError)) {
+      throw new Error(
+        (state && state.lastError) ||
+          (state && state.restoreStatus && state.restoreStatus.error) ||
+          "Save Sora could not resume the previous fetch.",
+      );
+    }
+  }
+
+  throw new Error("Save Sora could not finish resuming the previous fetch.");
+}
+
+async function dismissPreviousSessionFromGate() {
+  try {
+    popupState.restoreGateVisible = false;
+    popupState.restoreGatePhase = "idle";
+    setStartupGateLocked(false);
+    await requestDismissInterruptedSession();
+  } catch (error) {
+    showNotice(dom.errorBox, error instanceof Error ? error.message : String(error));
+  } finally {
+    popupState.updateGateHidden = true;
+    syncUpdateSurfaces(popupState.latestUpdateStatus);
+    await refreshStatus();
+  }
+}
+
+async function startOverInterruptedSessionFromGate() {
+  try {
+    popupState.restoreGateVisible = false;
+    popupState.restoreGatePhase = "idle";
+    setStartupGateLocked(false);
+    await requestResetState();
+  } catch (error) {
+    showNotice(dom.errorBox, error instanceof Error ? error.message : String(error));
+  } finally {
+    popupState.updateGateHidden = true;
+    syncUpdateSurfaces(popupState.latestUpdateStatus);
     await refreshStatus();
   }
 }
@@ -463,6 +611,10 @@ function setBootGateStep({ step, progress, title, message }) {
 
 function shouldRunStartupUpdateSilently() {
   return popupState.currentPhase === "fetching" || popupState.currentPhase === "fetch-paused";
+}
+
+function setStartupGateLocked(locked) {
+  popupState.startupGateLocked = locked === true;
 }
 
 function shouldBypassAutomaticUpdateStartup() {

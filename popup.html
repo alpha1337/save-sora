@@ -7,7 +7,7 @@
     <link rel="stylesheet" href="popup.css" />
   </head>
   <body>
-    <div class="app-shell">
+    <div class="app-shell is-gated">
       <div id="update-gate" class="update-gate" aria-live="polite" aria-busy="true">
         <video
           id="update-gate-video"
@@ -390,6 +390,7 @@
                   <p id="empty-state-text" class="empty-state-text hidden"></p>
                 </div>
                 <div id="items-list" class="item-list hidden" aria-live="polite"></div>
+                <div id="shared-grid-tooltip" class="shared-grid-tooltip hidden" aria-hidden="true"></div>
               </div>
             </section>
           </section>

@@ -8,6 +8,7 @@ import {
   saveCreatorSelection,
 } from "../runtime.js";
 import { popupState } from "../state.js";
+import { getFetchUiState } from "../utils/runtime-state.js";
 import {
   formatSourceSelectionLabel,
   getSelectedSourceValues,
@@ -375,6 +376,10 @@ export function syncExportMenu() {
 }
 
 export function syncCharacterMenu() {
+  const fetchUiState = getFetchUiState(
+    popupState.latestRuntimeState,
+    popupState.latestRenderState,
+  );
   const shouldShow = getSelectedSourceValues(dom.sourceSelectInputs).includes("characterAccounts");
   const accounts = normalizeCharacterAccounts(popupState.characterAccounts);
 
@@ -391,14 +396,15 @@ export function syncCharacterMenu() {
   updateCharacterMenuLabel();
 
   if (dom.characterSelectButton instanceof HTMLButtonElement) {
-    const isDisabled = popupState.latestBusy || popupState.characterAccountsLoading;
+    const isDisabled = fetchUiState.isBusy || fetchUiState.isAnyPaused || popupState.characterAccountsLoading;
     dom.characterSelectButton.disabled = isDisabled;
   }
 
   if (
     !accounts.length &&
     !popupState.characterAccountsLoading &&
-    !popupState.latestBusy &&
+    !fetchUiState.isBusy &&
+    !fetchUiState.isAnyPaused &&
     !popupState.hasAttemptedCharacterAccountLoad
   ) {
     void ensureCharacterAccountsLoaded();
@@ -525,7 +531,11 @@ function closeCreatorActionMenu(shouldRender = true) {
 }
 
 async function ensureCharacterAccountsLoaded(force = false) {
-  if (popupState.characterAccountsLoading || popupState.latestBusy || popupState.latestPaused) {
+  const fetchUiState = getFetchUiState(
+    popupState.latestRuntimeState,
+    popupState.latestRenderState,
+  );
+  if (popupState.characterAccountsLoading || fetchUiState.isBusy || fetchUiState.isAnyPaused) {
     return;
   }
 

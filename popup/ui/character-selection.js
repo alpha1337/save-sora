@@ -1,5 +1,6 @@
 import { dom } from "../dom.js";
 import { popupState } from "../state.js";
+import { getFetchUiState } from "../utils/runtime-state.js";
 import { formatCreatedAt, formatWholeNumber } from "../utils/format.js";
 import { getSelectedSourceValues } from "../utils/settings.js";
 import { updateAppScrollLock } from "./layout.js";
@@ -532,8 +533,12 @@ function createSummaryPill(text) {
 function syncSelectionActionButtons() {
   const actionState = getSelectionScreenActionState();
   const shouldShow = actionState.visible && actionState.visibleCount > 0;
+  const fetchUiState = getFetchUiState(
+    popupState.latestRuntimeState,
+    popupState.latestRenderState,
+  );
   const isDisabled =
-    popupState.latestBusy || popupState.latestPaused || popupState.characterAccountsLoading;
+    fetchUiState.isBusy || fetchUiState.isAnyPaused || popupState.characterAccountsLoading;
 
   if (dom.selectAllButton instanceof HTMLButtonElement) {
     dom.selectAllButton.classList.toggle("hidden", !shouldShow);
@@ -1011,6 +1016,10 @@ function renderCreatorDetailsDialog(profile) {
     list.className = "creator-details-preferences-list";
 
     const isSavingPreference = popupState.creatorPreferenceSavingProfileId === profile.profileId;
+    const fetchUiState = getFetchUiState(
+      popupState.latestRuntimeState,
+      popupState.latestRenderState,
+    );
     const options = [
       {
         key: "includeOfficialPosts",
@@ -1049,7 +1058,7 @@ function renderCreatorDetailsDialog(profile) {
       input.className = "creator-details-switch-input";
       input.type = "checkbox";
       input.checked = option.checked;
-      input.disabled = isSavingPreference || popupState.latestBusy || popupState.latestPaused;
+      input.disabled = isSavingPreference || fetchUiState.isBusy || fetchUiState.isAnyPaused;
       input.dataset.creatorProfileId = profile.profileId;
       input.dataset.creatorPreferenceKey = option.key;
       input.setAttribute("aria-label", `${option.title}: ${option.checked ? "enabled" : "disabled"}`);

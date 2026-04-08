@@ -1,5 +1,15 @@
 import { handleRemoveButtonClick } from "./item-mutations.js";
 import { openTitleDialog } from "./title-edits.js";
+import {
+  handleItemsListFocusIn as handleVirtualListFocusIn,
+  handleItemsListFocusOut as handleVirtualListFocusOut,
+  handleItemsListPointerOut as handleVirtualListPointerOut,
+  handleItemsListPointerOver as handleVirtualListPointerOver,
+  handleSharedGridTooltipPointerEnter as handleVirtualTooltipPointerEnter,
+  handleSharedGridTooltipPointerLeave as handleVirtualTooltipPointerLeave,
+  scheduleVisibleItemsWindowRender,
+  scheduleVirtualListMeasurement,
+} from "../ui/list/index.js";
 
 /**
  * Handles clicks inside the item list.
@@ -66,6 +76,32 @@ export function handleItemsListKeydown(event) {
   togglePromptExpansion(targetElement);
 }
 
+export function handleItemsListPointerOver(event) {
+  handleVirtualListPointerOver(event);
+}
+
+export function handleItemsListPointerOut(event) {
+  handleVirtualListPointerOut(event);
+}
+
+export function handleItemsListFocusIn(event) {
+  handleVirtualListFocusIn(event);
+}
+
+export function handleItemsListFocusOut(event) {
+  handleVirtualListFocusOut(event);
+}
+
+export function handleSharedGridTooltipPointerEnter() {
+  handleVirtualTooltipPointerEnter();
+}
+
+export function handleSharedGridTooltipPointerLeave(event) {
+  handleVirtualTooltipPointerLeave(event);
+}
+
+export { scheduleVisibleItemsWindowRender };
+
 /**
  * Returns whether a click target should not toggle the card checkbox.
  *
@@ -112,4 +148,5 @@ function togglePromptExpansion(prompt) {
   prompt.classList.toggle("is-expanded", isExpanded);
   prompt.setAttribute("aria-expanded", isExpanded ? "true" : "false");
   prompt.title = isExpanded ? "Click to collapse description" : "Click to expand description";
+  scheduleVirtualListMeasurement();
 }

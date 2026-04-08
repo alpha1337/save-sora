@@ -1,5 +1,6 @@
 import { dom } from "../../dom.js";
 import { popupState } from "../../state.js";
+import { getFetchUiState } from "../../utils/runtime-state.js";
 import { getSelectedSourceValues } from "../../utils/settings.js";
 import {
   applyCurrentSelectionUi,
@@ -12,11 +13,20 @@ import {
 } from "../character-selection.js";
 
 /**
- * Updates the primary button states after a render.
- *
- * @param {{isBusy:boolean,isPaused:boolean,isFetching:boolean,isFetchPaused:boolean,hasResults:boolean}} context
+ * Updates the primary button states after a render using the latest derived fetch UI state.
  */
-export function syncPrimaryControls({ isBusy, isPaused, isFetching, isFetchPaused, hasResults }) {
+export function syncPrimaryControls() {
+  const fetchUiState = getFetchUiState(
+    popupState.latestRuntimeState,
+    popupState.latestRenderState,
+  );
+  const {
+    isBusy,
+    isFetching,
+    isFetchPaused,
+    isAnyPaused,
+    hasResults,
+  } = fetchUiState;
   const hasSelectedSources = getSelectedSourceValues(dom.sourceSelectInputs).length > 0;
   const selectionScreenState = getSelectionScreenActionState();
   const isSourceSelectionVisible = isSourceSelectionScreenVisible();
@@ -24,13 +34,14 @@ export function syncPrimaryControls({ isBusy, isPaused, isFetching, isFetchPause
     !isSourceSelectionVisible ||
     selectionScreenState.totalCount === 0 ||
     selectionScreenState.selectedCount > 0;
-  const isResetMode = hasResults && !isFetching;
+  const isResumeMode = fetchUiState.primaryActionMode === "resume";
+  const isResetMode = fetchUiState.primaryActionMode === "reset";
 
   if (dom.fetchButton) {
     dom.fetchButton.disabled =
       isBusy ||
-      (!isResetMode && (!hasSelectedSources || !hasRequiredScopedSelection));
-    dom.fetchButton.dataset.mode = isResetMode ? "reset" : "scan";
+      (!isResetMode && !isResumeMode && (!hasSelectedSources || !hasRequiredScopedSelection));
+    dom.fetchButton.dataset.mode = isResetMode ? "reset" : isResumeMode ? "resume" : "scan";
     dom.fetchButton.dataset.loading = String(isFetching);
     dom.fetchButton.classList.toggle("is-danger", isResetMode);
   }
@@ -38,25 +49,27 @@ export function syncPrimaryControls({ isBusy, isPaused, isFetching, isFetchPause
   if (dom.fetchButtonLabel) {
     dom.fetchButtonLabel.textContent = isFetching
       ? "Fetching Videos"
-      : hasResults
-        ? "Start Over"
-        : "Fetch Videos";
+      : isResumeMode
+        ? "Resume Fetch"
+        : hasResults
+          ? "Start Over"
+          : "Fetch Videos";
   }
 
-  setSourceControlDisabled(dom.sourceSelectButton, dom.sourceSelectInputs, isBusy || isPaused || isFetchPaused);
+  setSourceControlDisabled(dom.sourceSelectButton, dom.sourceSelectInputs, isBusy || isAnyPaused);
   if (dom.maxVideosInput) {
-    dom.maxVideosInput.disabled = isBusy || isPaused || isFetchPaused;
+    dom.maxVideosInput.disabled = isBusy || isAnyPaused;
   }
-  setSourceControlDisabled(dom.defaultSourceButton, dom.defaultSourceInputs, isBusy || isPaused || isFetchPaused);
+  setSourceControlDisabled(dom.defaultSourceButton, dom.defaultSourceInputs, isBusy || isAnyPaused);
   if (dom.defaultSortInput) {
-    dom.defaultSortInput.disabled = isBusy || isPaused || isFetchPaused;
+    dom.defaultSortInput.disabled = isBusy || isAnyPaused;
   }
 
   applyCurrentSelectionUi();
 
   if (dom.selectAllButton) {
     dom.selectAllButton.disabled =
-      isBusy || isPaused || isFetchPaused || (
+      isBusy || isAnyPaused || (
         isSourceSelectionVisible
           ? selectionScreenState.visibleCount === 0 ||
             selectionScreenState.visibleSelectedCount === selectionScreenState.visibleCount
@@ -66,7 +79,7 @@ export function syncPrimaryControls({ isBusy, isPaused, isFetching, isFetchPause
 
   if (dom.clearSelectionButton) {
     dom.clearSelectionButton.disabled =
-      isBusy || isPaused || isFetchPaused || (
+      isBusy || isAnyPaused || (
         isSourceSelectionVisible
           ? selectionScreenState.visibleSelectedCount === 0
           : getVisibleActiveKeysFromDom().length === 0

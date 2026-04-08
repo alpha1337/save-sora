@@ -11,6 +11,7 @@ import {
   saveCreatorSelection,
 } from "../runtime.js";
 import { popupState } from "../state.js";
+import { getFetchUiState } from "../utils/runtime-state.js";
 import {
   buildSelectedPromptsCsv,
   buildSelectedPromptsFilename,
@@ -45,12 +46,17 @@ import { handleBatchArchiveStateChange } from "./item-mutations.js";
 export async function handleRunFormSubmit(event) {
   event.preventDefault();
 
-  const isResetMode = dom.fetchButton?.dataset.mode === "reset";
+  const fetchUiState = getFetchUiState(
+    popupState.latestRuntimeState,
+    popupState.latestRenderState,
+  );
+  const isResetMode = fetchUiState.primaryActionMode === "reset";
+  const isResumeMode = fetchUiState.primaryActionMode === "resume";
   const sources = getSelectedSourceValues(dom.sourceSelectInputs);
 
   closeAllSourceMenus();
 
-  if (!isResetMode && sources.length === 0) {
+  if (!isResetMode && !isResumeMode && sources.length === 0) {
     showNotice(dom.errorBox, "Select at least one source to fetch.");
     return;
   }
@@ -58,13 +64,15 @@ export async function handleRunFormSubmit(event) {
   setControlsDisabled(true);
   hideNotice(dom.errorBox);
 
-  if (!isResetMode) {
+  if (!isResetMode && !isResumeMode) {
     preparePendingFetchUi();
   }
 
   try {
     if (isResetMode) {
       await requestResetState();
+    } else if (isResumeMode) {
+      await requestResumeScan();
     } else {
       await persistScopedSelectionBeforeScan(sources);
       await requestScan(sources, popupState.browseState.query);
@@ -277,12 +285,17 @@ export async function handleFetchProgressActionClick() {
 export function handleFetchProgressToggleClick() {
   popupState.fetchDrawerExpanded = !popupState.fetchDrawerExpanded;
   popupState.fetchDrawerUserToggled = true;
-  const phase = popupState.latestRenderState.phase;
-  const isVisible = phase === "fetching" || phase === "fetch-paused";
+  const fetchUiState = getFetchUiState(
+    popupState.latestRuntimeState,
+    popupState.latestRenderState,
+  );
+  const isVisible = fetchUiState.isFetching || fetchUiState.isFetchPaused;
   if (!isVisible) {
     popupState.fetchDrawerExpanded = false;
   }
-  syncFetchProgressPanel(popupState.latestRuntimeState || { phase });
+  syncFetchProgressPanel(
+    popupState.latestRuntimeState || { phase: fetchUiState.phase || "idle" },
+  );
 }
 
 /**
@@ -296,9 +309,13 @@ export async function handleFetchProgressPauseActionClick() {
   }
 
   try {
-    if (popupState.latestRenderState.phase === "fetch-paused") {
+    const fetchUiState = getFetchUiState(
+      popupState.latestRuntimeState,
+      popupState.latestRenderState,
+    );
+    if (fetchUiState.isFetchPaused) {
       await requestResumeScan();
-    } else {
+    } else if (fetchUiState.isFetching) {
       await requestPauseScan();
     }
   } catch (error) {

@@ -5,6 +5,7 @@
  * instead of repetitive `document.getElementById(...)` calls.
  */
 export const dom = {
+  appShellFrame: document.querySelector(".app-shell"),
   updateGate: document.getElementById("update-gate"),
   updateGateVideo: document.getElementById("update-gate-video"),
   updateGateTitle: document.getElementById("update-gate-title"),
@@ -69,6 +70,7 @@ export const dom = {
   emptyStateImage: document.querySelector(".empty-state-image"),
   emptyStateText: document.getElementById("empty-state-text"),
   itemsList: document.getElementById("items-list"),
+  sharedGridTooltip: document.getElementById("shared-grid-tooltip"),
   pickerScrollRegion: document.getElementById("picker-scroll-region"),
   pickerPanel: document.querySelector(".picker-panel"),
   pickerToolbar: document.querySelector(".picker-toolbar"),
@@ -91,6 +93,7 @@ export const dom = {
   sortSelect: document.getElementById("sort-select"),
   runForm: document.getElementById("run-form"),
   appShell: document.querySelector(".app"),
+  topbar: document.querySelector(".topbar"),
   appVersionLabel: document.getElementById("app-version-label"),
   viewFullscreenButton: document.getElementById("view-fullscreen-button"),
   backToTopButton: document.getElementById("back-to-top-button"),

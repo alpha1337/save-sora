@@ -12,9 +12,16 @@ import {
   handleSelectAllClick,
 } from "./actions.js";
 import {
+  handleItemsListFocusIn,
+  handleItemsListFocusOut,
   handleItemsListChange,
   handleItemsListClick,
   handleItemsListKeydown,
+  handleItemsListPointerOut,
+  handleItemsListPointerOver,
+  handleSharedGridTooltipPointerEnter,
+  handleSharedGridTooltipPointerLeave,
+  scheduleVisibleItemsWindowRender,
 } from "./item-events.js";
 import { refreshStatus, stopPolling } from "./polling.js";
 import {
@@ -90,6 +97,14 @@ export function initializeEventHandlers() {
   dom.itemsList?.addEventListener("click", handleItemsListClick);
   dom.itemsList?.addEventListener("change", handleItemsListChange);
   dom.itemsList?.addEventListener("keydown", handleItemsListKeydown);
+  dom.itemsList?.addEventListener("mouseover", handleItemsListPointerOver);
+  dom.itemsList?.addEventListener("mouseout", handleItemsListPointerOut);
+  dom.itemsList?.addEventListener("focusin", handleItemsListFocusIn);
+  dom.itemsList?.addEventListener("focusout", handleItemsListFocusOut);
+  dom.sharedGridTooltip?.addEventListener("click", handleItemsListClick);
+  dom.sharedGridTooltip?.addEventListener("keydown", handleItemsListKeydown);
+  dom.sharedGridTooltip?.addEventListener("mouseenter", handleSharedGridTooltipPointerEnter);
+  dom.sharedGridTooltip?.addEventListener("mouseleave", handleSharedGridTooltipPointerLeave);
   dom.searchInput?.addEventListener("input", handleSearchInput);
   dom.creatorResultsTabs?.addEventListener("click", handleCreatorResultsTabClick);
   dom.sortSelect?.addEventListener("change", handleSortChange);
@@ -138,6 +153,7 @@ export function initializeEventHandlers() {
   document.addEventListener("visibilitychange", handleVisibilityChange);
   document.addEventListener("click", handleSourceMenuDocumentClick);
   document.addEventListener("keydown", handleSourceMenuDocumentKeydown);
+  window.addEventListener("resize", handleWindowResize);
   dom.pickerScrollRegion?.addEventListener("scroll", handlePickerScroll);
   dom.backToTopButton?.addEventListener("click", handleBackToTopClick);
 
@@ -166,4 +182,8 @@ function handleBackToTopClick() {
   }
 
   dom.pickerScrollRegion.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+function handleWindowResize() {
+  scheduleVisibleItemsWindowRender(true);
 }

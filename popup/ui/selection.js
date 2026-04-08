@@ -1,5 +1,6 @@
 import { dom } from "../dom.js";
 import { popupState } from "../state.js";
+import { getFetchUiState } from "../utils/runtime-state.js";
 import { getSelectionScreenActionState, setSourceSelectionSummary } from "./character-selection.js";
 import { formatFileSize, formatWholeNumber } from "../utils/format.js";
 import { getSelectedSourceValues } from "../utils/settings.js";
@@ -69,7 +70,11 @@ export function getSelectedKeysFromDom(options = {}) {
  * @returns {string[]}
  */
 export function getVisibleArchivedKeysFromDom() {
-  const visibleKeySet = new Set(getVisibleItemKeysFromDom());
+  const visibleKeySet = new Set(
+    Array.isArray(popupState.virtualList.filteredItems)
+      ? popupState.virtualList.filteredItems.map((item) => getItemKey(item)).filter(Boolean)
+      : getVisibleItemKeysFromDom(),
+  );
   return (Array.isArray(popupState.latestRenderState.items) ? popupState.latestRenderState.items : [])
     .filter((item) => Boolean(item && item.isRemoved) && visibleKeySet.has(getItemKey(item)))
     .map((item) => getItemKey(item))
@@ -82,7 +87,11 @@ export function getVisibleArchivedKeysFromDom() {
  * @returns {string[]}
  */
 export function getVisibleActiveKeysFromDom() {
-  const visibleKeySet = new Set(getVisibleItemKeysFromDom());
+  const visibleKeySet = new Set(
+    Array.isArray(popupState.virtualList.filteredItems)
+      ? popupState.virtualList.filteredItems.map((item) => getItemKey(item)).filter(Boolean)
+      : getVisibleItemKeysFromDom(),
+  );
   return (Array.isArray(popupState.latestRenderState.items) ? popupState.latestRenderState.items : [])
     .filter((item) => isActiveBatchItem(item) && visibleKeySet.has(getItemKey(item)))
     .map((item) => getItemKey(item))
@@ -121,19 +130,30 @@ export function applySelectionUi(
  * Recomputes the summary and batch controls from current popup state and DOM.
  */
 export function applyCurrentSelectionUi() {
+  const fetchUiState = getFetchUiState(
+    popupState.latestRuntimeState,
+    popupState.latestRenderState,
+  );
   const totalCount = Array.isArray(popupState.latestRenderState.items)
     ? popupState.latestRenderState.items.length
     : 0;
   const selectedCount = getSelectedKeysFromDom().length;
-  const visibleCount = getVisibleActiveKeysFromDom().length;
-  const visibleSelectedCount = getSelectedKeysFromDom({ visibleOnly: true }).length;
+  const visibleCount =
+    Number.isFinite(popupState.virtualList.visibleCount) && popupState.virtualList.visibleCount >= 0
+      ? popupState.virtualList.visibleCount
+      : getVisibleActiveKeysFromDom().length;
+  const visibleSelectedCount =
+    Number.isFinite(popupState.virtualList.visibleSelectedCount) &&
+    popupState.virtualList.visibleSelectedCount >= 0
+      ? popupState.virtualList.visibleSelectedCount
+      : getSelectedKeysFromDom({ visibleOnly: true }).length;
 
   applySelectionUi(
     totalCount,
     selectedCount,
     visibleCount,
     visibleSelectedCount,
-    popupState.latestBusy ? "fetching" : popupState.latestRenderState.phase || "ready",
+    fetchUiState.phase || "ready",
   );
 }
 
@@ -248,14 +268,22 @@ export function updateSelectionSummary({
  * @param {number} [visibleCount=totalCount]
  */
 export function syncSelectionControls(totalCount, selectedCount, visibleCount = totalCount) {
-  const phase = popupState.latestRenderState.phase || "idle";
+  const fetchUiState = getFetchUiState(
+    popupState.latestRuntimeState,
+    popupState.latestRenderState,
+  );
+  const phase = fetchUiState.phase || "idle";
   const hasLoadedResults = popupState.latestRenderState.items.length > 0;
-  const isFetching = phase === "fetching";
+  const isFetching = fetchUiState.isFetching;
   const sourceSelectionState = getSelectionScreenActionState();
   const showSourceSelectionActions =
     sourceSelectionState.visible && sourceSelectionState.visibleCount > 0;
   const showDownloadButton =
-    hasLoadedResults && selectedCount > 0 && !popupState.latestBusy && !popupState.latestPaused && !isFetching;
+    hasLoadedResults &&
+    selectedCount > 0 &&
+    !fetchUiState.isBusy &&
+    !fetchUiState.isAnyPaused &&
+    !isFetching;
   const showBrowseTools = hasLoadedResults;
   const showSummaryPanel = hasLoadedResults && !isFetching;
   const normalizedSelectedCount = Math.max(0, Number(selectedCount) || 0);

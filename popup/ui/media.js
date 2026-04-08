@@ -231,6 +231,8 @@ export function renderMediaPreview(media, item, titleOverrides = {}) {
     image.src = item.thumbnailUrl;
     image.alt = `${item.id} thumbnail`;
     image.loading = "lazy";
+    image.decoding = "async";
+    image.fetchPriority = "low";
     image.referrerPolicy = "no-referrer";
 
     image.addEventListener(
@@ -328,6 +330,25 @@ export function renderMediaPreview(media, item, titleOverrides = {}) {
   }
 
   media.append(overlay);
+}
+
+/**
+ * Cleans up transient media resources before a card leaves the DOM.
+ *
+ * The virtualized results renderer reuses a moving window of cards, so media
+ * nodes that scroll out of view should release any inline preview state before
+ * the DOM subtree is discarded.
+ *
+ * @param {HTMLElement|null|undefined} media
+ */
+export function disposeMediaPreview(media) {
+  if (!(media instanceof HTMLElement)) {
+    return;
+  }
+
+  if (activeInlinePreview && activeInlinePreview.media === media) {
+    restoreThumbnailPreview(activeInlinePreview, true);
+  }
 }
 
 /**

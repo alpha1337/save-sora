@@ -23,8 +23,37 @@ const FETCH_SAFE_BACKGROUND_UPDATE_PHASES = new Set([
 export function syncUpdateSurfaces(updateStatus) {
   const normalizedStatus = normalizeUpdateStatus(updateStatus);
   popupState.latestUpdateStatus = normalizedStatus;
-  syncUpdateGate(normalizedStatus);
+  syncUpdateGate(normalizedStatus, popupState.latestRuntimeState);
   syncUpdaterStatusRow(normalizedStatus);
+}
+
+function syncAppShellGateVisibility(isBlocked) {
+  if (!(dom.appShellFrame instanceof HTMLElement)) {
+    return;
+  }
+
+  const shouldBlock = popupState.startupGateLocked || isBlocked;
+  dom.appShellFrame.classList.toggle("is-gated", shouldBlock);
+  dom.appShellFrame.setAttribute("aria-busy", shouldBlock ? "true" : "false");
+}
+
+function normalizeRestoreStatus(runtimeState) {
+  const source =
+    runtimeState &&
+    runtimeState.restoreStatus &&
+    typeof runtimeState.restoreStatus === "object"
+      ? runtimeState.restoreStatus
+      : {};
+
+  return {
+    phase: typeof source.phase === "string" ? source.phase : "idle",
+    promptVisible: source.promptVisible === true,
+    totalItems: Number.isFinite(Number(source.totalItems)) ? Math.max(0, Number(source.totalItems)) : 0,
+    loadedItems: Number.isFinite(Number(source.loadedItems)) ? Math.max(0, Number(source.loadedItems)) : 0,
+    message: typeof source.message === "string" ? source.message : "",
+    detail: typeof source.detail === "string" ? source.detail : "",
+    error: typeof source.error === "string" ? source.error : "",
+  };
 }
 
 function normalizeUpdateStatus(updateStatus) {
@@ -62,10 +91,26 @@ function normalizeUpdateStatus(updateStatus) {
   };
 }
 
-function syncUpdateGate(updateStatus) {
+function syncUpdateGate(updateStatus, runtimeState = null) {
   if (!(dom.updateGate instanceof HTMLElement)) {
     return;
   }
+
+  const restoreStatus = normalizeRestoreStatus(runtimeState);
+  if (
+    restoreStatus.promptVisible ||
+    restoreStatus.phase === "restoring" ||
+    restoreStatus.phase === "error"
+  ) {
+    popupState.restoreGatePhase = restoreStatus.phase;
+    popupState.restoreGateVisible = true;
+    syncAppShellGateVisibility(true);
+    renderRestoreGate(restoreStatus);
+    return;
+  }
+
+  popupState.restoreGatePhase = "idle";
+  popupState.restoreGateVisible = false;
 
   const pendingVersion = updateStatus.pendingUpdateVersion || updateStatus.latestVersion;
   const skippedThisSession =
@@ -83,9 +128,11 @@ function syncUpdateGate(updateStatus) {
     !dismissedErrorForSession &&
     !(skippedThisSession && (updateStatus.phase === "update-available" || updateStatus.phase === "deferred"));
 
-  popupState.updateGateHidden = !shouldShow;
-  dom.updateGate.classList.toggle("hidden", !shouldShow);
-  dom.updateGate.setAttribute("aria-hidden", shouldShow ? "false" : "true");
+  const shouldKeepGateVisible = popupState.startupGateLocked || shouldShow;
+  popupState.updateGateHidden = !shouldKeepGateVisible;
+  syncAppShellGateVisibility(shouldShow);
+  dom.updateGate.classList.toggle("hidden", !shouldKeepGateVisible);
+  dom.updateGate.setAttribute("aria-hidden", shouldKeepGateVisible ? "false" : "true");
   dom.updateGate.setAttribute(
     "aria-busy",
     updateStatus.phase === "checking" ||
@@ -96,7 +143,7 @@ function syncUpdateGate(updateStatus) {
       : "false",
   );
 
-  if (!shouldShow) {
+  if (!shouldKeepGateVisible) {
     return;
   }
 
@@ -186,6 +233,83 @@ function syncUpdateGate(updateStatus) {
       updateStatus.phase === "awaiting-folder" && updateStatus.automaticUpdatesEnabled
         ? "Not now"
         : "Continue without updating";
+  }
+}
+
+function renderRestoreGate(restoreStatus) {
+  popupState.updateGateHidden = false;
+  dom.updateGate.classList.remove("hidden");
+  dom.updateGate.setAttribute("aria-hidden", "false");
+  dom.updateGate.setAttribute("aria-busy", restoreStatus.phase === "restoring" ? "true" : "false");
+
+  if (dom.updateGateTitle instanceof HTMLElement) {
+    dom.updateGateTitle.textContent =
+      restoreStatus.phase === "error"
+        ? "Local recovery needs attention"
+        : restoreStatus.phase === "restoring"
+        ? "Restoring your saved fetch"
+        : "Restore previous session?";
+  }
+  if (dom.updateGateMessage instanceof HTMLElement) {
+    dom.updateGateMessage.textContent =
+      restoreStatus.phase === "error"
+        ? restoreStatus.message ||
+          "Save Sora could not open the local recovery store for your saved fetch."
+        : restoreStatus.phase === "restoring"
+        ? restoreStatus.message ||
+          `Loading ${restoreStatus.totalItems.toLocaleString()} saved videos from local storage and preparing your full results list.`
+        : restoreStatus.message ||
+          `Save Sora found ${restoreStatus.totalItems.toLocaleString()} saved videos from an interrupted fetch. Restore that full session now, or start fresh.`;
+  }
+
+  dom.updateGateSpinner?.classList.toggle("hidden", restoreStatus.phase !== "restoring");
+  dom.updateGateProgress?.classList.remove("hidden");
+  if (dom.updateGateProgressFill instanceof HTMLElement) {
+    const ratio =
+      restoreStatus.phase === "restoring" && restoreStatus.totalItems > 0
+        ? Math.max(0, Math.min(1, restoreStatus.loadedItems / restoreStatus.totalItems))
+        : restoreStatus.phase === "error"
+          ? 0
+          : 1;
+    dom.updateGateProgressFill.style.width = `${Math.round(ratio * 100)}%`;
+  }
+  if (dom.updateGateProgressLabel instanceof HTMLElement) {
+    dom.updateGateProgressLabel.textContent =
+      restoreStatus.phase === "error"
+        ? restoreStatus.error || restoreStatus.detail || "The saved local mirror could not be reopened."
+        : restoreStatus.phase === "restoring"
+        ? restoreStatus.totalItems > 0
+          ? `Loading ${restoreStatus.loadedItems.toLocaleString()} of ${restoreStatus.totalItems.toLocaleString()} saved videos`
+          : "Preparing your saved results"
+        : `${restoreStatus.totalItems.toLocaleString()} saved videos ready to restore`;
+  }
+
+  dom.updateGateChangelog?.classList.add("hidden");
+  if (dom.updateGateChangelogBody instanceof HTMLElement) {
+    dom.updateGateChangelogBody.replaceChildren();
+  }
+
+  dom.updateGateActions?.classList.remove("hidden");
+  dom.updateGateActions?.classList.add("is-inline-decision");
+  dom.updateGateLinkButton?.classList.add("hidden");
+  dom.updateGateRetryButton?.classList.add("hidden");
+  dom.updateGateInstallButton?.classList.toggle(
+    "hidden",
+    restoreStatus.phase === "restoring" || restoreStatus.phase === "error",
+  );
+  dom.updateGateSkipButton?.classList.toggle("hidden", restoreStatus.phase === "restoring");
+  dom.updateGateContinueButton?.classList.toggle("hidden", restoreStatus.phase === "restoring");
+
+  if (dom.updateGateInstallButton instanceof HTMLButtonElement) {
+    dom.updateGateInstallButton.textContent = "Resume fetch";
+  }
+  if (dom.updateGateSkipButton instanceof HTMLButtonElement) {
+    dom.updateGateSkipButton.textContent =
+      restoreStatus.phase === "error" ? "Continue without restore" : "Not now";
+  }
+  if (dom.updateGateContinueButton instanceof HTMLButtonElement) {
+    dom.updateGateContinueButton.textContent =
+      restoreStatus.phase === "error" ? "Start fresh" : "Start over";
   }
 }
 

@@ -19,12 +19,23 @@ const POPUP_STATE_ITEM_LIMIT = 3000;
 const POPUP_STATE_TARGET_BYTES = 8 * 1024 * 1024;
 const VOLATILE_SOURCE_PREVIEW_LIMIT = 3000;
 const VOLATILE_BACKUP_DB_NAME = "saveSoraVolatileBackup";
-const VOLATILE_BACKUP_DB_VERSION = 3;
+const VOLATILE_BACKUP_DB_VERSION = 4;
 const VOLATILE_BACKUP_ITEM_STORE = "items";
 const VOLATILE_BACKUP_META_STORE = "meta";
 const VOLATILE_BACKUP_UPDATER_STORE = "updater";
+const SOURCE_MIRROR_ITEM_STORE = "source_mirror_items";
+const SOURCE_CHECKPOINT_STORE = "source_checkpoints";
+const SYNC_SESSION_STORE = "sync_sessions";
+const SOURCE_RETRY_STATE_STORE = "source_retry_state";
+const SCHEMA_META_STORE = "schema_meta";
 const VOLATILE_BACKUP_WRITE_CHUNK_SIZE = 250;
 const VOLATILE_BACKUP_DEFAULT_SCOPE_ID = "__scope__";
+const FETCH_SYNC_MIGRATION_META_KEY = "fetch-sync-migration-v4";
+const ACTIVE_SYNC_SESSION_META_KEY = "active-sync-session-id";
+const FETCH_SOURCE_REQUEST_TIMEOUT_MS = 45000;
+const FETCH_SOURCE_MAX_RECOVERY_ATTEMPTS = 2;
+const FETCH_HEAD_SYNC_OVERLAP_PAGES = 1;
+const RESTORE_GATE_BATCH_SIZE = 500;
 const UPDATE_ALARM_NAME = "saveSoraCheckForUpdates";
 const UPDATE_CHECK_INTERVAL_MINUTES = 30;
 const GITHUB_OWNER = "alpha1337";
@@ -110,9 +121,14 @@ let creatingOffscreenDocument = null;
 let requestedControlAction = null;
 let keepAwakeRequested = false;
 let volatileBackupDbPromise = null;
+let fetchRecoverySchemaReadyPromise = null;
 let activeVolatileBackupSessionKey = "";
 let activeVolatileBackupResumeMeta = null;
 let pausedFetchRequest = null;
+let activeSyncSessionId = "";
+let activeSyncControlIntent = "";
+let pendingInterruptedSyncSession = null;
+let fetchRecoveryInitError = "";
 let currentUpdateState = createDefaultUpdateState();
 let linkedInstallFolderRecordCache = null;
 let updaterReadyPromise = null;
@@ -240,9 +256,14 @@ initializeZipLibrary();
 void initializeBackgroundRuntime();
 
 chrome.runtime.onInstalled.addListener(() => {
-  void persistState();
-  void persistCatalogState();
-  void ensureBackgroundRuntimeReady();
+  void ensureBackgroundRuntimeReady()
+    .then(async () => {
+      await persistState(currentState);
+      await persistCatalogState(currentCatalog);
+    })
+    .catch((error) => {
+      console.warn("Failed to finish Save Sora install/update state initialization.", error);
+    });
 });
 
 chrome.runtime.onStartup.addListener(() => {
@@ -345,6 +366,30 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 
+  if (message.type === "RESTORE_INTERRUPTED_SESSION") {
+    void ensureBackgroundRuntimeReady()
+      .then(() => restoreInterruptedSyncSessionForUi())
+      .then((state) => {
+        sendResponse({ ok: true, state });
+      })
+      .catch((error) => {
+        sendResponse({ ok: false, error: getErrorMessage(error) });
+      });
+    return true;
+  }
+
+  if (message.type === "DISMISS_INTERRUPTED_SESSION") {
+    void ensureBackgroundRuntimeReady()
+      .then(() => dismissInterruptedSyncSessionForUi())
+      .then((state) => {
+        sendResponse({ ok: true, state });
+      })
+      .catch((error) => {
+        sendResponse({ ok: false, error: getErrorMessage(error) });
+      });
+    return true;
+  }
+
   if (message.type === "START_SCAN") {
     if (activeRun) {
       sendResponse({ ok: false, error: "A fetch or download run is already in progress." });
@@ -376,66 +421,75 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message.type === "RESUME_SCAN") {
-    if (activeRun) {
-      sendResponse({ ok: false, error: "A fetch or download run is already in progress." });
-      return false;
-    }
+    void (async () => {
+      if (activeRun) {
+        sendResponse({ ok: false, error: "A fetch or download run is already in progress." });
+        return;
+      }
 
-    if (currentState.phase !== "fetch-paused" || !pausedFetchRequest) {
-      sendResponse({ ok: false, error: "There is no paused fetch to resume." });
-      return false;
-    }
+      if (!(await hasPausedFetchSession())) {
+        sendResponse({ ok: false, error: "There is no paused fetch to resume." });
+        return;
+      }
 
-    void resumeScan().catch((error) => {
-      console.error("Failed to resume the Sora fetch.", error);
+      void resumeScan().catch((error) => {
+        console.error("Failed to resume the Sora fetch.", error);
+      });
+      sendResponse({ ok: true });
+    })().catch((error) => {
+      sendResponse({ ok: false, error: getErrorMessage(error) });
     });
-    sendResponse({ ok: true });
-    return false;
+    return true;
   }
 
   if (message.type === "ABORT_SCAN") {
-    if (currentState.phase !== "fetching" && currentState.phase !== "fetch-paused") {
-      sendResponse({ ok: false, error: "There is no active fetch to cancel." });
-      return false;
-    }
+    void (async () => {
+      const hasPausedSession = await hasPausedFetchSession();
+      if (currentState.phase !== "fetching" && !hasPausedSession) {
+        sendResponse({ ok: false, error: "There is no active fetch to cancel." });
+        return;
+      }
 
-    if (currentState.phase === "fetch-paused") {
-      void abortPausedScan()
-        .then(() => {
-          sendResponse({ ok: true });
-        })
-        .catch((error) => {
-          console.error("Failed to abort the paused Sora fetch.", error);
-          sendResponse({ ok: false, error: getErrorMessage(error) });
-        });
-      return true;
-    }
-
-    void requestScanAbort()
-      .then(() => {
+      if (currentState.phase === "fetching") {
+        await requestScanAbort();
         sendResponse({ ok: true });
-      })
-      .catch((error) => {
-        console.error("Failed to abort the Sora fetch.", error);
-        sendResponse({ ok: false, error: getErrorMessage(error) });
-      });
+        return;
+      }
+
+      await abortPausedScan();
+      sendResponse({ ok: true });
+    })().catch((error) => {
+      console.error("Failed to abort the Sora fetch.", error);
+      sendResponse({ ok: false, error: getErrorMessage(error) });
+    });
     return true;
   }
 
   if (message.type === "RESET_STATE") {
-    if (activeRun) {
-      sendResponse({ ok: false, error: "A fetch or download run is already in progress." });
-      return false;
-    }
+    void (async () => {
+      if (currentState.phase === "fetching") {
+        await requestScanAbort();
+      } else if (currentState.phase === "fetch-paused") {
+        await abortPausedScan();
+      }
 
-    void resetExtensionState()
+      if (activeRun) {
+        try {
+          await activeRun;
+        } catch (_error) {
+          // Ignore fetch teardown errors because reset will clear the session state anyway.
+        }
+      }
+
+      await resetExtensionState();
+    })()
       .then(() => {
         sendResponse({ ok: true });
       })
       .catch((error) => {
         console.error("Failed to reset the Sora downloader state.", error);
         sendResponse({ ok: false, error: getErrorMessage(error) });
-    });
+      });
     return true;
   }
 
@@ -499,11 +553,15 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       return false;
     }
 
-    void setTitleOverride(message.itemKey, message.title).catch((error) => {
-      console.error("Failed to update the Sora title override.", error);
-    });
-    sendResponse({ ok: true });
-    return false;
+    void setTitleOverride(message.itemKey, message.title)
+      .then(() => {
+        sendResponse({ ok: true });
+      })
+      .catch((error) => {
+        console.error("Failed to update the Sora title override.", error);
+        sendResponse({ ok: false, error: getErrorMessage(error) });
+      });
+    return true;
   }
 
   if (message.type === "REMOVE_ITEM") {
@@ -868,6 +926,9 @@ function createDefaultState(overrides = {}) {
     runTotal: 0,
     failedItems: [],
     resumableFetchRequest: null,
+    syncSessionId: "",
+    syncStatus: "idle",
+    restoreStatus: createDefaultRestoreStatus(),
     fetchProgress: createDefaultFetchProgress(),
     settings: {
       maxVideos: null,
@@ -883,6 +944,20 @@ function createDefaultState(overrides = {}) {
     },
     startedAt: null,
     finishedAt: null,
+    ...overrides,
+  };
+}
+
+function createDefaultRestoreStatus(overrides = {}) {
+  return {
+    phase: "idle",
+    sessionId: "",
+    promptVisible: false,
+    totalItems: 0,
+    loadedItems: 0,
+    message: "",
+    detail: "",
+    error: "",
     ...overrides,
   };
 }
@@ -1227,6 +1302,16 @@ function initializeBackgroundRuntime() {
   }
 
   updaterReadyPromise = (async () => {
+    try {
+      await ensureFetchRecoverySchemaReady();
+      fetchRecoveryInitError = "";
+    } catch (error) {
+      fetchRecoveryInitError = getErrorMessage(error);
+      console.warn(
+        "Save Sora could not initialize the local fetch recovery database. Resume will be unavailable until this is resolved.",
+        error,
+      );
+    }
     await restoreState();
     await restoreUpdaterState();
     await scheduleUpdateAlarm();
@@ -1248,6 +1333,28 @@ function createIndexedDbRequestPromise(request) {
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error || new Error("IndexedDB request failed."));
   });
+}
+
+function createIndexedDbTransactionPromise(transaction, fallbackMessage) {
+  return new Promise((resolve, reject) => {
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () =>
+      reject(transaction.error || new Error(fallbackMessage || "IndexedDB transaction failed."));
+    transaction.onabort = () =>
+      reject(transaction.error || new Error(fallbackMessage || "IndexedDB transaction aborted."));
+  });
+}
+
+function commitIndexedDbTransaction(transaction) {
+  if (!transaction || typeof transaction.commit !== "function") {
+    return;
+  }
+
+  try {
+    transaction.commit();
+  } catch (_error) {
+    // Some IndexedDB implementations auto-commit or reject explicit commits in edge cases.
+  }
 }
 
 function openVolatileBackupDb() {
@@ -1283,6 +1390,37 @@ function openVolatileBackupDb() {
           keyPath: "key",
         });
       }
+      if (!db.objectStoreNames.contains(SOURCE_MIRROR_ITEM_STORE)) {
+        const mirrorStore = db.createObjectStore(SOURCE_MIRROR_ITEM_STORE, {
+          keyPath: "mirrorKey",
+        });
+        mirrorStore.createIndex("sourceScopeHash", "sourceScopeHash", { unique: false });
+        mirrorStore.createIndex("storedAt", "storedAt", { unique: false });
+      }
+      if (!db.objectStoreNames.contains(SOURCE_CHECKPOINT_STORE)) {
+        const checkpointStore = db.createObjectStore(SOURCE_CHECKPOINT_STORE, {
+          keyPath: "sourceScopeHash",
+        });
+        checkpointStore.createIndex("updatedAt", "updatedAt", { unique: false });
+        checkpointStore.createIndex("lastSessionId", "lastSessionId", { unique: false });
+      }
+      if (!db.objectStoreNames.contains(SYNC_SESSION_STORE)) {
+        const sessionStore = db.createObjectStore(SYNC_SESSION_STORE, {
+          keyPath: "sessionId",
+        });
+        sessionStore.createIndex("status", "status", { unique: false });
+        sessionStore.createIndex("updatedAt", "updatedAt", { unique: false });
+      }
+      if (!db.objectStoreNames.contains(SOURCE_RETRY_STATE_STORE)) {
+        db.createObjectStore(SOURCE_RETRY_STATE_STORE, {
+          keyPath: "sourceScopeHash",
+        });
+      }
+      if (!db.objectStoreNames.contains(SCHEMA_META_STORE)) {
+        db.createObjectStore(SCHEMA_META_STORE, {
+          keyPath: "key",
+        });
+      }
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error || new Error("Could not open the volatile backup database."));
@@ -1294,18 +1432,1153 @@ function openVolatileBackupDb() {
   return volatileBackupDbPromise;
 }
 
+async function readSchemaMeta(key) {
+  if (!key) {
+    return null;
+  }
+
+  const db = await openVolatileBackupDb();
+  const transaction = db.transaction([SCHEMA_META_STORE], "readonly");
+  const record = await createIndexedDbRequestPromise(transaction.objectStore(SCHEMA_META_STORE).get(key));
+  return record && typeof record === "object" ? record : null;
+}
+
+async function writeSchemaMeta(key, value = {}) {
+  if (!key) {
+    return null;
+  }
+
+  const nextRecord = {
+    ...(value && typeof value === "object" ? value : {}),
+    key,
+    updatedAt: new Date().toISOString(),
+  };
+
+  const db = await openVolatileBackupDb();
+  const transaction = db.transaction([SCHEMA_META_STORE], "readwrite");
+  transaction.objectStore(SCHEMA_META_STORE).put(nextRecord);
+  commitIndexedDbTransaction(transaction);
+  await createIndexedDbTransactionPromise(transaction, "Could not write schema metadata.");
+  return nextRecord;
+}
+
+async function deleteSchemaMeta(key) {
+  if (!key) {
+    return;
+  }
+
+  const db = await openVolatileBackupDb();
+  const transaction = db.transaction([SCHEMA_META_STORE], "readwrite");
+  transaction.objectStore(SCHEMA_META_STORE).delete(key);
+  commitIndexedDbTransaction(transaction);
+  await createIndexedDbTransactionPromise(transaction, "Could not delete schema metadata.");
+}
+
+function createSyncSessionId() {
+  return `sync-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function normalizeSourceScopeSegment(value, fallback = "") {
+  if (typeof value !== "string" || !value) {
+    return fallback;
+  }
+
+  return value.trim();
+}
+
+function parseVolatileBackupProgressKey(progressKey) {
+  if (typeof progressKey !== "string" || !progressKey) {
+    return {
+      sourcePage: "",
+      scopeId: "",
+    };
+  }
+
+  const separatorIndex = progressKey.indexOf(":");
+  if (separatorIndex === -1) {
+    return {
+      sourcePage: progressKey,
+      scopeId: "",
+    };
+  }
+
+  return {
+    sourcePage: progressKey.slice(0, separatorIndex),
+    scopeId: progressKey.slice(separatorIndex + 1),
+  };
+}
+
+function buildSourceScopeHash(input = {}) {
+  const source = normalizeSourceScopeSegment(input.source, "unknown");
+  const sourcePage = normalizeSourceScopeSegment(input.sourcePage, "unknown");
+  const scopeId = normalizeSourceScopeSegment(
+    input.scopeId ||
+      input.creatorProfileId ||
+      input.characterAccountId ||
+      input.profileId,
+    VOLATILE_BACKUP_DEFAULT_SCOPE_ID,
+  );
+  const creatorProfileId = normalizeSourceScopeSegment(input.creatorProfileId);
+  const characterAccountId = normalizeSourceScopeSegment(input.characterAccountId);
+  const sourceType = normalizeSourceScopeSegment(input.sourceType);
+  const selectionSignature = normalizeSourceScopeSegment(input.selectionSignature);
+
+  const parts = [
+    "v3",
+    `source=${source}`,
+    `page=${sourcePage}`,
+    `scope=${scopeId}`,
+  ];
+
+  if (creatorProfileId) {
+    parts.push(`creator=${creatorProfileId}`);
+  }
+  if (characterAccountId) {
+    parts.push(`character=${characterAccountId}`);
+  }
+  if (sourceType) {
+    parts.push(`type=${sourceType}`);
+  }
+  if (selectionSignature) {
+    parts.push(`selection=${selectionSignature}`);
+  }
+
+  return parts.join("|");
+}
+
+function buildSourceScopeRecord(input = {}) {
+  const source = normalizeSourceScopeSegment(input.source, "unknown");
+  const progressKey =
+    typeof input.progressKey === "string" && input.progressKey
+      ? input.progressKey
+      : getVolatileBackupProgressKey(
+        input.sourcePage || "",
+        input.scopeId ||
+          input.creatorProfileId ||
+          input.characterAccountId ||
+          VOLATILE_BACKUP_DEFAULT_SCOPE_ID,
+      );
+  const parsedProgressKey = parseVolatileBackupProgressKey(progressKey);
+  const sourcePage = normalizeSourceScopeSegment(
+    input.sourcePage || parsedProgressKey.sourcePage,
+    "unknown",
+  );
+  const scopeId = normalizeSourceScopeSegment(
+    input.scopeId ||
+      parsedProgressKey.scopeId ||
+      input.creatorProfileId ||
+      input.characterAccountId,
+    VOLATILE_BACKUP_DEFAULT_SCOPE_ID,
+  );
+  const creatorProfileId = normalizeSourceScopeSegment(input.creatorProfileId);
+  const characterAccountId = normalizeSourceScopeSegment(input.characterAccountId);
+  const selectionSignature = normalizeSourceScopeSegment(input.selectionSignature);
+  const sourceScopeHash = buildSourceScopeHash({
+    source,
+    sourcePage,
+    scopeId,
+    creatorProfileId,
+    characterAccountId,
+    sourceType: input.sourceType,
+    selectionSignature,
+  });
+
+  return {
+    sourceScopeHash,
+    source,
+    sourcePage,
+    progressKey,
+    scopeId,
+    creatorProfileId,
+    characterAccountId,
+    selectionSignature,
+  };
+}
+
+function createSourceScopeRecordFromProgress(source, progressKey, patch = {}, meta = {}) {
+  const parsedProgressKey = parseVolatileBackupProgressKey(progressKey);
+  return buildSourceScopeRecord({
+    source,
+    progressKey,
+    sourcePage:
+      normalizeSourceScopeSegment(patch.sourcePage) ||
+      normalizeSourceScopeSegment(meta.sourcePage) ||
+      parsedProgressKey.sourcePage,
+    scopeId:
+      normalizeSourceScopeSegment(patch.scopeId) ||
+      normalizeSourceScopeSegment(meta.scopeId) ||
+      parsedProgressKey.scopeId,
+    creatorProfileId:
+      normalizeSourceScopeSegment(patch.creatorProfileId) ||
+      normalizeSourceScopeSegment(meta.creatorProfileId),
+    characterAccountId:
+      normalizeSourceScopeSegment(patch.characterAccountId) ||
+      normalizeSourceScopeSegment(meta.characterAccountId),
+    selectionSignature:
+      normalizeSourceScopeSegment(patch.selectionSignature) ||
+      normalizeSourceScopeSegment(meta.selectionSignature),
+  });
+}
+
+function buildSourceScopeRecordsForSource(source, options = {}) {
+  const descriptors = getVolatileBackupProgressDescriptorsForSource(source, options);
+  return descriptors
+    .map((descriptor) =>
+      createSourceScopeRecordFromProgress(source, descriptor && descriptor.progressKey, {}, {
+        selectionSignature: getSourceSelectionSignature(source, options),
+      }),
+    )
+    .filter(Boolean);
+}
+
+function createResumeStateFromCheckpoint(checkpoint) {
+  const normalizedCheckpoint = normalizeSourceCheckpointRecord(checkpoint);
+  if (!normalizedCheckpoint || normalizedCheckpoint.itemsPersisted <= 0) {
+    return null;
+  }
+
+  return normalizeVolatileBackupProgressEntry({
+    cursor: normalizedCheckpoint.resumeCursor || "",
+    previousCursor: normalizedCheckpoint.previousCursor || "",
+    offset: normalizedCheckpoint.offset || 0,
+    totalItemCount: normalizedCheckpoint.itemsPersisted,
+    backedUpItemCount: normalizedCheckpoint.backedUpItemCount,
+    previewCount: normalizedCheckpoint.previewCount || normalizedCheckpoint.itemsPersisted,
+    isComplete: normalizedCheckpoint.isTerminalComplete === true,
+  });
+}
+
+async function loadCheckpointProgressMapForSource(source, options = {}) {
+  const scopeRecords = buildSourceScopeRecordsForSource(source, options);
+  const progressEntries = await Promise.all(
+    scopeRecords.map(async (scopeRecord) => {
+      const checkpoint = await readSourceCheckpoint(scopeRecord.sourceScopeHash);
+      return [
+        scopeRecord.progressKey,
+        createResumeStateFromCheckpoint(checkpoint),
+      ];
+    }),
+  );
+
+  return Object.fromEntries(progressEntries.filter((entry) => entry[0] && entry[1]));
+}
+
+async function loadMirroredItemsForSourceSelection(source, options = {}) {
+  const scopeRecords = buildSourceScopeRecordsForSource(source, options);
+  const mergedItems = new Map();
+
+  for (const scopeRecord of scopeRecords) {
+    const scopeItems = await loadSourceMirrorItems(scopeRecord.sourceScopeHash);
+    for (const item of scopeItems) {
+      mergedItems.set(getCanonicalItemKey(item), item);
+    }
+  }
+
+  return sortItemsByNewest([...mergedItems.values()]);
+}
+
+async function loadKnownMirrorItemKeysForSource(source, options = {}) {
+  const scopeRecords = buildSourceScopeRecordsForSource(source, options);
+  const knownKeys = new Set();
+
+  for (const scopeRecord of scopeRecords) {
+    const scopeKeys = await loadMirrorItemKeysForScope(scopeRecord.sourceScopeHash);
+    for (const itemKey of scopeKeys) {
+      knownKeys.add(itemKey);
+    }
+  }
+
+  return knownKeys;
+}
+
+function buildMirrorItemRecord(sourceScopeHash, item) {
+  const compactItem = compactItemForPopup(item);
+  if (!sourceScopeHash || !compactItem || !compactItem.key) {
+    return null;
+  }
+
+  return {
+    mirrorKey: `${sourceScopeHash}:${compactItem.key}`,
+    sourceScopeHash,
+    itemIdentity: compactItem.key,
+    sourcePage: compactItem.sourcePage || "",
+    storedAt: Date.now(),
+    watermarkTimestamp: getComparableItemTimestamp(compactItem),
+    item: compactItem,
+  };
+}
+
+function normalizeSourceCheckpointRecord(record = {}) {
+  if (!record || typeof record !== "object" || Array.isArray(record)) {
+    return null;
+  }
+
+  if (typeof record.sourceScopeHash !== "string" || !record.sourceScopeHash) {
+    return null;
+  }
+
+  const newestKnownWatermark =
+    record.newestKnownWatermark &&
+    typeof record.newestKnownWatermark === "object"
+      ? {
+          timestamp: Number.isFinite(Number(record.newestKnownWatermark.timestamp))
+            ? Math.max(0, Number(record.newestKnownWatermark.timestamp))
+            : 0,
+          itemKey:
+            typeof record.newestKnownWatermark.itemKey === "string"
+              ? record.newestKnownWatermark.itemKey
+              : "",
+        }
+      : null;
+
+  return {
+    sourceScopeHash: record.sourceScopeHash,
+    source: normalizeSourceScopeSegment(record.source, "unknown"),
+    sourcePage: normalizeSourceScopeSegment(record.sourcePage, "unknown"),
+    progressKey: normalizeSourceScopeSegment(record.progressKey),
+    scopeId: normalizeSourceScopeSegment(record.scopeId, VOLATILE_BACKUP_DEFAULT_SCOPE_ID),
+    creatorProfileId: normalizeSourceScopeSegment(record.creatorProfileId),
+    characterAccountId: normalizeSourceScopeSegment(record.characterAccountId),
+    selectionSignature: normalizeSourceScopeSegment(record.selectionSignature),
+    lastSessionId: normalizeSourceScopeSegment(record.lastSessionId),
+    headCursor: typeof record.headCursor === "string" ? record.headCursor : "",
+    resumeCursor: typeof record.resumeCursor === "string" ? record.resumeCursor : "",
+    previousCursor: typeof record.previousCursor === "string" ? record.previousCursor : "",
+    offset: Number.isFinite(Number(record.offset)) ? Math.max(0, Number(record.offset)) : 0,
+    knownBoundaryKey: typeof record.knownBoundaryKey === "string" ? record.knownBoundaryKey : "",
+    newestKnownWatermark:
+      newestKnownWatermark && newestKnownWatermark.timestamp > 0 ? newestKnownWatermark : null,
+    itemsPersisted: Number.isFinite(Number(record.itemsPersisted))
+      ? Math.max(0, Number(record.itemsPersisted))
+      : 0,
+    previewCount: Number.isFinite(Number(record.previewCount))
+      ? Math.max(0, Number(record.previewCount))
+      : 0,
+    backedUpItemCount: Number.isFinite(Number(record.backedUpItemCount))
+      ? Math.max(0, Number(record.backedUpItemCount))
+      : 0,
+    lastSuccessfulPageAt:
+      typeof record.lastSuccessfulPageAt === "string" ? record.lastSuccessfulPageAt : "",
+    headSyncStatus: normalizeSourceScopeSegment(record.headSyncStatus, "idle"),
+    backlogStatus: normalizeSourceScopeSegment(record.backlogStatus, "idle"),
+    isTerminalComplete: record.isTerminalComplete === true,
+    hasMirrorData: record.hasMirrorData === true || Number(record.itemsPersisted) > 0,
+    migratedFromLegacy: record.migratedFromLegacy === true,
+    error: typeof record.error === "string" ? record.error : "",
+    updatedAt: typeof record.updatedAt === "string" ? record.updatedAt : new Date().toISOString(),
+  };
+}
+
+function normalizeSyncSessionRecord(record = {}) {
+  if (!record || typeof record !== "object" || Array.isArray(record)) {
+    return null;
+  }
+
+  if (typeof record.sessionId !== "string" || !record.sessionId) {
+    return null;
+  }
+
+  return {
+    sessionId: record.sessionId,
+    status: normalizeSourceScopeSegment(record.status, "idle"),
+    requestedAction: normalizeSourceScopeSegment(record.requestedAction),
+    sources: normalizeSources(record.sources),
+    searchQuery: normalizeSearchText(record.searchQuery),
+    currentSource:
+      typeof record.currentSource === "string" && record.currentSource ? record.currentSource : null,
+    currentSourceIndex: Number.isFinite(Number(record.currentSourceIndex))
+      ? Math.max(0, Number(record.currentSourceIndex))
+      : 0,
+    sourceScopes: Array.isArray(record.sourceScopes)
+      ? record.sourceScopes
+          .filter((entry) => entry && typeof entry.sourceScopeHash === "string" && entry.sourceScopeHash)
+          .map((entry) => ({
+            sourceScopeHash: entry.sourceScopeHash,
+            source: normalizeSourceScopeSegment(entry.source),
+            sourcePage: normalizeSourceScopeSegment(entry.sourcePage),
+            progressKey: normalizeSourceScopeSegment(entry.progressKey),
+            scopeId: normalizeSourceScopeSegment(entry.scopeId),
+          }))
+      : [],
+    selectedCharacterAccountIds: Array.isArray(record.selectedCharacterAccountIds)
+      ? record.selectedCharacterAccountIds.filter((value) => typeof value === "string" && value)
+      : [],
+    selectedCreatorProfileIds: Array.isArray(record.selectedCreatorProfileIds)
+      ? record.selectedCreatorProfileIds.filter((value) => typeof value === "string" && value)
+      : [],
+    startedAt: typeof record.startedAt === "string" ? record.startedAt : new Date().toISOString(),
+    updatedAt: typeof record.updatedAt === "string" ? record.updatedAt : new Date().toISOString(),
+    heartbeatAt:
+      typeof record.heartbeatAt === "string" ? record.heartbeatAt : new Date().toISOString(),
+    lastRecoverableError:
+      typeof record.lastRecoverableError === "string" ? record.lastRecoverableError : "",
+  };
+}
+
+function normalizeSourceRetryStateRecord(record = {}) {
+  if (!record || typeof record !== "object" || Array.isArray(record)) {
+    return null;
+  }
+
+  if (typeof record.sourceScopeHash !== "string" || !record.sourceScopeHash) {
+    return null;
+  }
+
+  return {
+    sourceScopeHash: record.sourceScopeHash,
+    retryCount: Number.isFinite(Number(record.retryCount))
+      ? Math.max(0, Number(record.retryCount))
+      : 0,
+    lastTimeoutAt: typeof record.lastTimeoutAt === "string" ? record.lastTimeoutAt : "",
+    lastTabRecreateAt:
+      typeof record.lastTabRecreateAt === "string" ? record.lastTabRecreateAt : "",
+    lastGoodHeartbeatAt:
+      typeof record.lastGoodHeartbeatAt === "string" ? record.lastGoodHeartbeatAt : "",
+    updatedAt: typeof record.updatedAt === "string" ? record.updatedAt : new Date().toISOString(),
+  };
+}
+
+async function readSourceCheckpoint(sourceScopeHash) {
+  if (!sourceScopeHash) {
+    return null;
+  }
+
+  const db = await openVolatileBackupDb();
+  const transaction = db.transaction([SOURCE_CHECKPOINT_STORE], "readonly");
+  const record = await createIndexedDbRequestPromise(
+    transaction.objectStore(SOURCE_CHECKPOINT_STORE).get(sourceScopeHash),
+  );
+  return normalizeSourceCheckpointRecord(record);
+}
+
+async function writeSourceCheckpoint(sourceScopeHash, patch = {}) {
+  if (!sourceScopeHash) {
+    return null;
+  }
+
+  const existingRecord = await readSourceCheckpoint(sourceScopeHash);
+  const nextRecord = normalizeSourceCheckpointRecord({
+    ...(existingRecord && typeof existingRecord === "object" ? existingRecord : {}),
+    ...(patch && typeof patch === "object" ? patch : {}),
+    sourceScopeHash,
+    updatedAt: new Date().toISOString(),
+  });
+
+  const db = await openVolatileBackupDb();
+  const transaction = db.transaction([SOURCE_CHECKPOINT_STORE], "readwrite");
+  transaction.objectStore(SOURCE_CHECKPOINT_STORE).put(nextRecord);
+  commitIndexedDbTransaction(transaction);
+  await createIndexedDbTransactionPromise(transaction, "Could not write source checkpoint data.");
+  return nextRecord;
+}
+
+async function deleteSourceCheckpoint(sourceScopeHash) {
+  if (!sourceScopeHash) {
+    return;
+  }
+
+  const db = await openVolatileBackupDb();
+  const transaction = db.transaction([SOURCE_CHECKPOINT_STORE], "readwrite");
+  transaction.objectStore(SOURCE_CHECKPOINT_STORE).delete(sourceScopeHash);
+  commitIndexedDbTransaction(transaction);
+  await createIndexedDbTransactionPromise(transaction, "Could not delete source checkpoint data.");
+}
+
+async function readSyncSession(sessionId) {
+  if (!sessionId) {
+    return null;
+  }
+
+  const db = await openVolatileBackupDb();
+  const transaction = db.transaction([SYNC_SESSION_STORE], "readonly");
+  const record = await createIndexedDbRequestPromise(transaction.objectStore(SYNC_SESSION_STORE).get(sessionId));
+  return normalizeSyncSessionRecord(record);
+}
+
+async function writeSyncSession(sessionId, patch = {}) {
+  if (!sessionId) {
+    return null;
+  }
+
+  const existingRecord = await readSyncSession(sessionId);
+  const nextRecord = normalizeSyncSessionRecord({
+    ...(existingRecord && typeof existingRecord === "object" ? existingRecord : {}),
+    ...(patch && typeof patch === "object" ? patch : {}),
+    sessionId,
+    updatedAt: new Date().toISOString(),
+  });
+
+  const db = await openVolatileBackupDb();
+  const transaction = db.transaction([SYNC_SESSION_STORE], "readwrite");
+  transaction.objectStore(SYNC_SESSION_STORE).put(nextRecord);
+  commitIndexedDbTransaction(transaction);
+  await createIndexedDbTransactionPromise(transaction, "Could not write sync session data.");
+  return nextRecord;
+}
+
+async function setActiveSyncSessionId(sessionId = "") {
+  activeSyncSessionId = typeof sessionId === "string" ? sessionId : "";
+  if (!activeSyncSessionId) {
+    await deleteSchemaMeta(ACTIVE_SYNC_SESSION_META_KEY);
+    return;
+  }
+
+  await writeSchemaMeta(ACTIVE_SYNC_SESSION_META_KEY, {
+    sessionId: activeSyncSessionId,
+  });
+}
+
+async function getActiveSyncSessionId() {
+  if (activeSyncSessionId) {
+    return activeSyncSessionId;
+  }
+
+  const record = await readSchemaMeta(ACTIVE_SYNC_SESSION_META_KEY);
+  activeSyncSessionId =
+    record && typeof record.sessionId === "string" && record.sessionId ? record.sessionId : "";
+  return activeSyncSessionId;
+}
+
+async function getActiveSyncSession() {
+  const sessionId = await getActiveSyncSessionId();
+  if (!sessionId) {
+    return null;
+  }
+
+  return readSyncSession(sessionId);
+}
+
+async function writeSourceRetryState(sourceScopeHash, patch = {}) {
+  if (!sourceScopeHash) {
+    return null;
+  }
+
+  const db = await openVolatileBackupDb();
+  const transaction = db.transaction([SOURCE_RETRY_STATE_STORE], "readwrite");
+  const store = transaction.objectStore(SOURCE_RETRY_STATE_STORE);
+  const existingRecord = normalizeSourceRetryStateRecord(
+    await createIndexedDbRequestPromise(store.get(sourceScopeHash)),
+  );
+  const nextRecord = normalizeSourceRetryStateRecord({
+    ...(existingRecord && typeof existingRecord === "object" ? existingRecord : {}),
+    ...(patch && typeof patch === "object" ? patch : {}),
+    sourceScopeHash,
+    updatedAt: new Date().toISOString(),
+  });
+  store.put(nextRecord);
+  commitIndexedDbTransaction(transaction);
+  await createIndexedDbTransactionPromise(transaction, "Could not write fetch retry state.");
+  return nextRecord;
+}
+
+async function readSourceRetryState(sourceScopeHash) {
+  if (!sourceScopeHash) {
+    return null;
+  }
+
+  const db = await openVolatileBackupDb();
+  const transaction = db.transaction([SOURCE_RETRY_STATE_STORE], "readonly");
+  const record = await createIndexedDbRequestPromise(
+    transaction.objectStore(SOURCE_RETRY_STATE_STORE).get(sourceScopeHash),
+  );
+  return normalizeSourceRetryStateRecord(record);
+}
+
+function buildSyncSessionScopeRecords(sources, options = {}) {
+  return normalizeSources(sources)
+    .flatMap((source) => buildSourceScopeRecordsForSource(source, options))
+    .filter(Boolean);
+}
+
+function buildSyncSessionSelectionContext(options = {}) {
+  return {
+    selectedCharacterAccountIds: Array.isArray(options.selectedCharacterAccountIds)
+      ? [...options.selectedCharacterAccountIds]
+      : [...currentState.selectedCharacterAccountIds],
+    selectedCreatorProfileIds: Array.isArray(options.selectedCreatorProfileIds)
+      ? [...options.selectedCreatorProfileIds]
+      : [...currentState.selectedCreatorProfileIds],
+  };
+}
+
+async function createSyncSessionRecord(sources, searchQuery = "", options = {}) {
+  const sessionId = createSyncSessionId();
+  const selectionContext = buildSyncSessionSelectionContext(options);
+  const sourceScopes = buildSyncSessionScopeRecords(sources, {
+    characterAccounts: currentState.characterAccounts,
+    selectedCharacterAccountIds: selectionContext.selectedCharacterAccountIds,
+    creatorProfiles: currentState.creatorProfiles,
+    selectedCreatorProfileIds: selectionContext.selectedCreatorProfileIds,
+  });
+  const sessionRecord = await writeSyncSession(sessionId, {
+    status: "running",
+    requestedAction: "",
+    sources,
+    searchQuery,
+    currentSource: normalizeSources(sources)[0] || null,
+    currentSourceIndex: normalizeSources(sources).length ? 1 : 0,
+    sourceScopes,
+    selectedCharacterAccountIds: selectionContext.selectedCharacterAccountIds,
+    selectedCreatorProfileIds: selectionContext.selectedCreatorProfileIds,
+    startedAt: new Date().toISOString(),
+    heartbeatAt: new Date().toISOString(),
+    lastRecoverableError: "",
+  });
+  await setActiveSyncSessionId(sessionId);
+  return sessionRecord;
+}
+
+async function updateActiveSyncSession(patch = {}) {
+  const sessionId = await getActiveSyncSessionId();
+  if (!sessionId) {
+    return null;
+  }
+
+  return writeSyncSession(sessionId, {
+    ...(patch && typeof patch === "object" ? patch : {}),
+    heartbeatAt:
+      patch && Object.prototype.hasOwnProperty.call(patch, "heartbeatAt")
+        ? patch.heartbeatAt
+        : new Date().toISOString(),
+  });
+}
+
+async function clearActiveSyncSession(options = {}) {
+  const sessionId = await getActiveSyncSessionId();
+  if (!sessionId) {
+    activeSyncControlIntent = "";
+    return null;
+  }
+
+  const finalStatus =
+    typeof options.finalStatus === "string" && options.finalStatus ? options.finalStatus : "completed";
+  const sessionRecord = await writeSyncSession(sessionId, {
+    status: finalStatus,
+    requestedAction: "",
+    currentSource: null,
+    lastRecoverableError:
+      typeof options.lastRecoverableError === "string" ? options.lastRecoverableError : "",
+  });
+  activeSyncControlIntent = "";
+  await setActiveSyncSessionId("");
+  return sessionRecord;
+}
+
+async function markSyncSessionPaused(lastRecoverableError = "") {
+  const sessionRecord = await updateActiveSyncSession({
+    status: "paused",
+    requestedAction: "",
+    lastRecoverableError,
+  });
+  activeSyncControlIntent = "";
+  return sessionRecord;
+}
+
+async function listSyncSessions() {
+  const db = await openVolatileBackupDb();
+  const transaction = db.transaction([SYNC_SESSION_STORE], "readonly");
+  const records = await createIndexedDbRequestPromise(
+    transaction.objectStore(SYNC_SESSION_STORE).getAll(),
+  );
+  return (Array.isArray(records) ? records : [])
+    .map((record) => normalizeSyncSessionRecord(record))
+    .filter(Boolean)
+    .sort((left, right) =>
+      new Date(right.updatedAt || right.startedAt || 0).getTime() -
+      new Date(left.updatedAt || left.startedAt || 0).getTime(),
+    );
+}
+
+async function listSourceCheckpoints() {
+  const db = await openVolatileBackupDb();
+  const transaction = db.transaction([SOURCE_CHECKPOINT_STORE], "readonly");
+  const records = await createIndexedDbRequestPromise(
+    transaction.objectStore(SOURCE_CHECKPOINT_STORE).getAll(),
+  );
+  return (Array.isArray(records) ? records : [])
+    .map((record) => normalizeSourceCheckpointRecord(record))
+    .filter(Boolean)
+    .sort((left, right) =>
+      new Date(right.updatedAt || right.lastSuccessfulPageAt || 0).getTime() -
+      new Date(left.updatedAt || left.lastSuccessfulPageAt || 0).getTime(),
+    );
+}
+
+function isCheckpointRecoverable(checkpoint) {
+  const normalizedCheckpoint = normalizeSourceCheckpointRecord(checkpoint);
+  if (!normalizedCheckpoint || normalizedCheckpoint.itemsPersisted <= 0) {
+    return false;
+  }
+
+  if (normalizedCheckpoint.isTerminalComplete === true) {
+    return false;
+  }
+
+  return (
+    normalizedCheckpoint.hasMirrorData === true ||
+    normalizedCheckpoint.headSyncStatus !== "complete" ||
+    normalizedCheckpoint.backlogStatus !== "complete"
+  );
+}
+
+function buildSyntheticInterruptedSessionFromCheckpoints(checkpoints = []) {
+  const recoverableCheckpoints = (Array.isArray(checkpoints) ? checkpoints : [])
+    .map((checkpoint) => normalizeSourceCheckpointRecord(checkpoint))
+    .filter((checkpoint) => isCheckpointRecoverable(checkpoint));
+
+  if (!recoverableCheckpoints.length) {
+    return null;
+  }
+
+  const selectedCharacterAccountIds = [
+    ...new Set(
+      recoverableCheckpoints
+        .map((checkpoint) => checkpoint.characterAccountId)
+        .filter((value) => typeof value === "string" && value),
+    ),
+  ];
+  const selectedCreatorProfileIds = [
+    ...new Set(
+      recoverableCheckpoints
+        .map((checkpoint) => checkpoint.creatorProfileId)
+        .filter((value) => typeof value === "string" && value),
+    ),
+  ];
+  const sources = [
+    ...new Set(
+      recoverableCheckpoints
+        .map((checkpoint) => checkpoint.source)
+        .filter((value) => typeof value === "string" && value && value !== "unknown"),
+    ),
+  ];
+  const latestCheckpoint = recoverableCheckpoints[0];
+
+  return normalizeSyncSessionRecord({
+    sessionId:
+      latestCheckpoint && latestCheckpoint.lastSessionId
+        ? latestCheckpoint.lastSessionId
+        : `recovered-${Date.now()}`,
+    status: "paused",
+    requestedAction: "",
+    sources,
+    searchQuery: "",
+    currentSource: sources[0] || null,
+    currentSourceIndex: sources.length ? 1 : 0,
+    sourceScopes: recoverableCheckpoints.map((checkpoint) => ({
+      sourceScopeHash: checkpoint.sourceScopeHash,
+      source: checkpoint.source,
+      sourcePage: checkpoint.sourcePage,
+      progressKey: checkpoint.progressKey,
+      scopeId: checkpoint.scopeId,
+    })),
+    selectedCharacterAccountIds,
+    selectedCreatorProfileIds,
+    startedAt:
+      typeof latestCheckpoint.lastSuccessfulPageAt === "string" && latestCheckpoint.lastSuccessfulPageAt
+        ? latestCheckpoint.lastSuccessfulPageAt
+        : new Date().toISOString(),
+    updatedAt:
+      typeof latestCheckpoint.updatedAt === "string" && latestCheckpoint.updatedAt
+        ? latestCheckpoint.updatedAt
+        : new Date().toISOString(),
+    heartbeatAt:
+      typeof latestCheckpoint.updatedAt === "string" && latestCheckpoint.updatedAt
+        ? latestCheckpoint.updatedAt
+        : new Date().toISOString(),
+    lastRecoverableError: "",
+  });
+}
+
+async function findInterruptedSyncSession() {
+  const activeSession = await getActiveSyncSession();
+  if (activeSession && !["completed", "aborted"].includes(activeSession.status)) {
+    return activeSession;
+  }
+
+  const sessions = await listSyncSessions();
+  const matchingSession =
+    sessions.find((session) =>
+      ["running", "paused", "stalled", "error", "restoring"].includes(session.status),
+    ) || null;
+  if (matchingSession) {
+    return matchingSession;
+  }
+
+  return buildSyntheticInterruptedSessionFromCheckpoints(await listSourceCheckpoints());
+}
+
+async function loadMirrorItemsForSyncSession(sessionRecord) {
+  if (!sessionRecord || !Array.isArray(sessionRecord.sourceScopes) || !sessionRecord.sourceScopes.length) {
+    return [];
+  }
+
+  const mergedItems = new Map();
+  for (const sourceScope of sessionRecord.sourceScopes) {
+    const scopeItems = await loadSourceMirrorItems(sourceScope.sourceScopeHash);
+    for (const item of scopeItems) {
+      mergedItems.set(getCanonicalItemKey(item), item);
+    }
+  }
+
+  return sortItemsByNewest([...mergedItems.values()]);
+}
+
+function buildResumableFetchRequestFromSyncSession(sessionRecord) {
+  const normalizedSession = normalizeSyncSessionRecord(sessionRecord);
+  if (!normalizedSession || normalizedSession.sources.length === 0) {
+    return null;
+  }
+
+  return {
+    sources: [...normalizedSession.sources],
+    searchQuery: normalizedSession.searchQuery || "",
+  };
+}
+
+function isRecoverableSyncStatus(status) {
+  return ["paused", "stalled", "error"].includes(
+    typeof status === "string" ? status : "",
+  );
+}
+
+function isRecoverableSyncSessionRecord(sessionRecord) {
+  const normalizedSession = normalizeSyncSessionRecord(sessionRecord);
+  if (!normalizedSession) {
+    return false;
+  }
+
+  return (
+    isRecoverableSyncStatus(normalizedSession.status) &&
+    Boolean(buildResumableFetchRequestFromSyncSession(normalizedSession))
+  );
+}
+
+async function getRecoverablePausedSyncSession() {
+  const checkedSessionIds = new Set();
+
+  const takeSession = (sessionRecord) => {
+    const normalizedSession = normalizeSyncSessionRecord(sessionRecord);
+    if (!normalizedSession || checkedSessionIds.has(normalizedSession.sessionId)) {
+      return null;
+    }
+
+    checkedSessionIds.add(normalizedSession.sessionId);
+    return isRecoverableSyncSessionRecord(normalizedSession) ? normalizedSession : null;
+  };
+
+  const runtimeSessionId =
+    typeof currentState.syncSessionId === "string" && currentState.syncSessionId
+      ? currentState.syncSessionId
+      : "";
+
+  const pendingSession = takeSession(pendingInterruptedSyncSession);
+  if (pendingSession) {
+    return pendingSession;
+  }
+
+  if (runtimeSessionId) {
+    const runtimeSession = takeSession(await readSyncSession(runtimeSessionId));
+    if (runtimeSession) {
+      return runtimeSession;
+    }
+  }
+
+  const activeSession = takeSession(await getActiveSyncSession());
+  if (activeSession) {
+    return activeSession;
+  }
+
+  const interruptedSession = takeSession(await findInterruptedSyncSession());
+  if (interruptedSession) {
+    return interruptedSession;
+  }
+
+  return null;
+}
+
+async function resolvePausedFetchRequest() {
+  const interruptedSession = await getRecoverablePausedSyncSession();
+  if (interruptedSession) {
+    const recoveredRequest = buildResumableFetchRequestFromSyncSession(interruptedSession);
+    if (recoveredRequest) {
+      pendingInterruptedSyncSession = interruptedSession;
+      pausedFetchRequest = { ...recoveredRequest };
+      return recoveredRequest;
+    }
+  }
+
+  return null;
+}
+
+async function hasPausedFetchSession() {
+  return Boolean(await getRecoverablePausedSyncSession());
+}
+
+async function writeSourceMirrorItems(sourceScopeHash, items = []) {
+  if (!sourceScopeHash) {
+    return 0;
+  }
+
+  const sourceItems = Array.isArray(items) ? items : [];
+  if (!sourceItems.length) {
+    return 0;
+  }
+
+  const db = await openVolatileBackupDb();
+  let storedCount = 0;
+
+  for (let index = 0; index < sourceItems.length; index += VOLATILE_BACKUP_WRITE_CHUNK_SIZE) {
+    const slice = sourceItems.slice(index, index + VOLATILE_BACKUP_WRITE_CHUNK_SIZE);
+    const transaction = db.transaction([SOURCE_MIRROR_ITEM_STORE], "readwrite");
+    const store = transaction.objectStore(SOURCE_MIRROR_ITEM_STORE);
+    for (const item of slice) {
+      const record = buildMirrorItemRecord(sourceScopeHash, item);
+      if (!record) {
+        continue;
+      }
+      storedCount += 1;
+      store.put(record);
+    }
+    commitIndexedDbTransaction(transaction);
+    await createIndexedDbTransactionPromise(transaction, "Could not write mirrored source items.");
+    await yieldForUi();
+  }
+
+  return storedCount;
+}
+
+async function loadSourceMirrorItems(sourceScopeHash, limit = null) {
+  if (!sourceScopeHash) {
+    return [];
+  }
+
+  const db = await openVolatileBackupDb();
+  const transaction = db.transaction([SOURCE_MIRROR_ITEM_STORE], "readonly");
+  const store = transaction.objectStore(SOURCE_MIRROR_ITEM_STORE);
+  const index = store.index("sourceScopeHash");
+  const items = [];
+
+  await new Promise((resolve, reject) => {
+    const request = index.openCursor(IDBKeyRange.only(sourceScopeHash));
+    request.onsuccess = () => {
+      const cursor = request.result;
+      if (!cursor) {
+        resolve();
+        return;
+      }
+
+      const value = cursor.value;
+      if (value && value.item && typeof value.item === "object") {
+        items.push({
+          ...value.item,
+          key: getCanonicalItemKey(value.item),
+          storedAt: Number(value.storedAt) || 0,
+        });
+        if (Number.isFinite(Number(limit)) && limit > 0 && items.length >= limit) {
+          resolve();
+          return;
+        }
+      }
+
+      cursor.continue();
+    };
+    request.onerror = () =>
+      reject(request.error || new Error("Could not enumerate mirrored source items."));
+  });
+
+  return items
+    .sort((left, right) => {
+      const timeDelta = getComparableItemTimestamp(right) - getComparableItemTimestamp(left);
+      if (timeDelta !== 0) {
+        return timeDelta;
+      }
+
+      return getCanonicalItemKey(left).localeCompare(getCanonicalItemKey(right));
+    })
+    .map(({ storedAt: _storedAt, ...item }) => item);
+}
+
+async function loadMirrorItemKeysForScope(sourceScopeHash) {
+  const items = await loadSourceMirrorItems(sourceScopeHash);
+  return new Set(items.map((item) => getCanonicalItemKey(item)));
+}
+
+async function deleteSourceMirrorItems(sourceScopeHash) {
+  if (!sourceScopeHash) {
+    return;
+  }
+
+  const db = await openVolatileBackupDb();
+  const transaction = db.transaction([SOURCE_MIRROR_ITEM_STORE], "readwrite");
+  const store = transaction.objectStore(SOURCE_MIRROR_ITEM_STORE);
+  const index = store.index("sourceScopeHash");
+  await new Promise((resolve, reject) => {
+    const request = index.openCursor(IDBKeyRange.only(sourceScopeHash));
+    request.onsuccess = () => {
+      const cursor = request.result;
+      if (!cursor) {
+        resolve();
+        return;
+      }
+      cursor.delete();
+      cursor.continue();
+    };
+    request.onerror = () =>
+      reject(request.error || new Error("Could not delete mirrored source items."));
+  });
+  commitIndexedDbTransaction(transaction);
+  await createIndexedDbTransactionPromise(transaction, "Could not delete mirrored source items.");
+}
+
+function canExactlyMigrateLegacyProgress(sourceScope) {
+  return Boolean(
+    sourceScope &&
+      typeof sourceScope.sourceScopeHash === "string" &&
+      sourceScope.sourceScopeHash &&
+      typeof sourceScope.progressKey === "string" &&
+      sourceScope.progressKey &&
+      typeof sourceScope.source === "string" &&
+      sourceScope.source &&
+      typeof sourceScope.sourcePage === "string" &&
+      sourceScope.sourcePage,
+  );
+}
+
+function createCheckpointFromLegacyProgress(sourceScope, progressEntry, meta = {}) {
+  const normalizedProgress = normalizeVolatileBackupProgressEntry(progressEntry);
+  if (!sourceScope || !normalizedProgress || normalizedProgress.totalItemCount <= 0) {
+    return null;
+  }
+
+  return normalizeSourceCheckpointRecord({
+    ...sourceScope,
+    lastSessionId: typeof meta.sessionKey === "string" ? meta.sessionKey : "",
+    headCursor: "",
+    resumeCursor: normalizedProgress.cursor || "",
+    previousCursor: normalizedProgress.previousCursor || "",
+    offset: normalizedProgress.offset,
+    knownBoundaryKey: "",
+    newestKnownWatermark: null,
+    itemsPersisted: normalizedProgress.totalItemCount,
+    previewCount: normalizedProgress.previewCount,
+    backedUpItemCount: normalizedProgress.backedUpItemCount,
+    lastSuccessfulPageAt:
+      typeof meta.updatedAt === "string" && meta.updatedAt ? meta.updatedAt : new Date().toISOString(),
+    headSyncStatus: "idle",
+    backlogStatus: normalizedProgress.isComplete === true ? "complete" : "paused",
+    isTerminalComplete: normalizedProgress.isComplete === true,
+    hasMirrorData: true,
+    migratedFromLegacy: true,
+    error: typeof meta.error === "string" ? meta.error : "",
+    updatedAt:
+      typeof meta.updatedAt === "string" && meta.updatedAt ? meta.updatedAt : new Date().toISOString(),
+  });
+}
+
+async function migrateLegacyFetchRecoveryData() {
+  const existingMarker = await readSchemaMeta(FETCH_SYNC_MIGRATION_META_KEY);
+  if (existingMarker && existingMarker.completed === true) {
+    return existingMarker;
+  }
+
+  const metas = await listVolatileBackupMetas();
+  let migratedCheckpointCount = 0;
+  let migratedMirrorScopeCount = 0;
+
+  for (const meta of metas) {
+    if (!meta || typeof meta !== "object" || typeof meta.sessionKey !== "string" || !meta.sessionKey) {
+      continue;
+    }
+
+    const progressMap = normalizeVolatileBackupProgressMap(meta.progressByKey);
+    for (const [progressKey, progressEntry] of Object.entries(progressMap)) {
+      const sourceScope = createSourceScopeRecordFromProgress(meta.source, progressKey, progressEntry, meta);
+      if (!canExactlyMigrateLegacyProgress(sourceScope)) {
+        continue;
+      }
+
+      const checkpoint = createCheckpointFromLegacyProgress(sourceScope, progressEntry, meta);
+      if (!checkpoint) {
+        continue;
+      }
+
+      const existingCheckpoint = await readSourceCheckpoint(sourceScope.sourceScopeHash);
+      const shouldReplaceExistingCheckpoint =
+        !existingCheckpoint ||
+        Number(existingCheckpoint.itemsPersisted) < Number(checkpoint.itemsPersisted) ||
+        new Date(existingCheckpoint.updatedAt || 0).getTime() <
+          new Date(checkpoint.updatedAt || 0).getTime();
+
+      if (!shouldReplaceExistingCheckpoint) {
+        continue;
+      }
+
+      const legacyItems = await loadVolatileBackupItemsByProgressKey(
+        meta.sessionKey,
+        progressKey,
+        Math.max(1, checkpoint.itemsPersisted),
+      );
+      if (!legacyItems[0]) {
+        continue;
+      }
+
+      await writeSourceMirrorItems(sourceScope.sourceScopeHash, legacyItems);
+      await writeSourceCheckpoint(sourceScope.sourceScopeHash, checkpoint);
+      migratedCheckpointCount += 1;
+      migratedMirrorScopeCount += 1;
+    }
+  }
+
+  return writeSchemaMeta(FETCH_SYNC_MIGRATION_META_KEY, {
+    completed: true,
+    migratedAt: new Date().toISOString(),
+    migratedCheckpointCount,
+    migratedMirrorScopeCount,
+  });
+}
+
+async function ensureFetchRecoverySchemaReady() {
+  if (fetchRecoverySchemaReadyPromise) {
+    return fetchRecoverySchemaReadyPromise;
+  }
+
+  fetchRecoverySchemaReadyPromise = (async () => {
+    await openVolatileBackupDb();
+    await migrateLegacyFetchRecoveryData();
+  })().catch((error) => {
+    fetchRecoverySchemaReadyPromise = null;
+    throw error;
+  });
+
+  return fetchRecoverySchemaReadyPromise;
+}
+
 async function clearVolatileBackups() {
   const db = await openVolatileBackupDb();
   await new Promise((resolve, reject) => {
     const transaction = db.transaction(
-      [VOLATILE_BACKUP_ITEM_STORE, VOLATILE_BACKUP_META_STORE],
+      [
+        VOLATILE_BACKUP_ITEM_STORE,
+        VOLATILE_BACKUP_META_STORE,
+        SOURCE_MIRROR_ITEM_STORE,
+        SOURCE_CHECKPOINT_STORE,
+        SYNC_SESSION_STORE,
+        SOURCE_RETRY_STATE_STORE,
+      ],
       "readwrite",
     );
     transaction.oncomplete = () => resolve();
     transaction.onerror = () => reject(transaction.error || new Error("Could not clear the volatile backup database."));
     transaction.objectStore(VOLATILE_BACKUP_ITEM_STORE).clear();
     transaction.objectStore(VOLATILE_BACKUP_META_STORE).clear();
+    transaction.objectStore(SOURCE_MIRROR_ITEM_STORE).clear();
+    transaction.objectStore(SOURCE_CHECKPOINT_STORE).clear();
+    transaction.objectStore(SYNC_SESSION_STORE).clear();
+    transaction.objectStore(SOURCE_RETRY_STATE_STORE).clear();
+    transaction.objectStore(SCHEMA_META_STORE).delete(ACTIVE_SYNC_SESSION_META_KEY);
   });
+  activeSyncSessionId = "";
+  pendingInterruptedSyncSession = null;
 }
 
 async function readUpdaterRecord(key) {
@@ -2912,7 +4185,7 @@ function getVolatileBackupProgressDescriptorsForSource(source, options = {}) {
 async function findUsableVolatileBackupMetaForSource(source, options = {}) {
   const selectionSignature = getSourceSelectionSignature(source, options);
   const descriptors = getVolatileBackupProgressDescriptorsForSource(source, options);
-  const statuses = ["running", "paused", "error", "completed"];
+  const statuses = ["running", "paused", "error", "completed", "aborted"];
   const candidateMetas = (await listVolatileBackupMetas())
     .filter((meta) => {
       if (!meta || typeof meta !== "object") {
@@ -3027,11 +4300,25 @@ async function loadVolatileBackupStateForProgress(
       ),
     );
 
-  const storedItems = await loadVolatileBackupItemsByProgressKey(
+  let storedItems = await loadVolatileBackupItemsByProgressKey(
     sessionKey,
     progressKey,
     itemLimit,
   );
+  if (!storedItems[0]) {
+    const sessionMeta = await readVolatileBackupMeta(sessionKey);
+    const sourceScope = createSourceScopeRecordFromProgress(
+      sessionMeta && typeof sessionMeta === "object" ? sessionMeta.source : "",
+      progressKey,
+      {},
+      sessionMeta,
+    );
+
+    if (sourceScope && sourceScope.sourceScopeHash) {
+      storedItems = await loadSourceMirrorItems(sourceScope.sourceScopeHash, itemLimit);
+    }
+  }
+
   if (!storedItems[0]) {
     await clearVolatileBackupProgress(sessionKey, progressKey);
     return null;
@@ -3129,7 +4416,7 @@ async function findUsableCreatorVolatileBackupMeta(selectionSignature, creatorPr
   const existingMeta = await findLatestVolatileBackupMeta({
     source: "creators",
     selectionSignature,
-    statuses: ["running", "paused", "error", "completed"],
+    statuses: ["running", "paused", "error", "completed", "aborted"],
   });
 
   if (!existingMeta || typeof existingMeta.sessionKey !== "string" || !existingMeta.sessionKey) {
@@ -3393,9 +4680,73 @@ async function updateVolatileBackupProgress(sessionKey, progressKey, patch = {})
     [progressKey]: nextProgressEntry,
   };
 
-  return writeVolatileBackupMeta(sessionKey, {
+  const nextMeta = await writeVolatileBackupMeta(sessionKey, {
     progressByKey: nextProgressMap,
   });
+
+  const sourceScope = createSourceScopeRecordFromProgress(
+    nextMeta && typeof nextMeta === "object" ? nextMeta.source : "",
+    progressKey,
+    patch,
+    nextMeta,
+  );
+  if (sourceScope && sourceScope.sourceScopeHash) {
+    const normalizedProgress = normalizeVolatileBackupProgressEntry(nextProgressEntry);
+    if (normalizedProgress) {
+      const existingCheckpoint = await readSourceCheckpoint(sourceScope.sourceScopeHash);
+      const syncPhase =
+        patch && typeof patch.syncPhase === "string" ? patch.syncPhase : "";
+      const nextHeadSyncStatus =
+        syncPhase === "head-sync"
+          ? normalizedProgress.isComplete === true
+            ? "complete"
+            : "running"
+          : existingCheckpoint && existingCheckpoint.headSyncStatus
+            ? existingCheckpoint.headSyncStatus
+            : "idle";
+      const nextBacklogStatus =
+        syncPhase === "backlog-resume"
+          ? normalizedProgress.isComplete === true
+            ? "complete"
+            : "running"
+          : syncPhase === "head-sync"
+            ? existingCheckpoint && existingCheckpoint.backlogStatus
+              ? existingCheckpoint.backlogStatus
+              : normalizedProgress.isComplete === true
+                ? "complete"
+                : "idle"
+            : normalizedProgress.isComplete === true
+              ? "complete"
+              : "paused";
+      await writeSourceCheckpoint(sourceScope.sourceScopeHash, {
+        ...sourceScope,
+        lastSessionId: activeSyncSessionId || sessionKey,
+        resumeCursor: normalizedProgress.cursor || "",
+        previousCursor: normalizedProgress.previousCursor || "",
+        offset: normalizedProgress.offset,
+        itemsPersisted: normalizedProgress.totalItemCount,
+        previewCount: normalizedProgress.previewCount,
+        backedUpItemCount: normalizedProgress.backedUpItemCount,
+        lastSuccessfulPageAt: new Date().toISOString(),
+        headSyncStatus: nextHeadSyncStatus,
+        backlogStatus: nextBacklogStatus,
+        isTerminalComplete:
+          nextHeadSyncStatus === "complete" && nextBacklogStatus === "complete",
+        hasMirrorData: normalizedProgress.totalItemCount > 0,
+        knownBoundaryKey:
+          existingCheckpoint && typeof existingCheckpoint.knownBoundaryKey === "string"
+            ? existingCheckpoint.knownBoundaryKey
+            : "",
+        newestKnownWatermark:
+          existingCheckpoint && existingCheckpoint.newestKnownWatermark
+            ? existingCheckpoint.newestKnownWatermark
+            : null,
+        error: "",
+      });
+    }
+  }
+
+  return nextMeta;
 }
 
 async function clearVolatileBackupProgress(sessionKey, progressKey) {
@@ -3480,6 +4831,8 @@ async function findLatestVolatileBackupMeta(options = {}) {
 async function initializeVolatileBackupForSource(source, options = {}) {
   const selectionSignature = getSourceSelectionSignature(source, options);
   const existingMeta = await findUsableVolatileBackupMetaForSource(source, options);
+  const checkpointProgressMap = await loadCheckpointProgressMapForSource(source, options);
+  const checkpointScopeRecords = buildSourceScopeRecordsForSource(source, options);
 
   if (existingMeta && typeof existingMeta.sessionKey === "string" && existingMeta.sessionKey) {
     const nextMeta = await writeVolatileBackupMeta(existingMeta.sessionKey, {
@@ -3487,6 +4840,11 @@ async function initializeVolatileBackupForSource(source, options = {}) {
       selectionSignature,
       status: "running",
       error: "",
+      sourceScopeRecords: checkpointScopeRecords,
+      progressByKey: {
+        ...normalizeVolatileBackupProgressMap(existingMeta.progressByKey),
+        ...checkpointProgressMap,
+      },
     });
 
     return {
@@ -3504,7 +4862,9 @@ async function initializeVolatileBackupForSource(source, options = {}) {
       source,
       selectionSignature,
       status: "running",
-      progressByKey: {},
+      sourceScopeRecords: checkpointScopeRecords,
+      progressByKey: checkpointProgressMap,
+      syncSessionId: activeSyncSessionId,
     },
     { merge: false },
   );
@@ -3554,7 +4914,94 @@ async function appendVolatileBackupItems(sessionKey, items, meta = {}) {
     ...metaWithoutProgressKey
   } = meta && typeof meta === "object" ? meta : {};
   await writeVolatileBackupMeta(sessionKey, metaWithoutProgressKey);
+
+  const sourceScope = createSourceScopeRecordFromProgress(
+    meta && typeof meta === "object" ? meta.source : "",
+    progressKey,
+    meta,
+    meta,
+  );
+  if (sourceScope && sourceScope.sourceScopeHash) {
+    try {
+      await writeSourceMirrorItems(sourceScope.sourceScopeHash, sourceItems);
+      const existingCheckpoint = await readSourceCheckpoint(sourceScope.sourceScopeHash);
+      const existingPersistedCount = Number(existingCheckpoint && existingCheckpoint.itemsPersisted) || 0;
+      const existingPreviewCount = Number(existingCheckpoint && existingCheckpoint.previewCount) || 0;
+      const syncPhase =
+        meta && typeof meta.syncPhase === "string" ? meta.syncPhase : "";
+      const newestWatermark = getNewestKnownWatermarkForItems(
+        sourceItems,
+        existingCheckpoint && existingCheckpoint.newestKnownWatermark,
+      );
+      await writeSourceCheckpoint(sourceScope.sourceScopeHash, {
+        ...sourceScope,
+        lastSessionId: activeSyncSessionId || sessionKey,
+        itemsPersisted: Math.max(existingPersistedCount, storedCount, sourceItems.length),
+        previewCount: Math.max(existingPreviewCount, sourceItems.length),
+        hasMirrorData: true,
+        lastSuccessfulPageAt: new Date().toISOString(),
+        knownBoundaryKey:
+          syncPhase === "head-sync" && newestWatermark && newestWatermark.itemKey
+            ? newestWatermark.itemKey
+            : existingCheckpoint && typeof existingCheckpoint.knownBoundaryKey === "string"
+              ? existingCheckpoint.knownBoundaryKey
+              : "",
+        newestKnownWatermark: newestWatermark,
+        headSyncStatus:
+          syncPhase === "head-sync"
+            ? "running"
+            : existingCheckpoint && existingCheckpoint.headSyncStatus
+              ? existingCheckpoint.headSyncStatus
+              : "idle",
+        backlogStatus:
+          syncPhase === "backlog-resume"
+            ? "running"
+            : existingCheckpoint && existingCheckpoint.backlogStatus
+              ? existingCheckpoint.backlogStatus
+              : "idle",
+        error: "",
+      });
+    } catch (error) {
+      console.warn(`Failed to persist mirrored items for ${sourceScope.sourceScopeHash}.`, error);
+    }
+  }
   return storedCount;
+}
+
+function getNewestKnownWatermarkForItems(items, existingWatermark = null) {
+  const normalizedItems = Array.isArray(items) ? items : [];
+  let bestWatermark =
+    existingWatermark &&
+    typeof existingWatermark === "object" &&
+    Number.isFinite(Number(existingWatermark.timestamp)) &&
+    typeof existingWatermark.itemKey === "string"
+      ? {
+          timestamp: Math.max(0, Number(existingWatermark.timestamp)),
+          itemKey: existingWatermark.itemKey,
+        }
+      : null;
+
+  for (const item of normalizedItems) {
+    const itemKey = getCanonicalItemKey(item);
+    if (!itemKey) {
+      continue;
+    }
+    const timestamp = getComparableItemTimestamp(item);
+    const candidate = {
+      timestamp,
+      itemKey,
+    };
+    if (
+      !bestWatermark ||
+      candidate.timestamp > bestWatermark.timestamp ||
+      (candidate.timestamp === bestWatermark.timestamp &&
+        candidate.itemKey.localeCompare(bestWatermark.itemKey) > 0)
+    ) {
+      bestWatermark = candidate;
+    }
+  }
+
+  return bestWatermark;
 }
 
 function normalizeCatalogSyncEntry(entry) {
@@ -3731,12 +5178,25 @@ function buildPopupStateSnapshot(state = currentState) {
   const partialWarning = joinPartialWarnings([
     sourceState.partialWarning,
   ]);
+  const restoreStatus =
+    fetchRecoveryInitError &&
+    (!sourceState.restoreStatus || sourceState.restoreStatus.phase === "idle")
+      ? createDefaultRestoreStatus({
+          phase: "error",
+          promptVisible: true,
+          message: "Local session recovery needs attention.",
+          detail:
+            "Save Sora could not open your local fetch recovery database. You can keep using the app, but restoring paused fetches is unavailable until the local recovery store is repaired.",
+          error: fetchRecoveryInitError,
+        })
+      : createDefaultRestoreStatus(sourceState.restoreStatus);
 
   return {
     ...sourceState,
     items: limitedItems,
     selectedKeys,
     titleOverrides,
+    restoreStatus,
     updateStatus: buildUpdateStatusSnapshot(),
     queued: Number.isFinite(Number(sourceState.queued))
       ? Number(sourceState.queued)
@@ -3966,11 +5426,39 @@ async function loadMergedFetchItemsForState(state = currentState) {
   }
 
   try {
-    const backupMeta = await findArchiveVolatileBackupMeta(sourceState);
-    if (backupMeta && typeof backupMeta.sessionKey === "string" && backupMeta.sessionKey) {
-      const backupItems = await loadVolatileBackupItemsBySessionKey(backupMeta.sessionKey);
-      for (const item of backupItems) {
+    const mergedMirrorItems = new Map();
+    if (typeof sourceState.syncSessionId === "string" && sourceState.syncSessionId) {
+      const syncSession = await readSyncSession(sourceState.syncSessionId);
+      const mirroredItems = await loadMirrorItemsForSyncSession(syncSession);
+      for (const item of mirroredItems) {
+        mergedMirrorItems.set(getCanonicalItemKey(item), item);
+      }
+    } else {
+      const resumableFetchRequest = normalizeResumableFetchRequest(sourceState.resumableFetchRequest);
+      for (const source of resumableFetchRequest ? resumableFetchRequest.sources : []) {
+        const mirroredItems = await loadMirroredItemsForSourceSelection(source, {
+          characterAccounts: sourceState.characterAccounts,
+          selectedCharacterAccountIds: sourceState.selectedCharacterAccountIds,
+          creatorProfiles: sourceState.creatorProfiles,
+          selectedCreatorProfileIds: sourceState.selectedCreatorProfileIds,
+        });
+        for (const item of mirroredItems) {
+          mergedMirrorItems.set(getCanonicalItemKey(item), item);
+        }
+      }
+    }
+
+    if (mergedMirrorItems.size > 0) {
+      for (const item of mergedMirrorItems.values()) {
         mergedItems.set(getCanonicalItemKey(item), item);
+      }
+    } else {
+      const backupMeta = await findArchiveVolatileBackupMeta(sourceState);
+      if (backupMeta && typeof backupMeta.sessionKey === "string" && backupMeta.sessionKey) {
+        const backupItems = await loadVolatileBackupItemsBySessionKey(backupMeta.sessionKey);
+        for (const item of backupItems) {
+          mergedItems.set(getCanonicalItemKey(item), item);
+        }
       }
     }
   } catch (error) {
@@ -4057,11 +5545,39 @@ function serializeStateForPersistence(state = currentState) {
     state && typeof state === "object" && typeof state.phase === "string"
       ? state.phase
       : "idle";
-  const isFetchResumeState = phase === "fetching" || phase === "fetch-paused";
+  const isActiveFetchState = phase === "fetching";
+  const isPausedFetchState = phase === "fetch-paused";
+  const isFetchResumeState = isActiveFetchState || isPausedFetchState;
+  const resumableFetchRequest = normalizeResumableFetchRequest(
+    state && typeof state === "object" ? state.resumableFetchRequest : null,
+  );
+  const persistedSyncSessionId =
+    isFetchResumeState &&
+    state &&
+    typeof state === "object" &&
+    typeof state.syncSessionId === "string" &&
+    state.syncSessionId
+      ? state.syncSessionId
+      : "";
+  const persistedSyncStatus =
+    isFetchResumeState &&
+    state &&
+    typeof state === "object" &&
+    typeof state.syncStatus === "string" &&
+    state.syncStatus
+      ? state.syncStatus
+      : "idle";
   const persistedItemKeys = buildPersistedItemKeys(state && state.items);
   const persistedItemKeySet = new Set(persistedItemKeys);
   const nextState = {
     ...(state && typeof state === "object" ? state : createDefaultState()),
+    phase: isActiveFetchState ? "idle" : phase,
+    message:
+      isActiveFetchState
+        ? createDefaultState().message
+        : state && typeof state === "object"
+          ? state.message
+          : createDefaultState().message,
     profileIds: [],
     draftIds: [],
     likesIds: [],
@@ -4072,17 +5588,37 @@ function serializeStateForPersistence(state = currentState) {
     itemKeys: isFetchResumeState ? [] : persistedItemKeys,
     pendingItems: normalizePersistedItems(state && state.pendingItems),
     failedItems: normalizePersistedItems(state && state.failedItems),
-    resumableFetchRequest: normalizeResumableFetchRequest(
-      state && state.resumableFetchRequest,
-    ),
-    fetchProgress: createDefaultFetchProgress(),
+    resumableFetchRequest: isFetchResumeState ? resumableFetchRequest : null,
+    syncSessionId: persistedSyncSessionId,
+    syncStatus: persistedSyncStatus,
+    restoreStatus:
+      isPausedFetchState && persistedSyncSessionId
+        ? createDefaultRestoreStatus({
+            phase: "ready",
+            sessionId: persistedSyncSessionId,
+            promptVisible: false,
+            totalItems: Math.max(0, Number(state && state.fetchedCount) || 0),
+            loadedItems: Math.max(0, Number(state && state.fetchedCount) || 0),
+            message: "Restored your saved fetch.",
+            detail: "Your saved results are ready to resume.",
+          })
+        : createDefaultRestoreStatus(),
+    fetchProgress:
+      isPausedFetchState
+        ? createDefaultFetchProgress({
+            ...(state && typeof state === "object" && state.fetchProgress && typeof state.fetchProgress === "object"
+              ? state.fetchProgress
+              : {}),
+            stage: "paused",
+            stageLabel: "Fetch paused",
+          })
+        : createDefaultFetchProgress(),
   };
 
   nextState.selectedKeys = Array.isArray(nextState.selectedKeys)
     ? nextState.selectedKeys.filter(
-      (value) =>
-        typeof value === "string" && (isFetchResumeState || persistedItemKeySet.has(value)),
-    )
+        (value) => typeof value === "string" && persistedItemKeySet.has(value),
+      )
     : [];
   nextState.titleOverrides = isFetchResumeState
     ? {}
@@ -4122,144 +5658,230 @@ function restorePersistedItems(savedState, catalogItems) {
   return normalizeCatalogItems(sourceState && sourceState.items);
 }
 
+function syncRestoredItemsIntoRuntimeCatalog(items = []) {
+  const restoredItems = normalizeCatalogItems(items);
+  if (!restoredItems.length) {
+    return;
+  }
+
+  const mergedItems = new Map(
+    normalizeCatalogItems(currentCatalog.items).map((item) => [getCanonicalItemKey(item), item]),
+  );
+  for (const item of restoredItems) {
+    const key = getCanonicalItemKey(item);
+    if (!key) {
+      continue;
+    }
+    mergedItems.set(key, item);
+  }
+
+  currentCatalog = {
+    ...currentCatalog,
+    items: sortItemsByNewest([...mergedItems.values()]),
+  };
+}
+
+async function buildPausedFetchStateFromSyncSession(sessionRecord, state = currentState) {
+  const normalizedSession = normalizeSyncSessionRecord(sessionRecord);
+  if (!normalizedSession) {
+    return null;
+  }
+
+  const restoredItems = await loadMirrorItemsForSyncSession(normalizedSession);
+  if (!restoredItems.length) {
+    return null;
+  }
+
+  const restoredSourceIds = deriveSourceIdsFromItems(restoredItems);
+  const restoredSelectedKeys = getImplicitSelectedKeys(restoredItems);
+
+  return {
+    ...(state && typeof state === "object" ? state : createDefaultState()),
+    phase: "fetch-paused",
+    message: "Restored the previous fetch from local storage. Resume when you're ready.",
+    currentSource: null,
+    profileIds: restoredSourceIds.profileIds,
+    draftIds: restoredSourceIds.draftIds,
+    likesIds: restoredSourceIds.likesIds,
+    cameoIds: restoredSourceIds.cameoIds,
+    characterIds: restoredSourceIds.characterIds,
+    creatorIds: restoredSourceIds.creatorIds,
+    items: restoredItems,
+    fetchedCount: restoredItems.length,
+    backedUpItemCount: 0,
+    selectedKeys: restoredSelectedKeys,
+    queued: restoredSelectedKeys.length,
+    titleOverrides: pruneLegacyTitleOverrides(restoredItems, state && state.titleOverrides),
+    fetchProgress: createDefaultFetchProgress({
+      stage: "paused",
+      stageLabel: "Fetch paused",
+      detail: "Your saved results were restored from local storage. Resume when you're ready.",
+      itemsFound: restoredItems.length,
+    }),
+    finishedAt: new Date().toISOString(),
+    resumableFetchRequest: buildResumableFetchRequestFromSyncSession(normalizedSession),
+    syncSessionId: normalizedSession.sessionId,
+    syncStatus: normalizedSession.status,
+    restoreStatus: createDefaultRestoreStatus({
+      phase: "ready",
+      sessionId: normalizedSession.sessionId,
+      promptVisible: false,
+      totalItems: restoredItems.length,
+      loadedItems: restoredItems.length,
+      message: "Restored your saved fetch.",
+      detail: "Your full saved results are ready.",
+    }),
+  };
+}
+
+async function getAuthoritativeResumableFetchRequest(fallbackRequest = null) {
+  const normalizedFallbackRequest = normalizeResumableFetchRequest(fallbackRequest);
+  const recoverableSession = await getRecoverablePausedSyncSession();
+  if (recoverableSession) {
+    const sessionRequest = buildResumableFetchRequestFromSyncSession(recoverableSession);
+    if (sessionRequest) {
+      return sessionRequest;
+    }
+  }
+
+  return normalizedFallbackRequest;
+}
+
+async function restoreInterruptedSyncSessionForUi() {
+  const interruptedSession =
+    pendingInterruptedSyncSession || (await findInterruptedSyncSession());
+  if (!interruptedSession) {
+    throw new Error("There is no interrupted fetch session to restore.");
+  }
+
+  pendingInterruptedSyncSession = interruptedSession;
+  await setState({
+    restoreStatus: createDefaultRestoreStatus({
+      phase: "restoring",
+      sessionId: interruptedSession.sessionId,
+      promptVisible: false,
+      totalItems: currentState.restoreStatus && currentState.restoreStatus.totalItems
+        ? currentState.restoreStatus.totalItems
+        : 0,
+      loadedItems: 0,
+      message: "Restoring your saved fetch…",
+      detail: "Loading your saved videos from local storage and preparing the full results list.",
+    }),
+  }, { persist: false });
+
+  const restoredState = await buildPausedFetchStateFromSyncSession(interruptedSession, currentState);
+  if (!restoredState) {
+    throw new Error("The saved fetch could not be restored from local storage.");
+  }
+
+  syncRestoredItemsIntoRuntimeCatalog(restoredState.items);
+  pausedFetchRequest = buildResumableFetchRequestFromSyncSession(interruptedSession);
+  pendingInterruptedSyncSession = interruptedSession;
+  await writeSyncSession(interruptedSession.sessionId, {
+    status: "paused",
+    requestedAction: "",
+    lastRecoverableError: "",
+  });
+  await setState(restoredState);
+  return buildPopupStateSnapshotForView(currentState);
+}
+
+async function dismissInterruptedSyncSessionForUi() {
+  pendingInterruptedSyncSession = null;
+  pausedFetchRequest = null;
+  await setState({
+    restoreStatus: createDefaultRestoreStatus(),
+    syncSessionId: "",
+    syncStatus: "idle",
+    resumableFetchRequest: null,
+  });
+  return buildPopupStateSnapshotForView(currentState);
+}
+
 async function restoreInterruptedFetchState(state) {
   const nextState = state && typeof state === "object" ? { ...state } : createDefaultState();
-  const phase = typeof nextState.phase === "string" ? nextState.phase : "idle";
-  const resumableFetchRequest = normalizeResumableFetchRequest(nextState.resumableFetchRequest);
-
-  if ((phase !== "fetching" && phase !== "fetch-paused") || !resumableFetchRequest) {
+  if (fetchRecoveryInitError) {
+    pendingInterruptedSyncSession = null;
     pausedFetchRequest = null;
     activeVolatileBackupSessionKey = "";
     activeVolatileBackupResumeMeta = null;
     return normalizeRestoredTransientState({
       ...nextState,
-      resumableFetchRequest,
-    });
-  }
-
-  const supportsCheckpointRestore = resumableFetchRequest.searchQuery === "";
-  if (!supportsCheckpointRestore) {
-    pausedFetchRequest = null;
-    activeVolatileBackupSessionKey = "";
-    activeVolatileBackupResumeMeta = null;
-    return normalizeRestoredTransientState({
-      ...nextState,
+      phase: "idle",
       resumableFetchRequest: null,
-    });
-  }
-
-  try {
-    const restoredItems = new Map();
-    let restoredTotalItemCount = 0;
-    let restoredBackedUpItemCount = 0;
-    let activeBackupMeta = null;
-
-    for (const source of resumableFetchRequest.sources) {
-      const backupMeta = await findUsableVolatileBackupMetaForSource(source, {
-        characterAccounts: nextState.characterAccounts,
-        selectedCharacterAccountIds: nextState.selectedCharacterAccountIds,
-        creatorProfiles: nextState.creatorProfiles,
-        selectedCreatorProfileIds: nextState.selectedCreatorProfileIds,
-      });
-      if (!backupMeta || typeof backupMeta.sessionKey !== "string" || !backupMeta.sessionKey) {
-        continue;
-      }
-
-      const restoredPreview = await loadVolatileBackupPreviewForSource(
-        source,
-        backupMeta,
-        {
-          characterAccounts: nextState.characterAccounts,
-          selectedCharacterAccountIds: nextState.selectedCharacterAccountIds,
-          creatorProfiles: nextState.creatorProfiles,
-          selectedCreatorProfileIds: nextState.selectedCreatorProfileIds,
-        },
-      );
-      if (!restoredPreview || restoredPreview.items.length === 0) {
-        continue;
-      }
-
-      if (!activeBackupMeta) {
-        activeBackupMeta = backupMeta;
-      }
-
-      restoredTotalItemCount += Math.max(0, Number(restoredPreview.totalItemCount) || 0);
-      restoredBackedUpItemCount += Math.max(0, Number(restoredPreview.backedUpItemCount) || 0);
-
-      for (const item of restoredPreview.items) {
-        const key = item && getCanonicalItemKey(item);
-        if (!key || restoredItems.has(key)) {
-          continue;
-        }
-        restoredItems.set(key, item);
-      }
-    }
-
-    const restoredPreviewItems = sortItemsByNewest([...restoredItems.values()]);
-    if (restoredTotalItemCount <= 0 || restoredPreviewItems.length === 0) {
-      pausedFetchRequest = null;
-      activeVolatileBackupSessionKey = "";
-      activeVolatileBackupResumeMeta = null;
-      return normalizeRestoredTransientState({
-        ...nextState,
-        resumableFetchRequest: null,
-      });
-    }
-
-    pausedFetchRequest = { ...resumableFetchRequest };
-    activeVolatileBackupSessionKey =
-      activeBackupMeta && typeof activeBackupMeta.sessionKey === "string"
-        ? activeBackupMeta.sessionKey
-        : "";
-    activeVolatileBackupResumeMeta = activeBackupMeta;
-
-    const restoredSourceIds = deriveSourceIdsFromItems(restoredPreviewItems);
-    const restoredSelectionSeed =
-      Array.isArray(nextState.selectedKeys) && nextState.selectedKeys.length > 0
-        ? nextState.selectedKeys
-        : restoredPreviewItems.map((item) => getCanonicalItemKey(item));
-    const restoredSelectedKeys = normalizeSelectedKeys(restoredPreviewItems, restoredSelectionSeed);
-    const backedUpItemCount = Math.max(
-      restoredBackedUpItemCount,
-      restoredTotalItemCount - restoredPreviewItems.length,
-    );
-
-    return {
-      ...nextState,
-      phase: "fetch-paused",
-      message: "Restored the previous fetch from the local checkpoint. Resume when you're ready.",
-      currentSource: null,
-      profileIds: restoredSourceIds.profileIds,
-      draftIds: restoredSourceIds.draftIds,
-      likesIds: restoredSourceIds.likesIds,
-      cameoIds: restoredSourceIds.cameoIds,
-      characterIds: restoredSourceIds.characterIds,
-      creatorIds: restoredSourceIds.creatorIds,
-      items: restoredPreviewItems,
-      fetchedCount: restoredTotalItemCount,
-      backedUpItemCount,
-      selectedKeys: restoredSelectedKeys,
-      queued: restoredSelectedKeys.length,
-      titleOverrides: pruneLegacyTitleOverrides(restoredPreviewItems, nextState.titleOverrides),
-      fetchProgress: createDefaultFetchProgress({
-        stage: "paused",
-        stageLabel: "Fetch paused",
-        detail: "Recovered the saved checkpoint from the local backup. Resume when you're ready.",
-        itemsFound: restoredTotalItemCount,
+      syncSessionId: "",
+      syncStatus: "error",
+      restoreStatus: createDefaultRestoreStatus({
+        phase: "error",
+        promptVisible: true,
+        message: "Local session recovery needs attention.",
+        detail:
+          "Save Sora could not open your local fetch recovery database, so restoring paused fetches is unavailable until the local recovery store is repaired.",
+        error: fetchRecoveryInitError,
       }),
-      finishedAt: new Date().toISOString(),
-      resumableFetchRequest,
-    };
-  } catch (error) {
-    console.warn("Failed to restore the interrupted fetch checkpoint.", error);
-    pausedFetchRequest = null;
-    activeVolatileBackupSessionKey = "";
-    activeVolatileBackupResumeMeta = null;
-    return normalizeRestoredTransientState({
-      ...nextState,
-      resumableFetchRequest: null,
     });
   }
+
+  const interruptedSyncSession = await findInterruptedSyncSession();
+  if (interruptedSyncSession) {
+    pendingInterruptedSyncSession = interruptedSyncSession;
+    pausedFetchRequest = buildResumableFetchRequestFromSyncSession(interruptedSyncSession);
+    activeSyncSessionId = interruptedSyncSession.sessionId;
+
+    if (interruptedSyncSession.status === "running" || interruptedSyncSession.status === "restoring") {
+      await markSyncSessionPaused("Recovered the interrupted fetch after a background restart.");
+      interruptedSyncSession.status = "paused";
+    }
+
+    const shouldAutoRestorePausedSession =
+      nextState.phase === "fetch-paused" &&
+      normalizeResumableFetchRequest(nextState.resumableFetchRequest) &&
+      (!nextState.syncSessionId || nextState.syncSessionId === interruptedSyncSession.sessionId) &&
+      ["paused", "stalled", "error"].includes(interruptedSyncSession.status);
+    if (shouldAutoRestorePausedSession) {
+      const restoredPausedState = await buildPausedFetchStateFromSyncSession(
+        interruptedSyncSession,
+        nextState,
+      );
+      if (restoredPausedState) {
+        syncRestoredItemsIntoRuntimeCatalog(restoredPausedState.items);
+        return restoredPausedState;
+      }
+    }
+
+    const mirroredItems = await loadMirrorItemsForSyncSession(interruptedSyncSession);
+    return {
+      ...normalizeRestoredTransientState({
+        ...nextState,
+        phase: "idle",
+        resumableFetchRequest: buildResumableFetchRequestFromSyncSession(interruptedSyncSession),
+        syncSessionId: interruptedSyncSession.sessionId,
+        syncStatus: interruptedSyncSession.status,
+      }),
+      restoreStatus: createDefaultRestoreStatus({
+        phase: "prompt",
+        sessionId: interruptedSyncSession.sessionId,
+        promptVisible: mirroredItems.length > 0,
+        totalItems: mirroredItems.length,
+        loadedItems: 0,
+        message: "Restore your previous session?",
+        detail:
+          "Save Sora found a recoverable local fetch checkpoint. Restore your saved results to continue where you left off.",
+      }),
+    };
+  }
+
+  pendingInterruptedSyncSession = null;
+  pausedFetchRequest = null;
+  activeVolatileBackupSessionKey = "";
+  activeVolatileBackupResumeMeta = null;
+  return normalizeRestoredTransientState({
+    ...nextState,
+    resumableFetchRequest: null,
+    syncSessionId: "",
+    syncStatus: "idle",
+    restoreStatus: createDefaultRestoreStatus(),
+  });
 }
 
 async function restoreState() {
@@ -4486,6 +6108,13 @@ async function setState(patch, options = {}) {
     ...currentState,
     ...patch,
   };
+  currentState.characterAccounts = normalizeCharacterAccounts(currentState.characterAccounts);
+  currentState.selectedCharacterAccountIds = normalizeSelectedCharacterAccountIds(
+    currentState.characterAccounts,
+    currentState.selectedCharacterAccountIds,
+    [],
+    { allowEmpty: true },
+  );
   currentState.creatorProfiles = normalizeResolvedCreatorProfiles(currentState.creatorProfiles);
   currentState.selectedCreatorProfileIds = normalizeSelectedCreatorProfileIds(
     currentState.creatorProfiles,
@@ -4535,15 +6164,35 @@ function maybeResumeDeferredUpdate() {
   });
 }
 
-async function resetExtensionState() {
+async function resetExtensionState(options = {}) {
+  const preserveRecoveryData = options.preserveRecoveryData !== false;
   activeVolatileBackupSessionKey = "";
   activeVolatileBackupResumeMeta = null;
   pausedFetchRequest = null;
-  try {
-    await clearVolatileBackups();
-  } catch (error) {
-    console.warn("Failed to clear volatile backups while resetting the extension state.", error);
+  pendingInterruptedSyncSession = null;
+  const preservedCharacterAccounts = normalizeCharacterAccounts(currentState.characterAccounts);
+  const preservedSelectedCharacterAccountIds = normalizeSelectedCharacterAccountIds(
+    preservedCharacterAccounts,
+    currentState.selectedCharacterAccountIds,
+    [],
+    { allowEmpty: true },
+  );
+  const preservedCreatorProfiles = normalizeResolvedCreatorProfiles(currentState.creatorProfiles);
+  const preservedSelectedCreatorProfileIds = normalizeSelectedCreatorProfileIds(
+    preservedCreatorProfiles,
+    currentState.selectedCreatorProfileIds,
+    [],
+    { allowEmpty: true },
+  );
+  if (!preserveRecoveryData) {
+    try {
+      await clearVolatileBackups();
+    } catch (error) {
+      console.warn("Failed to clear volatile backups while resetting the extension state.", error);
+    }
   }
+
+  await clearActiveSyncSession({ finalStatus: "aborted" });
 
   await setCatalogState(createDefaultCatalogState());
 
@@ -4555,13 +6204,11 @@ async function resetExtensionState() {
           ? currentState.settings
           : {}),
       },
-      creatorProfiles: normalizeResolvedCreatorProfiles(currentState.creatorProfiles),
-      selectedCreatorProfileIds: normalizeSelectedCreatorProfileIds(
-        normalizeResolvedCreatorProfiles(currentState.creatorProfiles),
-        currentState.selectedCreatorProfileIds,
-        [],
-        { allowEmpty: true },
-      ),
+      characterAccounts: preservedCharacterAccounts,
+      selectedCharacterAccountIds: preservedSelectedCharacterAccountIds,
+      hasExplicitCharacterAccountSelection: true,
+      creatorProfiles: preservedCreatorProfiles,
+      selectedCreatorProfileIds: preservedSelectedCreatorProfileIds,
       hasExplicitCreatorProfileSelection: true,
     }),
   );
@@ -6678,7 +8325,7 @@ function throwIfFetchAbortRequested() {
   }
 }
 
-async function startScan(requestedSources, requestedSearchQuery = "") {
+async function startScan(requestedSources, requestedSearchQuery = "", options = {}) {
   if (activeRun) {
     throw new Error("A fetch or download run is already in progress.");
   }
@@ -6698,6 +8345,31 @@ async function startScan(requestedSources, requestedSearchQuery = "") {
     await ensureCharacterAccountsLoaded();
   }
 
+  const existingSessionId =
+    typeof options.existingSessionId === "string" && options.existingSessionId
+      ? options.existingSessionId
+      : "";
+  if (existingSessionId) {
+    await setActiveSyncSessionId(existingSessionId);
+    await writeSyncSession(existingSessionId, {
+      status: "running",
+      requestedAction: "",
+      sources,
+      searchQuery,
+      currentSource: sources[0] || null,
+      currentSourceIndex: sources.length ? 1 : 0,
+      selectedCharacterAccountIds: [...currentState.selectedCharacterAccountIds],
+      selectedCreatorProfileIds: [...currentState.selectedCreatorProfileIds],
+      lastRecoverableError: "",
+    });
+  } else {
+    await createSyncSessionRecord(sources, searchQuery, {
+      selectedCharacterAccountIds: currentState.selectedCharacterAccountIds,
+      selectedCreatorProfileIds: currentState.selectedCreatorProfileIds,
+    });
+  }
+
+  activeSyncControlIntent = "";
   activeVolatileBackupSessionKey = "";
   activeVolatileBackupResumeMeta = null;
 
@@ -6705,7 +8377,9 @@ async function startScan(requestedSources, requestedSearchQuery = "") {
   activeRun = scanSources(sources, searchQuery);
   try {
     await activeRun;
-    pausedFetchRequest = null;
+    if (currentState.phase !== "fetch-paused") {
+      pausedFetchRequest = null;
+    }
   } finally {
     activeRun = null;
     activeVolatileBackupSessionKey = "";
@@ -6724,6 +8398,11 @@ async function requestScanAbort() {
   }
 
   requestedControlAction = "abort";
+  activeSyncControlIntent = "abort";
+  await updateActiveSyncSession({
+    status: "canceling",
+    requestedAction: "abort",
+  });
 
   await setState({
     message: "Stopping the active fetch...",
@@ -6733,8 +8412,6 @@ async function requestScanAbort() {
       detail: "Canceling the active fetch and restoring your current results...",
     }),
   }, { persist: false });
-
-  await cleanupHiddenTab();
 }
 
 async function requestScanPause() {
@@ -6743,6 +8420,11 @@ async function requestScanPause() {
   }
 
   requestedControlAction = "pause";
+  activeSyncControlIntent = "pause";
+  await updateActiveSyncSession({
+    status: "pausing",
+    requestedAction: "pause",
+  });
 
   await setState({
     message: "Pausing the active fetch...",
@@ -6752,8 +8434,6 @@ async function requestScanPause() {
       detail: "Saving progress so you can resume this crawl without starting over...",
     }),
   }, { persist: false });
-
-  await cleanupHiddenTab();
 }
 
 async function resumeScan() {
@@ -6761,17 +8441,36 @@ async function resumeScan() {
     throw new Error("A fetch or download run is already in progress.");
   }
 
-  if (currentState.phase !== "fetch-paused" || !pausedFetchRequest) {
+  const resolvedPausedFetchRequest = await resolvePausedFetchRequest();
+  if (!resolvedPausedFetchRequest) {
     throw new Error("There is no paused fetch to resume.");
   }
 
-  const request = { ...pausedFetchRequest };
+  const request = { ...resolvedPausedFetchRequest };
   pausedFetchRequest = null;
-  await startScan(request.sources, request.searchQuery);
+  const interruptedSession =
+    pendingInterruptedSyncSession || (await findInterruptedSyncSession());
+  const sessionId =
+    currentState.syncSessionId ||
+    (interruptedSession && interruptedSession.sessionId) ||
+    "";
+  if (sessionId) {
+    await writeSyncSession(sessionId, {
+      status: "running",
+      requestedAction: "",
+      currentSource: request.sources[0] || null,
+      currentSourceIndex: request.sources.length ? 1 : 0,
+      lastRecoverableError: "",
+    });
+  }
+  await startScan(request.sources, request.searchQuery, {
+    existingSessionId: sessionId,
+  });
 }
 
 async function abortPausedScan() {
-  if (currentState.phase !== "fetch-paused") {
+  const resolvedPausedFetchRequest = await resolvePausedFetchRequest();
+  if (!resolvedPausedFetchRequest) {
     throw new Error("There is no paused fetch to cancel.");
   }
 
@@ -6799,6 +8498,7 @@ async function abortPausedScan() {
 
   pausedFetchRequest = null;
   activeVolatileBackupResumeMeta = null;
+  pendingInterruptedSyncSession = null;
 
   if (volatileBackupSessionKey) {
     await writeVolatileBackupMeta(volatileBackupSessionKey, {
@@ -6806,6 +8506,8 @@ async function abortPausedScan() {
       error: "",
     });
   }
+
+  await clearActiveSyncSession({ finalStatus: "aborted" });
 }
 
 async function scanSources(sources, searchQuery = "") {
@@ -6814,14 +8516,25 @@ async function scanSources(sources, searchQuery = "") {
   const maxVideos = getEffectiveMaxVideosForSources(sources, currentState.settings);
   const selectedCharacterAccountIds = [...currentState.selectedCharacterAccountIds];
   const selectedCreatorProfileIds = [...currentState.selectedCreatorProfileIds];
-  let cachedWorkingItems = buildWorkingItemsFromCatalog(
-    currentCatalog.items,
-    sources,
-    maxVideos,
-    selectedCharacterAccountIds,
-    selectedCreatorProfileIds,
-  );
-  let cachedBackedUpItemCount = 0;
+  const persistedResumeRequest = normalizeResumableFetchRequest(currentState.resumableFetchRequest);
+  const isResumingCurrentPausedSession =
+    currentState.phase === "fetch-paused" &&
+    persistedResumeRequest &&
+    persistedResumeRequest.searchQuery === searchQuery &&
+    persistedResumeRequest.sources.length === sources.length &&
+    persistedResumeRequest.sources.every((source, index) => source === sources[index]);
+  let cachedWorkingItems = isResumingCurrentPausedSession
+    ? normalizeCatalogItems(currentState.items)
+    : buildWorkingItemsFromCatalog(
+      currentCatalog.items,
+      sources,
+      maxVideos,
+      selectedCharacterAccountIds,
+      selectedCreatorProfileIds,
+    );
+  let cachedBackedUpItemCount = isResumingCurrentPausedSession
+    ? Math.max(0, Number(currentState.backedUpItemCount) || 0)
+    : 0;
 
   if (!searchQuery) {
     try {
@@ -6830,31 +8543,17 @@ async function scanSources(sources, searchQuery = "") {
       );
 
       for (const source of sources) {
-        const backupMeta = await findUsableVolatileBackupMetaForSource(source, {
+        const mirroredItems = await loadMirroredItemsForSourceSelection(source, {
           characterAccounts: currentState.characterAccounts,
           selectedCharacterAccountIds,
           creatorProfiles: currentState.creatorProfiles,
           selectedCreatorProfileIds,
         });
-        if (!backupMeta || typeof backupMeta.sessionKey !== "string" || !backupMeta.sessionKey) {
+        if (!mirroredItems.length) {
           continue;
         }
 
-        const restoredPreview = await loadVolatileBackupPreviewForSource(
-          source,
-          backupMeta,
-          {
-            characterAccounts: currentState.characterAccounts,
-            selectedCharacterAccountIds,
-            creatorProfiles: currentState.creatorProfiles,
-            selectedCreatorProfileIds,
-          },
-        );
-        if (!restoredPreview || restoredPreview.items.length === 0) {
-          continue;
-        }
-
-        for (const previewItem of restoredPreview.items) {
+        for (const previewItem of mirroredItems) {
           const previewKey = previewItem && getCanonicalItemKey(previewItem);
           if (!previewKey || previewMap.has(previewKey)) {
             continue;
@@ -6865,8 +8564,6 @@ async function scanSources(sources, searchQuery = "") {
             key: previewKey,
           });
         }
-
-        cachedBackedUpItemCount += Math.max(0, Number(restoredPreview.backedUpItemCount) || 0);
       }
 
       cachedWorkingItems = sortItemsByNewest([...previewMap.values()]);
@@ -6879,6 +8576,9 @@ async function scanSources(sources, searchQuery = "") {
   }
 
   const cachedFilteredItems = filterItemsBySearchQuery(cachedWorkingItems, searchQuery);
+  const resumeBaselineCount = isResumingCurrentPausedSession
+    ? cachedFilteredItems.length + cachedBackedUpItemCount
+    : 0;
   const cachedSelectedKeys = getImplicitSelectedKeys(cachedFilteredItems);
   const cachedSourceIds = deriveSourceIdsFromItems(cachedFilteredItems);
   const cachedTitleOverrides = pruneLegacyTitleOverrides(
@@ -6898,6 +8598,9 @@ async function scanSources(sources, searchQuery = "") {
       },
       settings: currentState.settings,
       currentSource: sources[0] ?? null,
+      syncSessionId: activeSyncSessionId,
+      syncStatus: "running",
+      restoreStatus: createDefaultRestoreStatus(),
       characterAccounts: currentState.characterAccounts,
       selectedCharacterAccountIds,
       creatorProfiles: currentState.creatorProfiles,
@@ -6939,6 +8642,8 @@ async function scanSources(sources, searchQuery = "") {
       selectedCharacterAccountIds,
       selectedCreatorProfileIds,
       enableVolatileBackup: !searchQuery,
+      resumeVisibleItems: isResumingCurrentPausedSession ? cachedFilteredItems : [],
+      resumeBaselineCount,
     });
     const mergedCatalogItems = mergeCatalogItemsWithSourceResults(
       currentCatalog.items,
@@ -7041,6 +8746,9 @@ async function scanSources(sources, searchQuery = "") {
     const baseState = {
       currentSource: null,
       resumableFetchRequest: null,
+      syncSessionId: activeSyncSessionId,
+      syncStatus: "completed",
+      restoreStatus: createDefaultRestoreStatus(),
       profileIds: filteredSourceIds.profileIds,
       draftIds: filteredSourceIds.draftIds,
       likesIds: filteredSourceIds.likesIds,
@@ -7083,6 +8791,7 @@ async function scanSources(sources, searchQuery = "") {
           : "No downloadable items were found.",
         finishedAt: new Date().toISOString(),
       });
+      await clearActiveSyncSession({ finalStatus: "completed" });
       return;
     }
 
@@ -7102,6 +8811,7 @@ async function scanSources(sources, searchQuery = "") {
       message: buildReadyMessage(selectedKeys.length),
       finishedAt: new Date().toISOString(),
     });
+    await clearActiveSyncSession({ finalStatus: "completed" });
   } catch (error) {
     if (isControlError(error, "pause")) {
       requestedControlAction = null;
@@ -7109,6 +8819,9 @@ async function scanSources(sources, searchQuery = "") {
       const activeSourceIds = deriveSourceIdsFromItems(activeItems);
       const nextSelectedKeys = normalizeSelectedKeys(activeItems, currentState.selectedKeys);
       const backedUpCount = activeItems.length > 0 ? 0 : Number(currentState.backedUpItemCount) || 0;
+      const resumableFetchRequest = await getAuthoritativeResumableFetchRequest(
+        currentState.resumableFetchRequest || pausedFetchRequest,
+      );
       const fetchMessage = activeItems.length
         ? "Fetch paused. Resume when you're ready."
         : "Fetch paused before any results were loaded. Resume when you're ready.";
@@ -7132,7 +8845,7 @@ async function scanSources(sources, searchQuery = "") {
         items: activeItems,
         message: fetchMessage,
         currentSource: null,
-        resumableFetchRequest: pausedFetchRequest,
+        resumableFetchRequest,
         fetchedCount: activeItems.length + backedUpCount,
         backedUpItemCount: backedUpCount,
         selectedKeys: nextSelectedKeys,
@@ -7141,6 +8854,9 @@ async function scanSources(sources, searchQuery = "") {
         fetchProgress,
         lastError: "",
         finishedAt: new Date().toISOString(),
+        syncSessionId: activeSyncSessionId,
+        syncStatus: "paused",
+        restoreStatus: createDefaultRestoreStatus(),
       });
 
       const volatileBackupSessionKey =
@@ -7156,6 +8872,9 @@ async function scanSources(sources, searchQuery = "") {
           console.warn("Failed to mark the volatile backup as paused.", metaError);
         });
       }
+      await markSyncSessionPaused(
+        getErrorMessage(error) === "Fetch paused." ? "" : getErrorMessage(error),
+      );
       return;
     }
 
@@ -7178,6 +8897,9 @@ async function scanSources(sources, searchQuery = "") {
         fetchProgress: createDefaultFetchProgress(),
         lastError: "",
         finishedAt: new Date().toISOString(),
+        syncSessionId: "",
+        syncStatus: "aborted",
+        restoreStatus: createDefaultRestoreStatus(),
       });
       if (activeVolatileBackupSessionKey) {
         void writeVolatileBackupMeta(activeVolatileBackupSessionKey, {
@@ -7188,6 +8910,7 @@ async function scanSources(sources, searchQuery = "") {
           console.warn("Failed to mark the volatile backup as aborted.", metaError);
         });
       }
+      await clearActiveSyncSession({ finalStatus: "aborted" });
       return;
     }
 
@@ -7209,7 +8932,11 @@ async function scanSources(sources, searchQuery = "") {
       fetchProgress: createDefaultFetchProgress(),
       lastError: getErrorMessage(error),
       finishedAt: new Date().toISOString(),
+      syncSessionId: activeSyncSessionId,
+      syncStatus: "error",
+      restoreStatus: createDefaultRestoreStatus(),
     });
+    await markSyncSessionPaused(getErrorMessage(error));
     throw error;
   }
 }
@@ -8627,7 +10354,11 @@ function buildPausedFetchRestorePatch(options = {}) {
         ? "Fetch paused. Resume when you're ready."
         : "Fetch paused before any results were loaded. Resume when you're ready.",
     currentSource: null,
-    resumableFetchRequest: pausedFetchRequest,
+    resumableFetchRequest: normalizeResumableFetchRequest(
+      Object.prototype.hasOwnProperty.call(options, "resumableFetchRequest")
+        ? options.resumableFetchRequest
+        : currentState.resumableFetchRequest || pausedFetchRequest,
+    ),
     fetchedCount: itemsFound,
     selectedKeys: nextSelectedKeys,
     queued: nextSelectedKeys.length,
@@ -8653,7 +10384,13 @@ function buildPausedFetchRestorePatch(options = {}) {
 async function abortPausedDownloads() {
   if (isFetchPausedDownloadMode(currentState.runMode)) {
     requestedControlAction = null;
-    await setState(buildPausedFetchRestorePatch());
+    await setState(
+      buildPausedFetchRestorePatch({
+        resumableFetchRequest: await getAuthoritativeResumableFetchRequest(
+          currentState.resumableFetchRequest,
+        ),
+      }),
+    );
     return;
   }
 
@@ -9069,6 +10806,10 @@ async function collectItems(sources, maxVideos, options = {}) {
     ? options.selectedCreatorProfileIds
     : currentState.selectedCreatorProfileIds;
   const enableVolatileBackup = options.enableVolatileBackup === true;
+  const resumeVisibleItems = normalizeCatalogItems(options.resumeVisibleItems);
+  const resumeBaselineCount = Math.max(0, Number(options.resumeBaselineCount) || 0);
+  const getVisibleFetchedCount = (count = 0) =>
+    resumeBaselineCount + itemMap.size + Math.max(0, Number(count) || 0);
   let partialWarning = "";
   let backedUpItemCount = 0;
 
@@ -9113,7 +10854,21 @@ async function collectItems(sources, maxVideos, options = {}) {
     activeVolatileBackupSessionKey = sourceVolatileBackupSessionKey;
     activeVolatileBackupResumeMeta = sourceVolatileBackupResumeMeta;
 
-    const syncMode = shouldRunFullSourceRefresh(source, {
+    const mirroredKnownItemKeys = await loadKnownMirrorItemKeysForSource(source, {
+      characterAccounts: currentState.characterAccounts,
+      selectedCharacterAccountIds,
+      creatorProfiles: currentState.creatorProfiles,
+      selectedCreatorProfileIds,
+    });
+    const scopeRecords = buildSourceScopeRecordsForSource(source, {
+      characterAccounts: currentState.characterAccounts,
+      selectedCharacterAccountIds,
+      creatorProfiles: currentState.creatorProfiles,
+      selectedCreatorProfileIds,
+    });
+    const primaryScopeCheckpoint =
+      scopeRecords.length === 1 ? await readSourceCheckpoint(scopeRecords[0].sourceScopeHash) : null;
+    const catalogBackedSyncMode = shouldRunFullSourceRefresh(source, {
       catalogItems,
       selectedCharacterAccountIds,
       selectedCreatorProfileIds,
@@ -9122,15 +10877,39 @@ async function collectItems(sources, maxVideos, options = {}) {
     })
       ? "full"
       : "incremental";
+    const syncMode =
+      mirroredKnownItemKeys.size > 0 || (primaryScopeCheckpoint && primaryScopeCheckpoint.itemsPersisted > 0)
+        ? "incremental"
+        : catalogBackedSyncMode;
     const knownItemKeys =
       syncMode === "incremental"
-        ? getKnownItemKeysForSource(
-          source,
-          catalogItems,
-          selectedCharacterAccountIds,
-          selectedCreatorProfileIds,
-        )
+        ? scopeRecords.length === 1
+          ? createKnownItemBoundaryController(
+            mirroredKnownItemKeys.size > 0
+              ? mirroredKnownItemKeys
+              : getKnownItemKeysForSource(
+                source,
+                catalogItems,
+                selectedCharacterAccountIds,
+                selectedCreatorProfileIds,
+              ),
+            primaryScopeCheckpoint,
+          )
+          : mirroredKnownItemKeys.size > 0
+            ? mirroredKnownItemKeys
+            : getKnownItemKeysForSource(
+              source,
+              catalogItems,
+              selectedCharacterAccountIds,
+              selectedCreatorProfileIds,
+            )
         : null;
+    await updateActiveSyncSession({
+      status: "running",
+      requestedAction: activeSyncControlIntent,
+      currentSource: source,
+      currentSourceIndex: sourceIndex + 1,
+    });
     await setState({
       phase: "fetching",
       currentSource: source,
@@ -9170,7 +10949,7 @@ async function collectItems(sources, maxVideos, options = {}) {
         currentSourceLabel: sourceLabel,
         currentSourceIndex: sourceIndex + 1,
         totalSources: sources.length,
-        itemsFound: itemMap.size,
+        itemsFound: resumeBaselineCount + itemMap.size,
         sourceItemsFound: 0,
         processedCount: 0,
         totalCount: sourceExpectedTotalCount,
@@ -9200,9 +10979,10 @@ async function collectItems(sources, maxVideos, options = {}) {
               count,
               maxRemaining,
             );
+            const visibleFetchedCount = getVisibleFetchedCount(count);
             await setState({
-              fetchedCount: itemMap.size + count,
-              message: message || `Fetching published videos... ${itemMap.size + count} found so far.`,
+              fetchedCount: visibleFetchedCount,
+              message: message || `Fetching published videos... ${visibleFetchedCount} found so far.`,
               fetchProgress: getNextFetchProgress({
                 stage: "fetching-source",
                 stageLabel: `Loading ${sourceLabel}`,
@@ -9216,7 +10996,7 @@ async function collectItems(sources, maxVideos, options = {}) {
                 currentSourceLabel: sourceLabel,
                 currentSourceIndex: sourceIndex + 1,
                 totalSources: sources.length,
-                itemsFound: itemMap.size + count,
+                itemsFound: visibleFetchedCount,
                 sourceItemsFound: count,
                 processedCount: pageNumber,
                 totalCount: progressCountEstimate.totalCount,
@@ -9239,15 +11019,16 @@ async function collectItems(sources, maxVideos, options = {}) {
               ],
             baseCount: itemMap.size,
             onProgress: async ({ count, pageNumber, message, estimatedTotalCount }) => {
-              const progressCountEstimate = resolveFetchProgressCountEstimate(
-                sourceExpectedTotalCount,
-                estimatedTotalCount,
-                count,
-                maxRemaining,
-              );
-              await setState({
-                fetchedCount: itemMap.size + count,
-                message: message || `Fetching drafts... ${itemMap.size + count} found so far.`,
+            const progressCountEstimate = resolveFetchProgressCountEstimate(
+              sourceExpectedTotalCount,
+              estimatedTotalCount,
+              count,
+              maxRemaining,
+            );
+            const visibleFetchedCount = getVisibleFetchedCount(count);
+            await setState({
+              fetchedCount: visibleFetchedCount,
+              message: message || `Fetching drafts... ${visibleFetchedCount} found so far.`,
                 fetchProgress: getNextFetchProgress({
                   stage: "fetching-source",
                   stageLabel: `Loading ${sourceLabel}`,
@@ -9261,7 +11042,7 @@ async function collectItems(sources, maxVideos, options = {}) {
                   currentSourceLabel: sourceLabel,
                   currentSourceIndex: sourceIndex + 1,
                   totalSources: sources.length,
-                  itemsFound: itemMap.size + count,
+                  itemsFound: visibleFetchedCount,
                   sourceItemsFound: count,
                   processedCount: pageNumber,
                   totalCount: progressCountEstimate.totalCount,
@@ -9290,9 +11071,10 @@ async function collectItems(sources, maxVideos, options = {}) {
                   count,
                   maxRemaining,
                 );
+                const visibleFetchedCount = getVisibleFetchedCount(count);
                 await setState({
-                  fetchedCount: itemMap.size + count,
-                  message: message || `Fetching liked videos... ${itemMap.size + count} found so far.`,
+                  fetchedCount: visibleFetchedCount,
+                  message: message || `Fetching liked videos... ${visibleFetchedCount} found so far.`,
                   fetchProgress: getNextFetchProgress({
                     stage: "fetching-source",
                     stageLabel: `Loading ${sourceLabel}`,
@@ -9306,7 +11088,7 @@ async function collectItems(sources, maxVideos, options = {}) {
                     currentSourceLabel: sourceLabel,
                     currentSourceIndex: sourceIndex + 1,
                     totalSources: sources.length,
-                    itemsFound: itemMap.size + count,
+                    itemsFound: visibleFetchedCount,
                     sourceItemsFound: count,
                     processedCount: pageNumber,
                     totalCount: progressCountEstimate.totalCount,
@@ -9330,9 +11112,10 @@ async function collectItems(sources, maxVideos, options = {}) {
                     count,
                     maxRemaining,
                   );
+                  const visibleFetchedCount = getVisibleFetchedCount(count);
                   await setState({
-                    fetchedCount: itemMap.size + count,
-                    message: message || `Fetching cameo videos... ${itemMap.size + count} found so far.`,
+                    fetchedCount: visibleFetchedCount,
+                    message: message || `Fetching cameo videos... ${visibleFetchedCount} found so far.`,
                     fetchProgress: getNextFetchProgress({
                       stage: "fetching-source",
                       stageLabel: `Loading ${sourceLabel}`,
@@ -9346,7 +11129,7 @@ async function collectItems(sources, maxVideos, options = {}) {
                       currentSourceLabel: sourceLabel,
                       currentSourceIndex: sourceIndex + 1,
                       totalSources: sources.length,
-                      itemsFound: itemMap.size + count,
+                      itemsFound: visibleFetchedCount,
                       sourceItemsFound: count,
                       processedCount: pageNumber,
                       totalCount: progressCountEstimate.totalCount,
@@ -9372,9 +11155,10 @@ async function collectItems(sources, maxVideos, options = {}) {
                     count,
                     maxRemaining,
                   );
+                  const visibleFetchedCount = getVisibleFetchedCount(count);
                   await setState({
-                    fetchedCount: itemMap.size + count,
-                    message: message || `Fetching character videos... ${itemMap.size + count} found so far.`,
+                    fetchedCount: visibleFetchedCount,
+                    message: message || `Fetching character videos... ${visibleFetchedCount} found so far.`,
                     fetchProgress: getNextFetchProgress({
                       stage: "fetching-source",
                       stageLabel: `Loading ${sourceLabel}`,
@@ -9388,7 +11172,7 @@ async function collectItems(sources, maxVideos, options = {}) {
                       currentSourceLabel: sourceLabel,
                       currentSourceIndex: sourceIndex + 1,
                       totalSources: sources.length,
-                      itemsFound: itemMap.size + count,
+                      itemsFound: visibleFetchedCount,
                       sourceItemsFound: count,
                       processedCount: pageNumber,
                       totalCount: progressCountEstimate.totalCount,
@@ -9423,7 +11207,7 @@ async function collectItems(sources, maxVideos, options = {}) {
                     );
                     if (Array.isArray(previewItems) && previewItems.length > 0) {
                       const previewItemMap = new Map(
-                        [...itemMap.values()].map((item) => [item.key || getItemKey(item), item]),
+                        [...resumeVisibleItems, ...itemMap.values()].map((item) => [item.key || getItemKey(item), item]),
                       );
                       for (const previewItem of previewItems) {
                         const previewKey = previewItem.key || getItemKey(previewItem);
@@ -9446,6 +11230,7 @@ async function collectItems(sources, maxVideos, options = {}) {
                         ],
                       );
                       const previewSourceIds = deriveSourceIdsFromItems(previewStateItems);
+                      const visibleFetchedCount = getVisibleFetchedCount(count);
                       await setState({
                         items: previewStateItems,
                         profileIds: previewSourceIds.profileIds,
@@ -9456,7 +11241,7 @@ async function collectItems(sources, maxVideos, options = {}) {
                         creatorIds: previewSourceIds.creatorIds,
                         selectedKeys: previewSelectedKeys,
                         queued: previewSelectedKeys.length,
-                        fetchedCount: itemMap.size + count,
+                        fetchedCount: visibleFetchedCount,
                         backedUpItemCount:
                           Number.isFinite(Number(previewBackedUpItemCount))
                             ? Math.max(0, Number(previewBackedUpItemCount))
@@ -9464,13 +11249,14 @@ async function collectItems(sources, maxVideos, options = {}) {
                       }, { persist: false });
                     }
 
+                    const visibleFetchedCount = getVisibleFetchedCount(count);
                     await setState({
-                      fetchedCount: itemMap.size + count,
+                      fetchedCount: visibleFetchedCount,
                       backedUpItemCount:
                         Number.isFinite(Number(previewBackedUpItemCount))
                           ? Math.max(0, Number(previewBackedUpItemCount))
                           : backedUpItemCount,
-                      message: message || `Fetching creator videos... ${itemMap.size + count} found so far.`,
+                      message: message || `Fetching creator videos... ${visibleFetchedCount} found so far.`,
                       fetchProgress: getNextFetchProgress({
                         stage: "fetching-source",
                         stageLabel: `Loading ${sourceLabel}`,
@@ -9484,7 +11270,7 @@ async function collectItems(sources, maxVideos, options = {}) {
                         currentSourceLabel: sourceLabel,
                         currentSourceIndex: sourceIndex + 1,
                         totalSources: sources.length,
-                        itemsFound: itemMap.size + count,
+                        itemsFound: visibleFetchedCount,
                         sourceItemsFound: count,
                         processedCount: pageNumber,
                         totalCount: progressCountEstimate.totalCount,
@@ -9564,18 +11350,18 @@ async function collectItems(sources, maxVideos, options = {}) {
     }
 
     await setState({
-      fetchedCount: itemMap.size + backedUpItemCount,
+      fetchedCount: resumeBaselineCount + itemMap.size + backedUpItemCount,
       backedUpItemCount,
       fetchProgress: getNextFetchProgress({
         stage: "fetching-source",
         stageLabel: `Loaded ${sourceLabel}`,
-        detail: `${(itemMap.size + backedUpItemCount).toLocaleString()} item(s) found so far.`,
+        detail: `${(resumeBaselineCount + itemMap.size + backedUpItemCount).toLocaleString()} item(s) found so far.`,
         progressRatio: getFetchSourceCompleteRatio(sourceIndex, sources.length),
         currentSource: source,
         currentSourceLabel: sourceLabel,
         currentSourceIndex: sourceIndex + 1,
         totalSources: sources.length,
-        itemsFound: itemMap.size + backedUpItemCount,
+        itemsFound: resumeBaselineCount + itemMap.size + backedUpItemCount,
         sourceItemsFound: 0,
         processedCount: sourceIndex + 1,
         totalCount: sources.length,
@@ -9642,8 +11428,100 @@ function joinPartialWarnings(warnings) {
   return [...new Set((Array.isArray(warnings) ? warnings : []).filter(Boolean))].join(" ");
 }
 
+function hasUsableCheckpointProgress(progressMap) {
+  const normalizedProgressMap = normalizeVolatileBackupProgressMap(progressMap);
+  return Object.values(normalizedProgressMap).some(
+    (entry) => entry && Number(entry.totalItemCount) > 0,
+  );
+}
+
+function mergeSourceFetchResults(results, maxItems = null) {
+  const ids = new Set();
+  const itemMap = new Map();
+  const partialWarnings = [];
+  let isExhaustive = true;
+  let totalItemCount = 0;
+  let backedUpItemCount = 0;
+  let usesVolatileBackup = false;
+  let estimatedTotalCount = 0;
+
+  for (const result of Array.isArray(results) ? results : []) {
+    if (!result || typeof result !== "object") {
+      continue;
+    }
+
+    for (const id of Array.isArray(result.ids) ? result.ids : []) {
+      ids.add(id);
+    }
+
+    for (const item of Array.isArray(result.items) ? result.items : []) {
+      const itemKey = getCanonicalItemKey(item);
+      if (!itemMap.has(itemKey)) {
+        itemMap.set(itemKey, item);
+      }
+    }
+
+    if (typeof result.partialWarning === "string" && result.partialWarning) {
+      partialWarnings.push(result.partialWarning);
+    }
+
+    if (result.isExhaustive !== true) {
+      isExhaustive = false;
+    }
+
+    totalItemCount = Math.max(totalItemCount, Number(result.totalItemCount) || 0, itemMap.size);
+    backedUpItemCount = Math.max(backedUpItemCount, Number(result.backedUpItemCount) || 0);
+    estimatedTotalCount = Math.max(estimatedTotalCount, Number(result.estimatedTotalCount) || 0);
+    usesVolatileBackup = usesVolatileBackup || result.usesVolatileBackup === true;
+  }
+
+  const items = sortItemsByNewest([...itemMap.values()]);
+  if (maxItems && items.length > maxItems) {
+    items.length = maxItems;
+  }
+
+  return {
+    ids: [...ids],
+    items,
+    partialWarning: joinPartialWarnings(partialWarnings),
+    isExhaustive,
+    totalItemCount: Math.max(totalItemCount, items.length + backedUpItemCount),
+    estimatedTotalCount: estimatedTotalCount || undefined,
+    backedUpItemCount,
+    usesVolatileBackup,
+  };
+}
+
+function createKnownItemBoundaryController(knownKeys, checkpoint = null) {
+  const knownKeySet = knownKeys instanceof Set ? knownKeys : null;
+  if (!knownKeySet || knownKeySet.size === 0) {
+    return null;
+  }
+
+  const normalizedCheckpoint = normalizeSourceCheckpointRecord(checkpoint);
+  return {
+    knownKeys: knownKeySet,
+    boundaryKey:
+      normalizedCheckpoint && typeof normalizedCheckpoint.knownBoundaryKey === "string"
+        ? normalizedCheckpoint.knownBoundaryKey
+        : "",
+    newestKnownWatermark:
+      normalizedCheckpoint && normalizedCheckpoint.newestKnownWatermark
+        ? normalizedCheckpoint.newestKnownWatermark
+        : null,
+    pendingBoundaryStop: false,
+    overlapPagesRemaining: FETCH_HEAD_SYNC_OVERLAP_PAGES,
+  };
+}
+
 function didPageContainOnlyKnownItems(items, knownItemKeys) {
-  const knownKeys = knownItemKeys instanceof Set ? knownItemKeys : null;
+  const boundaryController =
+    knownItemKeys &&
+    typeof knownItemKeys === "object" &&
+    knownItemKeys.knownKeys instanceof Set
+      ? knownItemKeys
+      : null;
+  const knownKeys = boundaryController ? boundaryController.knownKeys : knownItemKeys instanceof Set ? knownItemKeys : null;
   if (!knownKeys || knownKeys.size === 0) {
     return false;
   }
@@ -9653,7 +11531,45 @@ function didPageContainOnlyKnownItems(items, knownItemKeys) {
     return false;
   }
 
-  return pageItems.every((item) => knownKeys.has(item.key || getItemKey(item)));
+  const allKnown = pageItems.every((item) => knownKeys.has(item.key || getItemKey(item)));
+  if (!boundaryController) {
+    return allKnown;
+  }
+
+  if (boundaryController.pendingBoundaryStop === true) {
+    if (boundaryController.overlapPagesRemaining > 0) {
+      boundaryController.overlapPagesRemaining -= 1;
+      return boundaryController.overlapPagesRemaining === 0;
+    }
+
+    return true;
+  }
+
+  if (allKnown) {
+    return true;
+  }
+
+  const didHitBoundaryKey =
+    typeof boundaryController.boundaryKey === "string" &&
+    boundaryController.boundaryKey &&
+    pageItems.some((item) => (item && getCanonicalItemKey(item)) === boundaryController.boundaryKey);
+  const watermarkTimestamp =
+    boundaryController.newestKnownWatermark &&
+    Number(boundaryController.newestKnownWatermark.timestamp) > 0
+      ? Number(boundaryController.newestKnownWatermark.timestamp)
+      : 0;
+  const didReachWatermark =
+    watermarkTimestamp > 0 &&
+    pageItems.some((item) => {
+      const timestamp = getComparableItemTimestamp(item);
+      return timestamp > 0 && timestamp <= watermarkTimestamp;
+    });
+
+  if (didHitBoundaryKey || didReachWatermark) {
+    boundaryController.pendingBoundaryStop = true;
+  }
+
+  return false;
 }
 
 function buildCreatedAtCursorFromItems(items, cursorKind = "sv2_created_at") {
@@ -9703,6 +11619,7 @@ async function fetchAllProfileItems(options = {}) {
     typeof options.volatileBackupSessionKey === "string" ? options.volatileBackupSessionKey : "";
   const progressKey = getVolatileBackupProgressKey("profile", VOLATILE_BACKUP_DEFAULT_SCOPE_ID);
   const resumeState = normalizeVolatileBackupProgressEntry(options && options.resumeState);
+  const syncPhase = typeof options.syncPhase === "string" ? options.syncPhase : "";
   const shouldBackupItems = Boolean(backupSessionKey);
   let isExhaustive = false;
   let cursor = null;
@@ -9711,6 +11628,20 @@ async function fetchAllProfileItems(options = {}) {
   let estimatedTotalCount = normalizeEstimatedFetchCount(options && options.estimatedTotalCount);
   let backedUpItemCount = 0;
   let usesVolatileBackup = false;
+
+  if (!syncPhase && resumeState && knownItemKeys) {
+    const headSyncResult = await fetchAllProfileItems({
+      ...options,
+      resumeState: null,
+      syncPhase: "head-sync",
+    });
+    const backlogResult = await fetchAllProfileItems({
+      ...options,
+      knownItemKeys: null,
+      syncPhase: "backlog-resume",
+    });
+    return mergeSourceFetchResults([headSyncResult, backlogResult], maxItems);
+  }
 
   if (shouldBackupItems && resumeState) {
     try {
@@ -9784,6 +11715,7 @@ async function fetchAllProfileItems(options = {}) {
           source: "profile",
           sourcePage: "profile",
           progressKey,
+          syncPhase,
           selectionSignature:
             typeof options.selectionSignature === "string" ? options.selectionSignature : "",
         });
@@ -9820,6 +11752,7 @@ async function fetchAllProfileItems(options = {}) {
       try {
         await updateVolatileBackupProgress(backupSessionKey, progressKey, {
           sourcePage: "profile",
+          syncPhase,
           cursor: didPageContainOnlyKnownItems(page.items, knownItemKeys) ? cursor || "" : nextCursor || "",
           previousCursor: cursor || "",
           totalItemCount,
@@ -9866,6 +11799,7 @@ async function fetchAllDraftItems(options = {}) {
     typeof options.volatileBackupSessionKey === "string" ? options.volatileBackupSessionKey : "";
   const progressKey = getVolatileBackupProgressKey("drafts", VOLATILE_BACKUP_DEFAULT_SCOPE_ID);
   const resumeState = normalizeVolatileBackupProgressEntry(options && options.resumeState);
+  const syncPhase = typeof options.syncPhase === "string" ? options.syncPhase : "";
   const shouldBackupItems = Boolean(backupSessionKey);
   let cursor = null;
   let previousCursor = null;
@@ -9874,6 +11808,20 @@ async function fetchAllDraftItems(options = {}) {
   let estimatedTotalCount = normalizeEstimatedFetchCount(options && options.estimatedTotalCount);
   let backedUpItemCount = 0;
   let usesVolatileBackup = false;
+
+  if (!syncPhase && resumeState && knownItemKeys) {
+    const headSyncResult = await fetchAllDraftItems({
+      ...options,
+      resumeState: null,
+      syncPhase: "head-sync",
+    });
+    const backlogResult = await fetchAllDraftItems({
+      ...options,
+      knownItemKeys: null,
+      syncPhase: "backlog-resume",
+    });
+    return mergeSourceFetchResults([headSyncResult, backlogResult], maxItems);
+  }
 
   if (shouldBackupItems && resumeState) {
     try {
@@ -9961,6 +11909,7 @@ async function fetchAllDraftItems(options = {}) {
           source: "drafts",
           sourcePage: "drafts",
           progressKey,
+          syncPhase,
           selectionSignature:
             typeof options.selectionSignature === "string" ? options.selectionSignature : "",
         });
@@ -10006,6 +11955,7 @@ async function fetchAllDraftItems(options = {}) {
       try {
         await updateVolatileBackupProgress(backupSessionKey, progressKey, {
           sourcePage: "drafts",
+          syncPhase,
           cursor: nextCursor || "",
           previousCursor: cursor || "",
           offset: nextOffset,
@@ -10088,6 +12038,7 @@ async function fetchAllLikesItems(options = {}) {
     typeof options.volatileBackupSessionKey === "string" ? options.volatileBackupSessionKey : "";
   const progressKey = getVolatileBackupProgressKey("likes", VOLATILE_BACKUP_DEFAULT_SCOPE_ID);
   const resumeState = normalizeVolatileBackupProgressEntry(options && options.resumeState);
+  const syncPhase = typeof options.syncPhase === "string" ? options.syncPhase : "";
   const shouldBackupItems = Boolean(backupSessionKey);
   let isExhaustive = false;
   let cursor = null;
@@ -10096,6 +12047,20 @@ async function fetchAllLikesItems(options = {}) {
   let estimatedTotalCount = normalizeEstimatedFetchCount(options && options.estimatedTotalCount);
   let backedUpItemCount = 0;
   let usesVolatileBackup = false;
+
+  if (!syncPhase && resumeState && knownItemKeys) {
+    const headSyncResult = await fetchAllLikesItems({
+      ...options,
+      resumeState: null,
+      syncPhase: "head-sync",
+    });
+    const backlogResult = await fetchAllLikesItems({
+      ...options,
+      knownItemKeys: null,
+      syncPhase: "backlog-resume",
+    });
+    return mergeSourceFetchResults([headSyncResult, backlogResult], maxItems);
+  }
 
   if (shouldBackupItems && resumeState) {
     try {
@@ -10168,6 +12133,7 @@ async function fetchAllLikesItems(options = {}) {
           source: "likes",
           sourcePage: "likes",
           progressKey,
+          syncPhase,
           selectionSignature:
             typeof options.selectionSignature === "string" ? options.selectionSignature : "",
         });
@@ -10204,6 +12170,7 @@ async function fetchAllLikesItems(options = {}) {
       try {
         await updateVolatileBackupProgress(backupSessionKey, progressKey, {
           sourcePage: "likes",
+          syncPhase,
           cursor: didPageContainOnlyKnownItems(page.items, knownItemKeys) ? cursor || "" : nextCursor || "",
           previousCursor: cursor || "",
           totalItemCount,
@@ -10254,6 +12221,7 @@ async function fetchAllCharacterAppearanceItems(options = {}) {
     VOLATILE_BACKUP_DEFAULT_SCOPE_ID,
   );
   const resumeState = normalizeVolatileBackupProgressEntry(options && options.resumeState);
+  const syncPhase = typeof options.syncPhase === "string" ? options.syncPhase : "";
   const shouldBackupItems = Boolean(backupSessionKey);
   let isExhaustive = false;
   let cursor = null;
@@ -10334,6 +12302,7 @@ async function fetchAllCharacterAppearanceItems(options = {}) {
           source: "characters",
           sourcePage: "characters",
           progressKey,
+          syncPhase,
           selectionSignature:
             typeof options.selectionSignature === "string" ? options.selectionSignature : "",
         });
@@ -10376,6 +12345,7 @@ async function fetchAllCharacterAppearanceItems(options = {}) {
           backedUpItemCount,
           previewCount: items.length,
           isComplete: didReachTerminalPage,
+          syncPhase,
         });
       } catch (error) {
         console.warn("Failed to checkpoint the cameo crawl.", error);
@@ -10419,6 +12389,7 @@ async function fetchAllCharacterDraftItems(options = {}) {
     VOLATILE_BACKUP_DEFAULT_SCOPE_ID,
   );
   const resumeState = normalizeVolatileBackupProgressEntry(options && options.resumeState);
+  const syncPhase = typeof options.syncPhase === "string" ? options.syncPhase : "";
   const shouldBackupItems = Boolean(backupSessionKey);
   let isExhaustive = false;
   let cursor = null;
@@ -10499,6 +12470,7 @@ async function fetchAllCharacterDraftItems(options = {}) {
           source: "characters",
           sourcePage: "characterDrafts",
           progressKey,
+          syncPhase,
           selectionSignature:
             typeof options.selectionSignature === "string" ? options.selectionSignature : "",
         });
@@ -10543,6 +12515,7 @@ async function fetchAllCharacterDraftItems(options = {}) {
           backedUpItemCount,
           previewCount: items.length,
           isComplete: didReachTerminalPage,
+          syncPhase,
         });
       } catch (error) {
         console.warn("Failed to checkpoint the cameo draft crawl.", error);
@@ -10908,6 +12881,7 @@ async function fetchAllCreatorFeedItems(creatorProfile, options = {}) {
       ? options.progressKey
       : getVolatileBackupProgressKey("creatorPublished", creatorProfile.profileId);
   const resumeState = normalizeVolatileBackupProgressEntry(options && options.resumeState);
+  const syncPhase = typeof options.syncPhase === "string" ? options.syncPhase : "";
   const shouldBackupItems = Boolean(backupSessionKey);
   let isExhaustive = false;
   let cursor = null;
@@ -11030,6 +13004,7 @@ async function fetchAllCreatorFeedItems(creatorProfile, options = {}) {
           source: "creators",
           sourcePage: "creatorPublished",
           progressKey,
+          syncPhase,
           selectionSignature:
             typeof options.selectionSignature === "string" ? options.selectionSignature : "",
           creatorProfileId: creatorProfile.profileId,
@@ -11063,6 +13038,7 @@ async function fetchAllCreatorFeedItems(creatorProfile, options = {}) {
           backedUpItemCount,
           previewCount: totalItemCount,
           isComplete: didReachTerminalPage,
+          syncPhase,
         });
       } catch (error) {
         console.warn(`Failed to checkpoint ${creatorProfile.displayName} creator posts.`, error);
@@ -11126,6 +13102,7 @@ async function fetchAllCreatorCameoItems(creatorProfile, options = {}) {
       ? options.progressKey
       : getVolatileBackupProgressKey("creatorCameos", creatorProfile.profileId);
   const resumeState = normalizeVolatileBackupProgressEntry(options && options.resumeState);
+  const syncPhase = typeof options.syncPhase === "string" ? options.syncPhase : "";
   const shouldBackupItems = Boolean(backupSessionKey);
   let isExhaustive = false;
   let cursor = null;
@@ -11214,6 +13191,7 @@ async function fetchAllCreatorCameoItems(creatorProfile, options = {}) {
           source: "creators",
           sourcePage: "creatorCameos",
           progressKey,
+          syncPhase,
           selectionSignature:
             typeof options.selectionSignature === "string" ? options.selectionSignature : "",
           creatorProfileId: creatorProfile.profileId,
@@ -11247,6 +13225,7 @@ async function fetchAllCreatorCameoItems(creatorProfile, options = {}) {
           backedUpItemCount,
           previewCount: items.length,
           isComplete: didReachTerminalPage,
+          syncPhase,
         });
       } catch (error) {
         console.warn(`Failed to checkpoint ${creatorProfile.displayName} creator cameos.`, error);
@@ -11294,6 +13273,7 @@ async function fetchAllCreatorCameoItems(creatorProfile, options = {}) {
 }
 
 async function fetchAllCreatorCharacterPublishedItems(creatorProfile, options = {}) {
+  const syncPhase = typeof options.syncPhase === "string" ? options.syncPhase : "";
   const characterAccount = createCharacterAccountFromCreatorProfile(creatorProfile);
   if (!characterAccount || characterAccount.postCount <= 0) {
     return {
@@ -11310,6 +13290,7 @@ async function fetchAllCreatorCharacterPublishedItems(creatorProfile, options = 
     progressKey: getVolatileBackupProgressKey("creatorCharacters", creatorProfile.profileId),
     backupSource: "creators",
     backupSourcePage: "creatorCharacters",
+    syncPhase,
     resumeState: options && options.resumeState,
   });
 
@@ -11360,6 +13341,7 @@ async function fetchAllCreatorCharacterCameoItems(creatorProfile, options = {}) 
     creatorProfile.profileId,
   );
   const resumeState = normalizeVolatileBackupProgressEntry(options && options.resumeState);
+  const syncPhase = typeof options.syncPhase === "string" ? options.syncPhase : "";
   let isExhaustive = false;
   let cursor =
     resumeState && typeof resumeState.cursor === "string" && resumeState.cursor
@@ -11487,6 +13469,7 @@ async function fetchAllCreatorCharacterCameoItems(creatorProfile, options = {}) 
             source: "creators",
             sourcePage: "creatorCharacterCameos",
             progressKey,
+            syncPhase,
             selectionSignature:
               typeof options.selectionSignature === "string" ? options.selectionSignature : "",
             creatorProfileId: creatorProfile.profileId,
@@ -11532,6 +13515,7 @@ async function fetchAllCreatorCharacterCameoItems(creatorProfile, options = {}) 
           backedUpItemCount,
           previewCount: items.length,
           isComplete: didReachTerminalPage,
+          syncPhase,
         });
       } catch (error) {
         console.warn("Failed to checkpoint creator-character cameo progress.", error);
@@ -11611,6 +13595,7 @@ async function fetchAllCreatorCharacterCameoItemsSimple(creatorProfile, options 
     creatorProfile.profileId,
   );
   const resumeState = normalizeVolatileBackupProgressEntry(options && options.resumeState);
+  const syncPhase = typeof options.syncPhase === "string" ? options.syncPhase : "";
   let hasUsableResumeState = false;
   let isExhaustive = false;
   let cursor = null;
@@ -11755,6 +13740,7 @@ async function fetchAllCreatorCharacterCameoItemsSimple(creatorProfile, options 
             source: "creators",
             sourcePage: "creatorCharacterCameos",
             progressKey,
+            syncPhase,
             selectionSignature:
               typeof options.selectionSignature === "string" ? options.selectionSignature : "",
             creatorProfileId: creatorProfile.profileId,
@@ -11790,6 +13776,7 @@ async function fetchAllCreatorCharacterCameoItemsSimple(creatorProfile, options 
             backedUpItemCount,
             previewCount: items.length,
             isComplete: true,
+            syncPhase,
           });
         } catch (error) {
           console.warn("Failed to mark creator-character cameo progress as complete.", error);
@@ -11825,6 +13812,7 @@ async function fetchAllCreatorCharacterCameoItemsSimple(creatorProfile, options 
           backedUpItemCount,
           previewCount: items.length,
           isComplete: didReachTerminalPage,
+          syncPhase,
         });
       } catch (error) {
         console.warn("Failed to checkpoint creator-character cameo progress.", error);
@@ -11881,6 +13869,7 @@ async function fetchAllCharacterAccountPublishedItems(characterAccount, options 
       ? options.progressKey
       : getVolatileBackupProgressKey("characterAccountPosts", characterAccount.userId);
   const resumeState = normalizeVolatileBackupProgressEntry(options && options.resumeState);
+  const syncPhase = typeof options.syncPhase === "string" ? options.syncPhase : "";
   const shouldBackupItems = Boolean(backupSessionKey);
   const backupSource =
     typeof options.backupSource === "string" && options.backupSource ? options.backupSource : "characterAccounts";
@@ -11966,6 +13955,7 @@ async function fetchAllCharacterAccountPublishedItems(characterAccount, options 
             source: backupSource,
             sourcePage: backupSourcePage,
             progressKey,
+            syncPhase,
             selectionSignature:
               typeof options.selectionSignature === "string" ? options.selectionSignature : "",
             characterAccountId: characterAccount.userId,
@@ -12012,6 +14002,7 @@ async function fetchAllCharacterAccountPublishedItems(characterAccount, options 
           backedUpItemCount,
           previewCount: items.length,
           isComplete: didReachTerminalPage,
+          syncPhase,
         });
       } catch (error) {
         console.warn(`Failed to checkpoint ${characterAccount.displayName} posts.`, error);
@@ -12054,6 +14045,7 @@ async function fetchAllCharacterAccountAppearanceItems(characterAccount, options
       ? options.progressKey
       : getVolatileBackupProgressKey("characterAccountAppearances", characterAccount.userId);
   const resumeState = normalizeVolatileBackupProgressEntry(options && options.resumeState);
+  const syncPhase = typeof options.syncPhase === "string" ? options.syncPhase : "";
   const shouldBackupItems = Boolean(backupSessionKey);
   const backupSource =
     typeof options.backupSource === "string" && options.backupSource ? options.backupSource : "characterAccounts";
@@ -12166,6 +14158,7 @@ async function fetchAllCharacterAccountAppearanceItems(characterAccount, options
             source: backupSource,
             sourcePage: backupSourcePage,
             progressKey,
+            syncPhase,
             selectionSignature:
               typeof options.selectionSignature === "string" ? options.selectionSignature : "",
             characterAccountId: characterAccount.userId,
@@ -12209,6 +14202,7 @@ async function fetchAllCharacterAccountAppearanceItems(characterAccount, options
           backedUpItemCount,
           previewCount: items.length,
           isComplete: didReachTerminalPage,
+          syncPhase,
         });
       } catch (error) {
         console.warn(`Failed to checkpoint ${characterAccount.displayName} appearances.`, error);
@@ -12255,6 +14249,7 @@ async function fetchAllCharacterAccountDraftItems(characterAccount, options = {}
       ? options.progressKey
       : getVolatileBackupProgressKey("characterAccountDrafts", characterAccount.userId);
   const resumeState = normalizeVolatileBackupProgressEntry(options && options.resumeState);
+  const syncPhase = typeof options.syncPhase === "string" ? options.syncPhase : "";
   const shouldBackupItems = Boolean(backupSessionKey);
   const backupSource =
     typeof options.backupSource === "string" && options.backupSource ? options.backupSource : "characterAccounts";
@@ -12361,6 +14356,7 @@ async function fetchAllCharacterAccountDraftItems(characterAccount, options = {}
             source: backupSource,
             sourcePage: backupSourcePage,
             progressKey,
+            syncPhase,
             selectionSignature:
               typeof options.selectionSignature === "string" ? options.selectionSignature : "",
             characterAccountId: characterAccount.userId,
@@ -12409,6 +14405,7 @@ async function fetchAllCharacterAccountDraftItems(characterAccount, options = {}
           backedUpItemCount,
           previewCount: items.length,
           isComplete: didReachTerminalPage,
+          syncPhase,
         });
       } catch (error) {
         console.warn(`Failed to checkpoint ${characterAccount.displayName} drafts.`, error);
@@ -12457,6 +14454,7 @@ function shouldIgnoreCharacterAccountDraftFetchError(error) {
 async function fetchAllCharacterItems(options = {}) {
   const maxItems = getMaxVideosSetting({ maxVideos: options.maxItems });
   const knownItemKeys = options.knownItemKeys instanceof Set ? options.knownItemKeys : null;
+  const syncPhase = typeof options.syncPhase === "string" ? options.syncPhase : "";
   const normalizedCharacterAccounts = normalizeCharacterAccounts(options.characterAccounts);
   const selectedCharacterAccountIds = normalizeSelectedCharacterAccountIds(
     normalizedCharacterAccounts,
@@ -12490,6 +14488,20 @@ async function fetchAllCharacterItems(options = {}) {
   const volatileBackupProgressByKey = normalizeVolatileBackupProgressMap(
     options && options.volatileBackupResumeMeta && options.volatileBackupResumeMeta.progressByKey,
   );
+
+  if (!syncPhase && hasUsableCheckpointProgress(volatileBackupProgressByKey) && knownItemKeys) {
+    const headSyncResult = await fetchAllCharacterItems({
+      ...options,
+      volatileBackupResumeMeta: null,
+      syncPhase: "head-sync",
+    });
+    const backlogResult = await fetchAllCharacterItems({
+      ...options,
+      knownItemKeys: null,
+      syncPhase: "backlog-resume",
+    });
+    return mergeSourceFetchResults([headSyncResult, backlogResult], maxItems);
+  }
 
   const mergeResult = (result) => {
     for (const id of result.ids) {
@@ -12543,6 +14555,7 @@ async function fetchAllCharacterItems(options = {}) {
           "characterAccountAppearances",
           characterAccount.userId,
         ),
+        syncPhase,
         resumeState:
           volatileBackupProgressByKey[
             getVolatileBackupProgressKey("characterAccountAppearances", characterAccount.userId)
@@ -12576,6 +14589,7 @@ async function fetchAllCharacterItems(options = {}) {
         selectionSignature:
           typeof options.selectionSignature === "string" ? options.selectionSignature : "",
         progressKey: getVolatileBackupProgressKey("characterAccountPosts", characterAccount.userId),
+        syncPhase,
         resumeState:
           volatileBackupProgressByKey[
             getVolatileBackupProgressKey("characterAccountPosts", characterAccount.userId)
@@ -12609,6 +14623,7 @@ async function fetchAllCharacterItems(options = {}) {
         selectionSignature:
           typeof options.selectionSignature === "string" ? options.selectionSignature : "",
         progressKey: getVolatileBackupProgressKey("characterAccountDrafts", characterAccount.userId),
+        syncPhase,
         resumeState:
           volatileBackupProgressByKey[
             getVolatileBackupProgressKey("characterAccountDrafts", characterAccount.userId)
@@ -12650,6 +14665,7 @@ async function fetchAllCharacterItems(options = {}) {
 async function fetchAllCreatorItems(options = {}) {
   const maxItems = getMaxVideosSetting({ maxVideos: options.maxItems });
   const knownItemKeys = options.knownItemKeys instanceof Set ? options.knownItemKeys : null;
+  const syncPhase = typeof options.syncPhase === "string" ? options.syncPhase : "";
   const normalizedCreatorProfiles = normalizeCreatorProfiles(options.creatorProfiles);
   const selectedCreatorProfileIds = normalizeSelectedCreatorProfileIds(
     normalizedCreatorProfiles,
@@ -12688,6 +14704,20 @@ async function fetchAllCreatorItems(options = {}) {
     creatorProfiles: normalizedCreatorProfiles,
     selectedCreatorProfileIds,
   });
+
+  if (!syncPhase && hasUsableCheckpointProgress(volatileBackupProgressByKey) && knownItemKeys) {
+    const headSyncResult = await fetchAllCreatorItems({
+      ...options,
+      volatileBackupResumeMeta: null,
+      syncPhase: "head-sync",
+    });
+    const backlogResult = await fetchAllCreatorItems({
+      ...options,
+      knownItemKeys: null,
+      syncPhase: "backlog-resume",
+    });
+    return mergeSourceFetchResults([headSyncResult, backlogResult], maxItems);
+  }
 
   const mergeResult = (result) => {
     if (!result || typeof result !== "object") {
@@ -12758,6 +14788,7 @@ async function fetchAllCreatorItems(options = {}) {
               knownItemKeys,
               volatileBackupSessionKey,
               selectionSignature: creatorSelectionSignature,
+              syncPhase,
               resumeState: volatileBackupProgressByKey[
                 getVolatileBackupProgressKey("creatorCharacters", creatorProfileForFetch.profileId)
               ],
@@ -12788,6 +14819,7 @@ async function fetchAllCreatorItems(options = {}) {
               knownItemKeys,
               volatileBackupSessionKey,
               selectionSignature: creatorSelectionSignature,
+              syncPhase,
               resumeState: volatileBackupProgressByKey[
                 getVolatileBackupProgressKey("creatorCharacterCameos", creatorProfileForFetch.profileId)
               ],
@@ -12853,6 +14885,7 @@ async function fetchAllCreatorItems(options = {}) {
             includeCommunityRows: false,
             volatileBackupSessionKey,
             selectionSignature: creatorSelectionSignature,
+            syncPhase,
             resumeState: volatileBackupProgressByKey[
               getVolatileBackupProgressKey("creatorPublished", creatorProfileForFetch.profileId)
             ],
@@ -12889,6 +14922,7 @@ async function fetchAllCreatorItems(options = {}) {
             knownItemKeys,
             volatileBackupSessionKey,
             selectionSignature: creatorSelectionSignature,
+            syncPhase,
             resumeState: volatileBackupProgressByKey[
               getVolatileBackupProgressKey("creatorCameos", creatorProfileForFetch.profileId)
             ],
@@ -12940,6 +14974,7 @@ async function fetchAllCreatorItems(options = {}) {
 async function fetchAllCameoItems(options = {}) {
   const maxItems = getMaxVideosSetting({ maxVideos: options.maxItems });
   const knownItemKeys = options.knownItemKeys instanceof Set ? options.knownItemKeys : null;
+  const syncPhase = typeof options.syncPhase === "string" ? options.syncPhase : "";
   const ids = new Set();
   const itemMap = new Map();
   const backupSessionKey =
@@ -12956,6 +14991,20 @@ async function fetchAllCameoItems(options = {}) {
   let totalCount = 0;
   let backedUpItemCount = 0;
   let usesVolatileBackup = false;
+
+  if (!syncPhase && hasUsableCheckpointProgress(volatileBackupProgressByKey) && knownItemKeys) {
+    const headSyncResult = await fetchAllCameoItems({
+      ...options,
+      volatileBackupResumeMeta: null,
+      syncPhase: "head-sync",
+    });
+    const backlogResult = await fetchAllCameoItems({
+      ...options,
+      knownItemKeys: null,
+      syncPhase: "backlog-resume",
+    });
+    return mergeSourceFetchResults([headSyncResult, backlogResult], maxItems);
+  }
 
   const mergeResult = (result) => {
     for (const id of result.ids) {
@@ -12994,6 +15043,7 @@ async function fetchAllCameoItems(options = {}) {
     volatileBackupSessionKey: backupSessionKey,
     selectionSignature:
       typeof options.selectionSignature === "string" ? options.selectionSignature : "",
+    syncPhase,
     resumeState:
       volatileBackupProgressByKey[
         getVolatileBackupProgressKey("characterAppearances", VOLATILE_BACKUP_DEFAULT_SCOPE_ID)
@@ -13013,6 +15063,7 @@ async function fetchAllCameoItems(options = {}) {
       volatileBackupSessionKey: backupSessionKey,
       selectionSignature:
         typeof options.selectionSignature === "string" ? options.selectionSignature : "",
+      syncPhase,
       resumeState:
         volatileBackupProgressByKey[
           getVolatileBackupProgressKey("characterDrafts", VOLATILE_BACKUP_DEFAULT_SCOPE_ID)
@@ -13084,6 +15135,181 @@ function isHiddenTabFrameResetError(error) {
   return /Frame with ID \d+ was removed/i.test(message) || /No frame with id \d+/i.test(message);
 }
 
+async function listActiveSourceScopeHashesForFetchSource(source) {
+  const activeSession = await getActiveSyncSession();
+  if (!activeSession || !Array.isArray(activeSession.sourceScopes)) {
+    return [];
+  }
+
+  return activeSession.sourceScopes
+    .filter((scopeRecord) => {
+      if (!scopeRecord || typeof scopeRecord !== "object") {
+        return false;
+      }
+
+      if (scopeRecord.source === source) {
+        return true;
+      }
+
+      return scopeRecord.sourcePage === source;
+    })
+    .map((scopeRecord) => scopeRecord.sourceScopeHash)
+    .filter((value) => typeof value === "string" && value);
+}
+
+async function writeRetryStateForFetchSource(source, patch = {}) {
+  const scopeHashes = await listActiveSourceScopeHashesForFetchSource(source);
+  if (!scopeHashes.length) {
+    return;
+  }
+
+  await Promise.all(
+    scopeHashes.map((sourceScopeHash) => writeSourceRetryState(sourceScopeHash, patch)),
+  );
+}
+
+async function markFetchHeartbeat(source) {
+  const now = new Date().toISOString();
+  await Promise.all([
+    updateActiveSyncSession({
+      heartbeatAt: now,
+    }).catch(() => null),
+    writeRetryStateForFetchSource(source, {
+      lastGoodHeartbeatAt: now,
+    }).catch(() => null),
+  ]);
+}
+
+async function recreateHiddenTabForFetchRecovery(routeUrl, source) {
+  try {
+    await cleanupHiddenTab();
+  } catch (_error) {
+    // Ignore close races while recovering the hidden tab.
+  }
+  const recreatedTabId = await ensureHiddenTab(routeUrl);
+  const now = new Date().toISOString();
+  await Promise.all([
+    updateActiveSyncSession({
+      heartbeatAt: now,
+    }).catch(() => null),
+    writeRetryStateForFetchSource(source, {
+      lastTabRecreateAt: now,
+    }).catch(() => null),
+  ]);
+  return recreatedTabId;
+}
+
+function createFetchControlOrTimeoutSignal(timeoutMs) {
+  let finished = false;
+  let timeout = null;
+  let pollTimer = null;
+
+  const cleanup = () => {
+    if (finished) {
+      return;
+    }
+    finished = true;
+    clearTimeout(timeout);
+    clearInterval(pollTimer);
+  };
+
+  const promise = new Promise((_, reject) => {
+    timeout = setTimeout(() => {
+      if (finished) {
+        return;
+      }
+      cleanup();
+      reject(new Error("Timed out while waiting for Sora to respond."));
+    }, timeoutMs);
+    pollTimer = setInterval(() => {
+      if (finished) {
+        return;
+      }
+      if (currentState.phase === "fetching" && requestedControlAction === "pause") {
+        cleanup();
+        reject(createControlError("pause", "Fetch paused."));
+        return;
+      }
+      if (currentState.phase === "fetching" && requestedControlAction === "abort") {
+        cleanup();
+        reject(createControlError("abort", "Fetch aborted."));
+      }
+    }, 120);
+  });
+
+  return {
+    promise,
+    cleanup,
+  };
+}
+
+async function executeSourceFetchWithRecovery(source, routeUrl, options) {
+  let recoveryAttempts = 0;
+
+  while (recoveryAttempts < FETCH_SOURCE_MAX_RECOVERY_ATTEMPTS) {
+    throwIfFetchAbortRequested();
+    await markFetchHeartbeat(source);
+
+    const tabId = await ensureHiddenTab(routeUrl);
+    const controlSignal = createFetchControlOrTimeoutSignal(FETCH_SOURCE_REQUEST_TIMEOUT_MS);
+    try {
+      const payload = await Promise.race([
+        executeSourceFetchInTab(tabId, source, options),
+        controlSignal.promise,
+      ]);
+      controlSignal.cleanup();
+      await markFetchHeartbeat(source);
+      return payload;
+    } catch (error) {
+      controlSignal.cleanup();
+      if (isControlError(error)) {
+        try {
+          await cleanupHiddenTab();
+        } catch (_cleanupError) {
+          // Ignore cleanup races during explicit control actions.
+        }
+        throw error;
+      }
+
+      const isRecoverableHiddenTabError =
+        isHiddenTabFrameResetError(error) ||
+        /Timed out while waiting for Sora to respond/i.test(getErrorMessage(error));
+
+      if (!isRecoverableHiddenTabError) {
+        throw error;
+      }
+
+      const now = new Date().toISOString();
+      const scopeHashes = await listActiveSourceScopeHashesForFetchSource(source);
+      await Promise.all(
+        scopeHashes.map(async (sourceScopeHash) => {
+          const existingRetryState = await readSourceRetryState(sourceScopeHash);
+          const nextRetryCount = (existingRetryState && existingRetryState.retryCount) || 0;
+          await writeSourceRetryState(sourceScopeHash, {
+            retryCount: nextRetryCount + 1,
+            lastTimeoutAt: now,
+          });
+        }),
+      ).catch(() => null);
+
+      recoveryAttempts += 1;
+      if (recoveryAttempts >= FETCH_SOURCE_MAX_RECOVERY_ATTEMPTS) {
+        throw createControlError(
+          "pause",
+          "Save Sora lost contact with Sora while fetching. The crawl was paused so you can resume without losing progress.",
+        );
+      }
+
+      await recreateHiddenTabForFetchRecovery(routeUrl, source);
+    }
+  }
+
+  throw createControlError(
+    "pause",
+    "Save Sora paused this fetch after the hidden Sora tab stopped responding.",
+  );
+}
+
 async function fetchSourceDataFromTab(source, options) {
   throwIfFetchAbortRequested();
   const routeUrl =
@@ -13092,19 +15318,7 @@ async function fetchSourceDataFromTab(source, options) {
       : SOURCE_ROUTES[source];
 
   try {
-    const runFetch = async () => {
-      const tabId = await ensureHiddenTab(routeUrl);
-      return executeSourceFetchInTab(tabId, source, options);
-    };
-
-    try {
-      return await runFetch();
-    } catch (error) {
-      if (isHiddenTabFrameResetError(error)) {
-        return await runFetch();
-      }
-      throw error;
-    }
+    return await executeSourceFetchWithRecovery(source, routeUrl, options);
   } catch (error) {
     if (isFetchAbortRequested()) {
       throw createControlError("abort", "Fetch aborted.");
