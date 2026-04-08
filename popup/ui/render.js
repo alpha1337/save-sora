@@ -89,8 +89,12 @@ export function renderState(state) {
     settings && settings.preferredViewMode === "windowed" ? "windowed" : "fullscreen";
   const downloadMode = settings && settings.downloadMode === "direct" ? "direct" : "archive";
   const automaticUpdatesEnabled = settings && settings.automaticUpdatesEnabled !== false;
-  const totalVideos = items.length;
-  const selectedCountTotal = selectedKeys.length;
+  const totalVideos = Number.isFinite(Number(state && state.popupTotalItemCount))
+    ? Math.max(0, Number(state.popupTotalItemCount))
+    : items.length;
+  const selectedCountTotal = Number.isFinite(Number(state && state.popupSelectedCountTotal))
+    ? Math.max(0, Number(state.popupSelectedCountTotal))
+    : selectedKeys.length;
 
   if (
     popupState.pendingDownloadStart &&

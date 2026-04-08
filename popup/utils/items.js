@@ -282,7 +282,7 @@ export function getTotalBatchMetrics(items) {
   let hasKnownSize = false;
 
   for (const item of Array.isArray(items) ? items : []) {
-    if (!item || item.isRemoved) {
+    if (!isActiveBatchItem(item)) {
       continue;
     }
 
@@ -390,6 +390,8 @@ export function getCreatorResultsTabLabel(tabKey) {
   switch (tabKey) {
     case "archived":
       return "Archived";
+    case "downloaded":
+      return "Downloaded";
     case "published":
       return "Posts";
     case "castIn":
@@ -418,8 +420,11 @@ export function getCreatorResultsTabs(items) {
     return [];
   }
 
-  const activeItems = nextItems.filter((item) => !Boolean(item && item.isRemoved));
-  const archivedCount = nextItems.length - activeItems.length;
+  const activeItems = nextItems.filter((item) => isActiveBatchItem(item));
+  const archivedCount = nextItems.filter(
+    (item) => Boolean(item && item.isRemoved) && !Boolean(item && item.isDownloaded),
+  ).length;
+  const downloadedCount = nextItems.filter((item) => Boolean(item && item.isDownloaded)).length;
   const canShowCreatorTabs =
     activeItems.length > 0 && activeItems.every((item) => isCreatorScopedItem(item));
   const counts = new Map();
@@ -433,7 +438,7 @@ export function getCreatorResultsTabs(items) {
   }
 
   if (!canShowCreatorTabs || counts.size <= 1) {
-    if (archivedCount <= 0) {
+    if (archivedCount <= 0 && downloadedCount <= 0) {
       return [];
     }
 
@@ -452,7 +457,15 @@ export function getCreatorResultsTabs(items) {
       count: archivedCount,
     });
 
-    return tabs;
+    if (downloadedCount > 0) {
+      tabs.push({
+        key: "downloaded",
+        label: getCreatorResultsTabLabel("downloaded"),
+        count: downloadedCount,
+      });
+    }
+
+    return tabs.filter((tab) => tab.count > 0);
   }
 
   const tabs = [
@@ -478,6 +491,14 @@ export function getCreatorResultsTabs(items) {
     });
   }
 
+  if (downloadedCount > 0) {
+    tabs.push({
+      key: "downloaded",
+      label: getCreatorResultsTabLabel("downloaded"),
+      count: downloadedCount,
+    });
+  }
+
   return tabs;
 }
 
@@ -495,10 +516,16 @@ export function filterItemsForCreatorResultsTab(items, activeTabKey) {
   }
 
   if (activeTabKey === "archived") {
-    return nextItems.filter((item) => Boolean(item && item.isRemoved));
+    return nextItems.filter(
+      (item) => Boolean(item && item.isRemoved) && !Boolean(item && item.isDownloaded),
+    );
   }
 
-  const activeItems = nextItems.filter((item) => !Boolean(item && item.isRemoved));
+  if (activeTabKey === "downloaded") {
+    return nextItems.filter((item) => Boolean(item && item.isDownloaded));
+  }
+
+  const activeItems = nextItems.filter((item) => isActiveBatchItem(item));
   if (!activeTabKey || activeTabKey === "all") {
     return activeItems;
   }

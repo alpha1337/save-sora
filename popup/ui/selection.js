@@ -134,10 +134,14 @@ export function applyCurrentSelectionUi() {
     popupState.latestRuntimeState,
     popupState.latestRenderState,
   );
-  const totalCount = Array.isArray(popupState.latestRenderState.items)
-    ? popupState.latestRenderState.items.length
-    : 0;
-  const selectedCount = getSelectedKeysFromDom().length;
+  const totalCount = Number.isFinite(Number(popupState.latestRenderState.totalCount))
+    ? Math.max(0, Number(popupState.latestRenderState.totalCount))
+    : Array.isArray(popupState.latestRenderState.items)
+      ? popupState.latestRenderState.items.length
+      : 0;
+  const selectedCount = Number.isFinite(Number(popupState.latestRenderState.selectedCountTotal))
+    ? Math.max(0, Number(popupState.latestRenderState.selectedCountTotal))
+    : getSelectedKeysFromDom().length;
   const visibleCount =
     Number.isFinite(popupState.virtualList.visibleCount) && popupState.virtualList.visibleCount >= 0
       ? popupState.virtualList.visibleCount
@@ -194,6 +198,8 @@ export function updateSelectionSummary({
   const creatorFilterActive =
     creatorResultTabs.length > 0 && activeCreatorResultsTab !== "all";
   const creatorFilterLabel = getCreatorResultsTabLabel(activeCreatorResultsTab);
+  const isDownloadedTab = activeCreatorResultsTab === "downloaded";
+  const isArchivedTab = activeCreatorResultsTab === "archived";
   const isSourceSelectionMode =
     (selectedSources.includes("characterAccounts") || selectedSources.includes("creators")) &&
     phase !== "fetching" &&
@@ -238,6 +244,13 @@ export function updateSelectionSummary({
 
   if (query.trim()) {
     const scopeSuffix = creatorFilterActive ? ` in ${creatorFilterLabel}` : "";
+    if (isDownloadedTab) {
+      dom.selectionSummary.textContent =
+        visibleCount > 0
+          ? `${formatWholeNumber(visibleCount)} matches${scopeSuffix} • ${formatWholeNumber(visibleCount)} downloaded in view${downloadedCount > 0 ? ` • ${formatWholeNumber(downloadedCount)} downloaded total` : ""}`
+          : `No matches for “${query.trim()}”${scopeSuffix}`;
+      return;
+    }
     dom.selectionSummary.textContent =
       visibleCount > 0
         ? `${formatWholeNumber(visibleCount)} matches${scopeSuffix} • ${formatWholeNumber(visibleSelectedCount)} selected in view • ${formatWholeNumber(selectedCount)} selected overall${downloadedCount > 0 ? ` • ${formatWholeNumber(downloadedCount)} downloaded` : ""}`
@@ -246,6 +259,18 @@ export function updateSelectionSummary({
   }
 
   if (creatorFilterActive) {
+    if (isDownloadedTab) {
+      dom.selectionSummary.textContent =
+        `${formatWholeNumber(visibleCount)} downloaded • ${formatWholeNumber(downloadedCount)} downloaded total`;
+      return;
+    }
+
+    if (isArchivedTab) {
+      dom.selectionSummary.textContent =
+        `${formatWholeNumber(visibleCount)} archived • ${formatWholeNumber(visibleSelectedCount)} selected in view • ${formatWholeNumber(selectedCount)} selected overall${downloadedCount > 0 ? ` • ${formatWholeNumber(downloadedCount)} downloaded` : ""}`;
+      return;
+    }
+
     dom.selectionSummary.textContent =
       `${formatWholeNumber(visibleCount)} ${creatorFilterLabel.toLowerCase()} • ${formatWholeNumber(visibleSelectedCount)} selected in view • ${formatWholeNumber(selectedCount)} selected overall${downloadedCount > 0 ? ` • ${formatWholeNumber(downloadedCount)} downloaded` : ""}`;
     return;
@@ -359,7 +384,10 @@ export function updateTotalSummary(items) {
     return;
   }
 
-  const { totalCount, totalBytes } = getTotalBatchMetrics(items);
+  const { totalCount: visibleTotalCount, totalBytes } = getTotalBatchMetrics(items);
+  const totalCount = Number.isFinite(Number(popupState.latestRenderState.totalCount))
+    ? Math.max(0, Number(popupState.latestRenderState.totalCount))
+    : visibleTotalCount;
   const formattedSize = formatFileSize(totalBytes);
   dom.totalCount.textContent =
     formattedSize ? `${formatWholeNumber(totalCount)} / ${formattedSize}` : formatWholeNumber(totalCount);

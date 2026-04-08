@@ -11,6 +11,7 @@ import {
 import { disposeMediaPreview } from "../media.js";
 import { createItemCard } from "./item-card.js";
 import { createItemContentSurface } from "./item-card-parts.js";
+import { buildRenderSignature } from "./list-signature.js";
 import {
   renderEmptyLibrary,
   renderEmptySearchResult,
@@ -87,7 +88,7 @@ export function renderItemsList(items, selectedKeys, titleOverrides, disableInpu
     renderEmptySearchResult(popupState.browseState.query);
   } else {
     showPopulatedListState();
-    renderVisibleItemsWindow(true);
+    renderVisibleItemsWindow(false);
   }
 
   applySelectionUi(
@@ -120,8 +121,15 @@ export function renderVisibleItemsWindow(force = false) {
     return;
   }
 
-  const shouldSkipRender =
-    !force &&
+  const visibleItems = cache.filteredItems.slice(nextWindow.startIndex, nextWindow.endIndex);
+  const visibleWindowSignature = buildRenderSignature(
+    visibleItems,
+    popupState.latestRenderState.selectedKeys,
+    popupState.latestRenderState.titleOverrides,
+    popupState.latestRenderState.disableInputs,
+    cache.phase,
+  );
+  const sameWindowGeometry =
     cache.rangeStart === nextWindow.startIndex &&
     cache.rangeEnd === nextWindow.endIndex &&
     cache.lastViewportWidth === nextWindow.viewportWidth &&
@@ -130,8 +138,22 @@ export function renderVisibleItemsWindow(force = false) {
     cache.gridColumns === nextWindow.columns &&
     cache.gridCardWidth === nextWindow.cardWidth &&
     cache.gridRowHeight === nextWindow.rowHeight;
+  const samePadding =
+    cache.lastPaddingTop === nextWindow.paddingTop &&
+    cache.lastPaddingBottom === nextWindow.paddingBottom;
 
-  if (shouldSkipRender) {
+  if (!force && sameWindowGeometry && samePadding && cache.lastWindowSignature === visibleWindowSignature) {
+    return;
+  }
+
+  if (!force && sameWindowGeometry && cache.lastWindowSignature === visibleWindowSignature) {
+    cache.lastPaddingTop = nextWindow.paddingTop;
+    cache.lastPaddingBottom = nextWindow.paddingBottom;
+    dom.itemsList.style.paddingTop = `${Math.max(0, nextWindow.paddingTop)}px`;
+    dom.itemsList.style.paddingBottom = `${Math.max(0, nextWindow.paddingBottom)}px`;
+    if (cache.viewMode === "grid") {
+      dom.itemsList.style.setProperty("--virtual-grid-card-width", `${nextWindow.cardWidth}px`);
+    }
     return;
   }
 
@@ -146,6 +168,9 @@ export function renderVisibleItemsWindow(force = false) {
   cache.gridColumns = nextWindow.columns;
   cache.gridCardWidth = nextWindow.cardWidth;
   cache.gridRowHeight = nextWindow.rowHeight;
+  cache.lastPaddingTop = nextWindow.paddingTop;
+  cache.lastPaddingBottom = nextWindow.paddingBottom;
+  cache.lastWindowSignature = visibleWindowSignature;
 
   dom.itemsList.style.paddingTop = `${Math.max(0, nextWindow.paddingTop)}px`;
   dom.itemsList.style.paddingBottom = `${Math.max(0, nextWindow.paddingBottom)}px`;
@@ -155,7 +180,6 @@ export function renderVisibleItemsWindow(force = false) {
     dom.itemsList.style.removeProperty("--virtual-grid-card-width");
   }
 
-  const visibleItems = cache.filteredItems.slice(nextWindow.startIndex, nextWindow.endIndex);
   const selectedSet = new Set(popupState.latestRenderState.selectedKeys);
   const renderedItemsByKey = new Map();
   const fragment = document.createDocumentFragment();
@@ -329,8 +353,15 @@ export function hideSharedGridTooltip(options = {}) {
   dom.sharedGridTooltip.classList.add("hidden");
   dom.sharedGridTooltip.setAttribute("aria-hidden", "true");
   dom.sharedGridTooltip.style.removeProperty("width");
-  dom.sharedGridTooltip.style.removeProperty("transform");
+  dom.sharedGridTooltip.style.removeProperty("left");
+  dom.sharedGridTooltip.style.removeProperty("right");
+  dom.sharedGridTooltip.style.removeProperty("top");
+  delete dom.sharedGridTooltip.dataset.side;
+  delete dom.sharedGridTooltip.dataset.itemKey;
   dom.sharedGridTooltip.replaceChildren();
+  if (dom.pickerScrollRegion instanceof HTMLElement) {
+    dom.pickerScrollRegion.append(dom.sharedGridTooltip);
+  }
 }
 
 function prepareVirtualDataset(
@@ -343,22 +374,6 @@ function prepareVirtualDataset(
   creatorTabsSignature,
 ) {
   const cache = popupState.virtualList;
-  const shouldRebuild =
-    cache.sourceItemsRef !== items ||
-    cache.sourceSelectedKeysRef !== selectedKeys ||
-    cache.sourceTitleOverridesRef !== titleOverrides ||
-    cache.disableInputs !== disableInputs ||
-    cache.phase !== phase ||
-    cache.sort !== popupState.browseState.sort ||
-    cache.query !== popupState.browseState.query ||
-    cache.activeCreatorResultsTab !== popupState.activeCreatorResultsTab ||
-    cache.viewMode !== viewMode ||
-    cache.creatorTabsSignature !== creatorTabsSignature;
-
-  if (!shouldRebuild) {
-    return;
-  }
-
   const filteredItems = filterItemsForCreatorResultsTab(
     items,
     popupState.activeCreatorResultsTab,
@@ -378,9 +393,6 @@ function prepareVirtualDataset(
     }
   }
 
-  cache.sourceItemsRef = items;
-  cache.sourceSelectedKeysRef = selectedKeys;
-  cache.sourceTitleOverridesRef = titleOverrides;
   cache.disableInputs = disableInputs;
   cache.phase = phase;
   cache.sort = popupState.browseState.sort;
@@ -391,9 +403,6 @@ function prepareVirtualDataset(
   cache.filteredItems = sortedItems;
   cache.visibleCount = sortedItems.length;
   cache.visibleSelectedCount = visibleSelectedCount;
-  cache.renderedItemsByKey = new Map();
-  cache.rangeStart = -1;
-  cache.rangeEnd = -1;
 }
 
 function computeVisibleWindow(viewMode, itemCount) {
@@ -503,6 +512,9 @@ function resetRenderedWindow() {
   popupState.virtualList.renderedItemsByKey = new Map();
   popupState.virtualList.rangeStart = 0;
   popupState.virtualList.rangeEnd = 0;
+  popupState.virtualList.lastPaddingTop = 0;
+  popupState.virtualList.lastPaddingBottom = 0;
+  popupState.virtualList.lastWindowSignature = "";
 }
 
 function showSharedGridTooltipForCard(card) {
@@ -518,24 +530,29 @@ function showSharedGridTooltipForCard(card) {
 
   clearSharedGridTooltipHideTimer();
   popupState.virtualList.tooltipItemKey = itemKey;
+  const shouldReuseSurface =
+    dom.sharedGridTooltip.parentElement === card &&
+    dom.sharedGridTooltip.dataset.itemKey === itemKey &&
+    !dom.sharedGridTooltip.classList.contains("hidden");
 
-  const surface = createItemContentSurface(
-    item,
-    {
-      key: itemKey,
-      disableInputs: popupState.latestRenderState.disableInputs,
-      titleOverrides: popupState.latestRenderState.titleOverrides,
-    },
-    "item-grid-tooltip-surface",
-  );
+  if (!shouldReuseSurface) {
+    const surface = createItemContentSurface(
+      item,
+      {
+        key: itemKey,
+        disableInputs: popupState.latestRenderState.disableInputs,
+        titleOverrides: popupState.latestRenderState.titleOverrides,
+      },
+      "item-grid-tooltip-surface",
+    );
 
-  dom.sharedGridTooltip.replaceChildren(surface);
+    dom.sharedGridTooltip.replaceChildren(surface);
+    card.append(dom.sharedGridTooltip);
+    dom.sharedGridTooltip.dataset.itemKey = itemKey;
+  }
   dom.sharedGridTooltip.classList.remove("hidden");
   dom.sharedGridTooltip.setAttribute("aria-hidden", "false");
-
-  window.requestAnimationFrame(() => {
-    positionSharedGridTooltip(card);
-  });
+  positionSharedGridTooltip(card);
 }
 
 function positionSharedGridTooltip(card) {
@@ -549,45 +566,29 @@ function positionSharedGridTooltip(card) {
 
   const regionRect = dom.pickerScrollRegion.getBoundingClientRect();
   const cardRect = card.getBoundingClientRect();
-  const scrollTop = dom.pickerScrollRegion.scrollTop;
-  const scrollLeft = dom.pickerScrollRegion.scrollLeft;
   const availableWidth = Math.max(
-    180,
     Math.min(
       GRID_TOOLTIP_MAX_WIDTH,
       Math.max(
-        180,
-        dom.pickerScrollRegion.clientWidth - GRID_TOOLTIP_MARGIN * 2,
+        GRID_TOOLTIP_MIN_WIDTH,
         Math.floor(dom.pickerScrollRegion.clientWidth * 0.34),
       ),
     ),
   );
+  const availableLeft = Math.max(0, cardRect.left - regionRect.left);
+  const availableRight = Math.max(0, regionRect.right - cardRect.right);
+  const preferredRight = availableRight >= GRID_TOOLTIP_MIN_WIDTH || availableRight >= availableLeft;
 
   dom.sharedGridTooltip.style.width = `${availableWidth}px`;
-
-  const anchorLeft = cardRect.left - regionRect.left + scrollLeft;
-  const anchorTop = cardRect.top - regionRect.top + scrollTop;
-  const anchorWidth = cardRect.width;
-  const tooltipHeight = dom.sharedGridTooltip.offsetHeight || 0;
-  const maxLeft =
-    scrollLeft + dom.pickerScrollRegion.clientWidth - availableWidth - GRID_TOOLTIP_MARGIN;
-  const rightPreferredLeft = anchorLeft + anchorWidth + GRID_TOOLTIP_MARGIN;
-  const leftPreferredLeft = anchorLeft - availableWidth - GRID_TOOLTIP_MARGIN;
-  let left =
-    rightPreferredLeft <= maxLeft
-      ? rightPreferredLeft
-      : Math.max(scrollLeft + GRID_TOOLTIP_MARGIN, leftPreferredLeft);
-
-  if (left > maxLeft) {
-    left = maxLeft;
+  dom.sharedGridTooltip.style.top = "0px";
+  dom.sharedGridTooltip.dataset.side = preferredRight ? "right" : "left";
+  if (preferredRight) {
+    dom.sharedGridTooltip.style.left = `calc(100% + ${GRID_TOOLTIP_MARGIN}px)`;
+    dom.sharedGridTooltip.style.right = "auto";
+  } else {
+    dom.sharedGridTooltip.style.right = `calc(100% + ${GRID_TOOLTIP_MARGIN}px)`;
+    dom.sharedGridTooltip.style.left = "auto";
   }
-
-  const minTop = scrollTop + GRID_TOOLTIP_MARGIN;
-  const maxTop =
-    scrollTop + dom.pickerScrollRegion.clientHeight - tooltipHeight - GRID_TOOLTIP_MARGIN;
-  const top = clamp(anchorTop, minTop, Math.max(minTop, maxTop));
-
-  dom.sharedGridTooltip.style.transform = `translate(${Math.round(left)}px, ${Math.round(top)}px)`;
 }
 
 function scheduleHideSharedGridTooltip() {
@@ -622,10 +623,6 @@ function getEventElement(target) {
 function getEventCard(target) {
   const element = getEventElement(target);
   return element?.closest(".item-card[data-item-key]") || null;
-}
-
-function clamp(value, min, max) {
-  return Math.min(Math.max(value, min), max);
 }
 
 /**

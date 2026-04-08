@@ -2843,6 +2843,7 @@ body[data-theme="light"] .creator-add-hint {
   box-shadow: none;
   background: transparent;
   contain-intrinsic-size: 188px 334px;
+  overflow: visible;
 }
 
 .item-card:hover {
@@ -3750,10 +3751,15 @@ body[data-theme="light"] .creator-details-switch-input:checked + .creator-detail
 
 .shared-grid-tooltip {
   position: absolute;
-  left: 0;
   top: 0;
+  left: calc(100% + 12px);
   z-index: 12;
   pointer-events: auto;
+}
+
+.shared-grid-tooltip[data-side="left"] {
+  left: auto;
+  right: calc(100% + 12px);
 }
 
 .item-grid-tooltip-surface .item-title-row {

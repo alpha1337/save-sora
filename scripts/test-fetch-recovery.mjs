@@ -372,6 +372,78 @@ function simulateRenderedCardSections(viewMode) {
   };
 }
 
+function simulateIsActiveBatchItem(item) {
+  return Boolean(item) && !item.isRemoved && !item.isDownloaded;
+}
+
+function simulateResultsTabs(items) {
+  const nextItems = Array.isArray(items) ? items : [];
+  const activeCount = nextItems.filter((item) => simulateIsActiveBatchItem(item)).length;
+  const archivedCount = nextItems.filter((item) => Boolean(item?.isRemoved) && !Boolean(item?.isDownloaded)).length;
+  const downloadedCount = nextItems.filter((item) => Boolean(item?.isDownloaded)).length;
+  const tabs = [];
+
+  if (activeCount > 0) {
+    tabs.push({ key: "all", count: activeCount });
+  }
+  if (archivedCount > 0) {
+    tabs.push({ key: "archived", count: archivedCount });
+  }
+  if (downloadedCount > 0) {
+    tabs.push({ key: "downloaded", count: downloadedCount });
+  }
+
+  return tabs;
+}
+
+function simulateFilterItemsForResultsTab(items, tabKey) {
+  const nextItems = Array.isArray(items) ? items : [];
+  if (tabKey === "archived") {
+    return nextItems.filter((item) => Boolean(item?.isRemoved) && !Boolean(item?.isDownloaded));
+  }
+  if (tabKey === "downloaded") {
+    return nextItems.filter((item) => Boolean(item?.isDownloaded));
+  }
+  return nextItems.filter((item) => simulateIsActiveBatchItem(item));
+}
+
+function simulateTotalBatchMetrics(items) {
+  const activeItems = (Array.isArray(items) ? items : []).filter((item) => simulateIsActiveBatchItem(item));
+  return {
+    totalCount: activeItems.length,
+  };
+}
+
+function simulateAuthoritativePopupTotals({ runtimeState = {}, renderState = {} } = {}) {
+  return {
+    totalCount: Number.isFinite(Number(renderState.totalCount))
+      ? Math.max(0, Number(renderState.totalCount))
+      : Array.isArray(renderState.items)
+        ? renderState.items.length
+        : 0,
+    selectedCount: Number.isFinite(Number(renderState.selectedCountTotal))
+      ? Math.max(0, Number(renderState.selectedCountTotal))
+      : Array.isArray(renderState.selectedKeys)
+        ? renderState.selectedKeys.length
+        : 0,
+    fetchedCount: Math.max(0, Number(runtimeState.fetchedCount) || 0),
+  };
+}
+
+function simulateLegacyCleanupTargets() {
+  return ["items", "volatile_backup_meta", "volatile_backup_updater"];
+}
+
+function simulateProgressPreviewSource({ mirrorItems = [], legacyItems = [] } = {}) {
+  if (Array.isArray(mirrorItems) && mirrorItems.length > 0) {
+    return "mirror";
+  }
+  if (Array.isArray(legacyItems) && legacyItems.length > 0) {
+    return "legacy";
+  }
+  return "none";
+}
+
 async function testStructuralInvariants() {
   const backgroundSource = await readFile(path.join(projectRoot, "background.js"), "utf8");
   const popupRuntimeSource = await readFile(path.join(projectRoot, "popup/runtime.js"), "utf8");
@@ -385,6 +457,10 @@ async function testStructuralInvariants() {
   );
   const popupSelectionSource = await readFile(
     path.join(projectRoot, "popup/ui/selection.js"),
+    "utf8",
+  );
+  const popupRenderSource = await readFile(
+    path.join(projectRoot, "popup/ui/render.js"),
     "utf8",
   );
   const popupCharacterSelectionSource = await readFile(
@@ -409,6 +485,10 @@ async function testStructuralInvariants() {
   );
   const popupMediaSource = await readFile(
     path.join(projectRoot, "popup/ui/media.js"),
+    "utf8",
+  );
+  const popupItemsUtilsSource = await readFile(
+    path.join(projectRoot, "popup/utils/items.js"),
     "utf8",
   );
   const popupListSource = await readFile(
@@ -451,6 +531,10 @@ async function testStructuralInvariants() {
   assert.match(popupListSource, /export function renderVisibleItemsWindow/);
   assert.match(popupListSource, /export function scheduleVisibleItemsWindowRender/);
   assert.match(popupListSource, /export function handleItemsListPointerOver/);
+  assert.match(popupListSource, /renderVisibleItemsWindow\(false\);/);
+  assert.match(popupListSource, /buildRenderSignature\(/);
+  assert.match(popupListSource, /cache\.lastWindowSignature = visibleWindowSignature;/);
+  assert.match(popupListSource, /card\.append\(dom\.sharedGridTooltip\);/);
   assert.match(popupListSource, /#shared-grid-tooltip/);
   assert.match(popupListSource, /createItemContentSurface\(/);
   assert.match(popupMediaSource, /image\.src = item\.thumbnailUrl;/);
@@ -459,7 +543,11 @@ async function testStructuralInvariants() {
   assert.match(popupActionsSource, /const isResumeMode = fetchUiState\.primaryActionMode === "resume"/);
   assert.match(popupActionsSource, /if \(!isResetMode && !isResumeMode && sources\.length === 0\)/);
   assert.match(popupActionsSource, /else if \(isResumeMode\) \{\s*await requestResumeScan\(\);/);
+  assert.match(popupRenderSource, /const totalVideos = Number\.isFinite\(Number\(state && state\.popupTotalItemCount\)\)/);
+  assert.match(popupRenderSource, /const selectedCountTotal = Number\.isFinite\(Number\(state && state\.popupSelectedCountTotal\)\)/);
   assert.match(popupSelectionSource, /const fetchUiState = getFetchUiState\(/);
+  assert.match(popupSelectionSource, /Number\.isFinite\(Number\(popupState\.latestRenderState\.totalCount\)\)/);
+  assert.match(popupSelectionSource, /Number\.isFinite\(Number\(popupState\.latestRenderState\.selectedCountTotal\)\)/);
   assert.match(popupSelectionSource, /!fetchUiState\.isBusy[\s\S]*?!fetchUiState\.isAnyPaused/);
   assert.match(popupCharacterSelectionSource, /const fetchUiState = getFetchUiState\(/);
   assert.match(popupSourceMenusSource, /const fetchUiState = getFetchUiState\(/);
@@ -468,9 +556,25 @@ async function testStructuralInvariants() {
   assert.match(backgroundSource, /if \(currentState\.phase !== "fetch-paused"\) \{\s*pausedFetchRequest = null;/);
   assert.match(backgroundSource, /fetchRecoveryInitError/);
   assert.match(backgroundSource, /const statuses = \["running", "paused", "error", "completed", "aborted"\];/);
-  assert.match(backgroundSource, /storedItems = await loadSourceMirrorItems\(sourceScope\.sourceScopeHash, itemLimit\);/);
+  assert.match(backgroundSource, /async function loadProgressPreviewItems\(/);
+  assert.match(backgroundSource, /const mirrorItems = await loadSourceMirrorItems\(/);
+  assert.match(backgroundSource, /if \(mirrorItems\[0\] \|\| options\.allowLegacyFallback !== true\) \{/);
+  assert.match(backgroundSource, /if \(options\.allowLegacyFallback === true\) \{\s*return loadVolatileBackupItemsByProgressKey\(sessionKey, progressKey, limit\);/);
+  assert.doesNotMatch(backgroundSource, /await clearVolatileBackupProgress\(sessionKey, progressKey\);/);
+  assert.match(backgroundSource, /VOLATILE_BACKUP_UPDATER_STORE/);
+  assert.doesNotMatch(backgroundSource, /transaction\.objectStore\(SOURCE_MIRROR_ITEM_STORE\)\.clear\(\);/);
+  assert.doesNotMatch(backgroundSource, /transaction\.objectStore\(SOURCE_CHECKPOINT_STORE\)\.clear\(\);/);
+  assert.doesNotMatch(backgroundSource, /transaction\.objectStore\(SYNC_SESSION_STORE\)\.clear\(\);/);
+  assert.doesNotMatch(backgroundSource, /transaction\.objectStore\(SOURCE_RETRY_STATE_STORE\)\.clear\(\);/);
   assert.match(backgroundSource, /async function resetExtensionState\(options = \{\}\)/);
   assert.match(backgroundSource, /const preserveRecoveryData = options\.preserveRecoveryData !== false;/);
+  assert.match(popupSelectionSource, /activeCreatorResultsTab === "downloaded"/);
+  assert.match(popupSelectionSource, /downloaded in view/);
+  assert.match(popupItemCardPartsSource, /removeButton\.textContent = "Download Again";/);
+  assert.match(popupItemCardPartsSource, /if \(item\.isDownloaded\)/);
+  assert.match(popupItemCardPartsSource, /if \(!item\.isDownloaded\) \{/);
+  assert.match(popupItemCardPartsSource, /Archive video/);
+  assert.match(popupItemsUtilsSource, /case "downloaded":\s+return "Downloaded";/);
   assert.match(popupUpdateGateSource, /Local recovery needs attention/);
   assert.match(backgroundSource, /preservedCharacterAccounts = normalizeCharacterAccounts\(currentState\.characterAccounts\)/);
   assert.match(backgroundSource, /selectedCharacterAccountIds: preservedSelectedCharacterAccountIds/);
@@ -501,6 +605,49 @@ function testIdempotentMirrorWrites() {
   ]);
 
   assert.equal(mirror.size, 2, "retrying the same page should not duplicate mirrored rows");
+}
+
+function testLegacyCleanupNeverTargetsCanonicalRecoveryStores() {
+  assert.deepEqual(simulateLegacyCleanupTargets(), [
+    "items",
+    "volatile_backup_meta",
+    "volatile_backup_updater",
+  ]);
+}
+
+function testProgressPreviewPrefersMirrorOverLegacyRows() {
+  assert.equal(
+    simulateProgressPreviewSource({
+      mirrorItems: [{ id: "mirror-item-1" }],
+      legacyItems: [{ id: "legacy-item-1" }],
+    }),
+    "mirror",
+  );
+  assert.equal(
+    simulateProgressPreviewSource({
+      mirrorItems: [],
+      legacyItems: [{ id: "legacy-item-1" }],
+    }),
+    "legacy",
+  );
+}
+
+function testPopupTotalsPreferAuthoritativeRenderCountsOverPreviewLength() {
+  const totals = simulateAuthoritativePopupTotals({
+    runtimeState: {
+      fetchedCount: 3800,
+    },
+    renderState: {
+      items: new Array(3000).fill(null),
+      totalCount: 3800,
+      selectedCountTotal: 3800,
+      selectedKeys: new Array(3000).fill("preview"),
+    },
+  });
+
+  assert.equal(totals.totalCount, 3800);
+  assert.equal(totals.selectedCount, 3800);
+  assert.equal(totals.fetchedCount, 3800);
 }
 
 function testCheckpointBackedResumeNeverStartsFromZero() {
@@ -927,6 +1074,39 @@ function testGridCardsDoNotDuplicateHiddenListBodies() {
   assert.equal(listSections.includesPerCardGridTooltip, false);
 }
 
+function testDownloadedTabFilteringAndQueueExclusion() {
+  const items = [
+    { id: "active-1", isRemoved: false, isDownloaded: false },
+    { id: "archived-1", isRemoved: true, isDownloaded: false },
+    { id: "downloaded-1", isRemoved: false, isDownloaded: true },
+    { id: "downloaded-2", isRemoved: false, isDownloaded: true },
+  ];
+
+  const tabs = simulateResultsTabs(items);
+  assert.deepEqual(
+    tabs.map((tab) => `${tab.key}:${tab.count}`),
+    ["all:1", "archived:1", "downloaded:2"],
+  );
+
+  assert.deepEqual(
+    simulateFilterItemsForResultsTab(items, "all").map((item) => item.id),
+    ["active-1"],
+  );
+  assert.deepEqual(
+    simulateFilterItemsForResultsTab(items, "archived").map((item) => item.id),
+    ["archived-1"],
+  );
+  assert.deepEqual(
+    simulateFilterItemsForResultsTab(items, "downloaded").map((item) => item.id),
+    ["downloaded-1", "downloaded-2"],
+  );
+  assert.equal(
+    simulateTotalBatchMetrics(items).totalCount,
+    1,
+    "downloaded items must stay out of the active download queue totals",
+  );
+}
+
 function testPausedFetchPersistencePreservesRecoveryMetadata() {
   const persisted = simulateSerializedFetchState({
     phase: "fetch-paused",
@@ -1009,6 +1189,9 @@ await testStructuralInvariants();
 testIdempotentMirrorWrites();
 testCheckpointBackedResumeNeverStartsFromZero();
 testSourceScopeMirrorKeyIsSessionIndependent();
+testLegacyCleanupNeverTargetsCanonicalRecoveryStores();
+testProgressPreviewPrefersMirrorOverLegacyRows();
+testPopupTotalsPreferAuthoritativeRenderCountsOverPreviewLength();
 testHeadSyncThenResume();
 testCheckpointAdvancesOnlyAfterDurableMirrorWrite();
 testKnownBoundaryKeyOnlyAdvancesDuringCommittedHeadSync();
@@ -1027,6 +1210,7 @@ testResumeBootstrapKeepsPausedResultsVisible();
 testResumeProgressKeepsRestoredBaseline();
 testRestoredMirrorItemsMergeIntoRuntimeCatalog();
 testGridCardsDoNotDuplicateHiddenListBodies();
+testDownloadedTabFilteringAndQueueExclusion();
 testPausedFetchPersistencePreservesRecoveryMetadata();
 testPausedSessionAutoRestoresWithoutPrompt();
 testRestoreGateOnlyReleasesAfterFetchActuallyStarts();

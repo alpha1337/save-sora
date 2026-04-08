@@ -2560,10 +2560,7 @@ async function clearVolatileBackups() {
       [
         VOLATILE_BACKUP_ITEM_STORE,
         VOLATILE_BACKUP_META_STORE,
-        SOURCE_MIRROR_ITEM_STORE,
-        SOURCE_CHECKPOINT_STORE,
-        SYNC_SESSION_STORE,
-        SOURCE_RETRY_STATE_STORE,
+        VOLATILE_BACKUP_UPDATER_STORE,
       ],
       "readwrite",
     );
@@ -2571,14 +2568,8 @@ async function clearVolatileBackups() {
     transaction.onerror = () => reject(transaction.error || new Error("Could not clear the volatile backup database."));
     transaction.objectStore(VOLATILE_BACKUP_ITEM_STORE).clear();
     transaction.objectStore(VOLATILE_BACKUP_META_STORE).clear();
-    transaction.objectStore(SOURCE_MIRROR_ITEM_STORE).clear();
-    transaction.objectStore(SOURCE_CHECKPOINT_STORE).clear();
-    transaction.objectStore(SYNC_SESSION_STORE).clear();
-    transaction.objectStore(SOURCE_RETRY_STATE_STORE).clear();
-    transaction.objectStore(SCHEMA_META_STORE).delete(ACTIVE_SYNC_SESSION_META_KEY);
+    transaction.objectStore(VOLATILE_BACKUP_UPDATER_STORE).clear();
   });
-  activeSyncSessionId = "";
-  pendingInterruptedSyncSession = null;
 }
 
 async function readUpdaterRecord(key) {
@@ -4005,41 +3996,46 @@ async function loadVolatileBackupItemsByProgressKey(
     .filter(Boolean);
 }
 
-async function loadVolatileBackupItemsBySessionKey(sessionKey) {
-  if (!sessionKey) {
+async function resolveSourceScopeRecordForSessionProgress(sessionKey, progressKey) {
+  if (!sessionKey || !progressKey) {
+    return null;
+  }
+
+  const sessionMeta = await readVolatileBackupMeta(sessionKey);
+  return createSourceScopeRecordFromProgress(
+    sessionMeta && typeof sessionMeta === "object" ? sessionMeta.source : "",
+    progressKey,
+    {},
+    sessionMeta,
+  );
+}
+
+async function loadProgressPreviewItems(
+  sessionKey,
+  progressKey,
+  limit = VOLATILE_SOURCE_PREVIEW_LIMIT,
+  options = {},
+) {
+  if (!sessionKey || !progressKey) {
     return [];
   }
 
-  const db = await openVolatileBackupDb();
-  const transaction = db.transaction([VOLATILE_BACKUP_ITEM_STORE], "readonly");
-  const store = transaction.objectStore(VOLATILE_BACKUP_ITEM_STORE);
-  const index = store.index("sessionKey");
-  const request = index.getAll(IDBKeyRange.only(sessionKey));
-  const records = await createIndexedDbRequestPromise(request);
+  const sourceScope = await resolveSourceScopeRecordForSessionProgress(sessionKey, progressKey);
+  if (sourceScope && sourceScope.sourceScopeHash) {
+    const mirrorItems = await loadSourceMirrorItems(
+      sourceScope.sourceScopeHash,
+      Math.max(1, Number(limit) || VOLATILE_SOURCE_PREVIEW_LIMIT),
+    );
+    if (mirrorItems[0] || options.allowLegacyFallback !== true) {
+      return mirrorItems;
+    }
+  }
 
-  return (Array.isArray(records) ? records : [])
-    .map((record) => {
-      const item = record && record.item ? record.item : null;
-      return item && typeof item === "object"
-        ? {
-            ...item,
-            storedAt: Number(record && record.storedAt) || 0,
-          }
-        : null;
-    })
-    .filter(Boolean)
-    .sort((left, right) => {
-      const leftTime = Number(left && left.storedAt) || 0;
-      const rightTime = Number(right && right.storedAt) || 0;
-      if (leftTime !== rightTime) {
-        return leftTime - rightTime;
-      }
+  if (options.allowLegacyFallback === true) {
+    return loadVolatileBackupItemsByProgressKey(sessionKey, progressKey, limit);
+  }
 
-      const leftKey = typeof left.key === "string" ? left.key : "";
-      const rightKey = typeof right.key === "string" ? right.key : "";
-      return leftKey.localeCompare(rightKey);
-    })
-    .map(({ storedAt: _storedAt, ...item }) => item);
+  return [];
 }
 
 async function hasUsableVolatileBackupProgress(sessionKey, progressKey, progressEntry) {
@@ -4057,7 +4053,9 @@ async function hasUsableVolatileBackupProgress(sessionKey, progressKey, progress
   }
 
   try {
-    const previewItems = await loadVolatileBackupItemsByProgressKey(sessionKey, progressKey, 1);
+    const previewItems = await loadProgressPreviewItems(sessionKey, progressKey, 1, {
+      allowLegacyFallback: true,
+    });
     return Boolean(previewItems[0]);
   } catch (_error) {
     return false;
@@ -4274,7 +4272,6 @@ async function loadVolatileBackupStateForProgress(
     (typeof normalizedResumeState.cursor === "string" && normalizedResumeState.cursor) ||
     normalizedResumeState.offset > 0;
   if (!hasResumeCursor) {
-    await clearVolatileBackupProgress(sessionKey, progressKey);
     return null;
   }
 
@@ -4300,27 +4297,16 @@ async function loadVolatileBackupStateForProgress(
       ),
     );
 
-  let storedItems = await loadVolatileBackupItemsByProgressKey(
+  let storedItems = await loadProgressPreviewItems(
     sessionKey,
     progressKey,
     itemLimit,
+    {
+      allowLegacyFallback: true,
+    },
   );
-  if (!storedItems[0]) {
-    const sessionMeta = await readVolatileBackupMeta(sessionKey);
-    const sourceScope = createSourceScopeRecordFromProgress(
-      sessionMeta && typeof sessionMeta === "object" ? sessionMeta.source : "",
-      progressKey,
-      {},
-      sessionMeta,
-    );
-
-    if (sourceScope && sourceScope.sourceScopeHash) {
-      storedItems = await loadSourceMirrorItems(sourceScope.sourceScopeHash, itemLimit);
-    }
-  }
 
   if (!storedItems[0]) {
-    await clearVolatileBackupProgress(sessionKey, progressKey);
     return null;
   }
 
@@ -4511,10 +4497,13 @@ async function loadCreatorVolatileBackupPreview(
       continue;
     }
 
-    const previewItems = await loadVolatileBackupItemsByProgressKey(
+    const previewItems = await loadProgressPreviewItems(
       backupMeta.sessionKey,
       progressKey,
       remainingPreviewSlots,
+      {
+        allowLegacyFallback: true,
+      },
     );
 
     for (const previewItem of previewItems) {
@@ -4540,24 +4529,6 @@ async function loadCreatorVolatileBackupPreview(
     items: restoredItems,
     totalItemCount,
     backedUpItemCount: Math.max(0, totalItemCount - restoredItems.length),
-  };
-}
-
-function buildVolatileBackupItemRecord(sessionKey, item, progressKey = "") {
-  const compactItem = compactItemForPopup(item);
-  if (!compactItem) {
-    return null;
-  }
-
-  return {
-    id: `${sessionKey}:${compactItem.key}`,
-    sessionKey,
-    progressKey,
-    sessionProgressKey: `${sessionKey}:${progressKey}`,
-    key: compactItem.key,
-    sourcePage: compactItem.sourcePage,
-    storedAt: Date.now(),
-    item: compactItem,
   };
 }
 
@@ -4749,7 +4720,7 @@ async function updateVolatileBackupProgress(sessionKey, progressKey, patch = {})
   return nextMeta;
 }
 
-async function clearVolatileBackupProgress(sessionKey, progressKey) {
+async function clearVolatileBackupProgress(sessionKey, progressKey, options = {}) {
   if (!sessionKey || !progressKey) {
     return null;
   }
@@ -4762,26 +4733,28 @@ async function clearVolatileBackupProgress(sessionKey, progressKey) {
     delete existingProgressMap[progressKey];
   }
 
-  const db = await openVolatileBackupDb();
-  await new Promise((resolve, reject) => {
-    const transaction = db.transaction([VOLATILE_BACKUP_ITEM_STORE], "readwrite");
-    transaction.oncomplete = () => resolve();
-    transaction.onerror = () =>
-      reject(transaction.error || new Error("Could not clear volatile backup items."));
-    const store = transaction.objectStore(VOLATILE_BACKUP_ITEM_STORE);
-    const index = store.index("sessionProgressKey");
-    const request = index.openCursor(IDBKeyRange.only(`${sessionKey}:${progressKey}`));
-    request.onsuccess = () => {
-      const cursor = request.result;
-      if (!cursor) {
-        return;
-      }
-      cursor.delete();
-      cursor.continue();
-    };
-    request.onerror = () =>
-      reject(request.error || new Error("Could not enumerate volatile backup items."));
-  });
+  if (options.clearItems === true) {
+    const db = await openVolatileBackupDb();
+    await new Promise((resolve, reject) => {
+      const transaction = db.transaction([VOLATILE_BACKUP_ITEM_STORE], "readwrite");
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () =>
+        reject(transaction.error || new Error("Could not clear volatile backup items."));
+      const store = transaction.objectStore(VOLATILE_BACKUP_ITEM_STORE);
+      const index = store.index("sessionProgressKey");
+      const request = index.openCursor(IDBKeyRange.only(`${sessionKey}:${progressKey}`));
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) {
+          return;
+        }
+        cursor.delete();
+        cursor.continue();
+      };
+      request.onerror = () =>
+        reject(request.error || new Error("Could not enumerate volatile backup items."));
+    });
+  }
 
   return writeVolatileBackupMeta(sessionKey, {
     progressByKey: existingProgressMap,
@@ -4886,28 +4859,8 @@ async function appendVolatileBackupItems(sessionKey, items, meta = {}) {
     return 0;
   }
 
-  const db = await openVolatileBackupDb();
   let storedCount = 0;
   const progressKey = typeof meta.progressKey === "string" ? meta.progressKey : "";
-
-  for (let index = 0; index < sourceItems.length; index += VOLATILE_BACKUP_WRITE_CHUNK_SIZE) {
-    const slice = sourceItems.slice(index, index + VOLATILE_BACKUP_WRITE_CHUNK_SIZE);
-    await new Promise((resolve, reject) => {
-      const transaction = db.transaction([VOLATILE_BACKUP_ITEM_STORE], "readwrite");
-      transaction.oncomplete = () => resolve();
-      transaction.onerror = () => reject(transaction.error || new Error("Could not write volatile backup items."));
-      const store = transaction.objectStore(VOLATILE_BACKUP_ITEM_STORE);
-      for (const item of slice) {
-        const record = buildVolatileBackupItemRecord(sessionKey, item, progressKey);
-        if (!record) {
-          continue;
-        }
-        storedCount += 1;
-        store.put(record);
-      }
-    });
-    await yieldForUi();
-  }
 
   const {
     progressKey: _progressKey,
@@ -4923,7 +4876,7 @@ async function appendVolatileBackupItems(sessionKey, items, meta = {}) {
   );
   if (sourceScope && sourceScope.sourceScopeHash) {
     try {
-      await writeSourceMirrorItems(sourceScope.sourceScopeHash, sourceItems);
+      storedCount = await writeSourceMirrorItems(sourceScope.sourceScopeHash, sourceItems);
       const existingCheckpoint = await readSourceCheckpoint(sourceScope.sourceScopeHash);
       const existingPersistedCount = Number(existingCheckpoint && existingCheckpoint.itemsPersisted) || 0;
       const existingPreviewCount = Number(existingCheckpoint && existingCheckpoint.previewCount) || 0;
@@ -4964,6 +4917,10 @@ async function appendVolatileBackupItems(sessionKey, items, meta = {}) {
     } catch (error) {
       console.warn(`Failed to persist mirrored items for ${sourceScope.sourceScopeHash}.`, error);
     }
+  }
+
+  if (storedCount <= 0) {
+    storedCount = sourceItems.length;
   }
   return storedCount;
 }
@@ -5455,7 +5412,12 @@ async function loadMergedFetchItemsForState(state = currentState) {
     } else {
       const backupMeta = await findArchiveVolatileBackupMeta(sourceState);
       if (backupMeta && typeof backupMeta.sessionKey === "string" && backupMeta.sessionKey) {
-        const backupItems = await loadVolatileBackupItemsBySessionKey(backupMeta.sessionKey);
+        const backupItems = await loadMirroredItemsForSourceSelection(backupMeta.source, {
+          characterAccounts: sourceState.characterAccounts,
+          selectedCharacterAccountIds: sourceState.selectedCharacterAccountIds,
+          creatorProfiles: sourceState.creatorProfiles,
+          selectedCreatorProfileIds: sourceState.selectedCreatorProfileIds,
+        });
         for (const item of backupItems) {
           mergedItems.set(getCanonicalItemKey(item), item);
         }
@@ -6581,7 +6543,12 @@ async function resolveSelectedArchiveItems(state = currentState) {
     try {
       const backupMeta = await findArchiveVolatileBackupMeta(sourceState);
       if (backupMeta && typeof backupMeta.sessionKey === "string" && backupMeta.sessionKey) {
-        const backupItems = await loadVolatileBackupItemsBySessionKey(backupMeta.sessionKey);
+        const backupItems = await loadMirroredItemsForSourceSelection(backupMeta.source, {
+          characterAccounts: sourceState.characterAccounts,
+          selectedCharacterAccountIds: sourceState.selectedCharacterAccountIds,
+          creatorProfiles: sourceState.creatorProfiles,
+          selectedCreatorProfileIds: sourceState.selectedCreatorProfileIds,
+        });
         for (const item of backupItems) {
           const titledItem = applyTitleOverride(item, sourceState.titleOverrides);
           mergedItems.set(getCanonicalItemKey(titledItem), titledItem);
@@ -13365,10 +13332,13 @@ async function fetchAllCreatorCharacterCameoItems(creatorProfile, options = {}) 
 
   if (shouldBackupVolatileItems && resumeState && totalItemCount > 0) {
     try {
-      const previewItems = await loadVolatileBackupItemsByProgressKey(
+      const previewItems = await loadProgressPreviewItems(
         backupSessionKey,
         progressKey,
         previewLimit,
+        {
+          allowLegacyFallback: true,
+        },
       );
       if (previewItems.length) {
         const hasResumeCursor =
@@ -13380,7 +13350,6 @@ async function fetchAllCreatorCharacterCameoItems(creatorProfile, options = {}) 
           totalItemCount = 0;
           backedUpItemCount = 0;
           usesVolatileBackup = false;
-          await clearVolatileBackupProgress(backupSessionKey, progressKey);
         } else {
           items.push(...previewItems);
         }
@@ -13390,10 +13359,9 @@ async function fetchAllCreatorCharacterCameoItems(creatorProfile, options = {}) 
         totalItemCount = 0;
         backedUpItemCount = 0;
         usesVolatileBackup = false;
-        await clearVolatileBackupProgress(backupSessionKey, progressKey);
       }
     } catch (error) {
-      console.warn("Failed to load creator-character cameo preview items from the volatile backup.", error);
+      console.warn("Failed to load creator-character cameo preview items from the mirrored backup.", error);
     }
   }
 
@@ -13606,10 +13574,13 @@ async function fetchAllCreatorCharacterCameoItemsSimple(creatorProfile, options 
 
   if (shouldBackupVolatileItems && resumeState && resumeState.totalItemCount > 0) {
     try {
-      const previewItems = await loadVolatileBackupItemsByProgressKey(
+      const previewItems = await loadProgressPreviewItems(
         backupSessionKey,
         progressKey,
         previewLimit,
+        {
+          allowLegacyFallback: true,
+        },
       );
       if (previewItems[0]) {
         const hasResumeCursor =
@@ -13621,7 +13592,6 @@ async function fetchAllCreatorCharacterCameoItemsSimple(creatorProfile, options 
           totalItemCount = 0;
           backedUpItemCount = 0;
           usesVolatileBackup = false;
-          await clearVolatileBackupProgress(backupSessionKey, progressKey);
         } else {
           hasUsableResumeState = true;
           cursor =
@@ -13641,10 +13611,9 @@ async function fetchAllCreatorCharacterCameoItemsSimple(creatorProfile, options 
         totalItemCount = 0;
         backedUpItemCount = 0;
         usesVolatileBackup = false;
-        await clearVolatileBackupProgress(backupSessionKey, progressKey);
       }
     } catch (error) {
-      console.warn("Failed to load creator-character cameo preview items from the persistent backup.", error);
+      console.warn("Failed to load creator-character cameo preview items from the mirrored backup.", error);
     }
   }
 
