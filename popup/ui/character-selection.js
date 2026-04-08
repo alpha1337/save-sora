@@ -531,7 +531,7 @@ function createSummaryPill(text) {
 
 function syncSelectionActionButtons() {
   const actionState = getSelectionScreenActionState();
-  const shouldShow = actionState.visible && actionState.totalCount > 0;
+  const shouldShow = actionState.visible && actionState.visibleCount > 0;
   const isDisabled =
     popupState.latestBusy || popupState.latestPaused || popupState.characterAccountsLoading;
 
@@ -539,15 +539,15 @@ function syncSelectionActionButtons() {
     dom.selectAllButton.classList.toggle("hidden", !shouldShow);
     dom.selectAllButton.disabled =
       isDisabled ||
-      actionState.totalCount === 0 ||
-      actionState.selectedCount === actionState.totalCount;
+      actionState.visibleCount === 0 ||
+      actionState.visibleSelectedCount >= actionState.visibleCount;
     dom.selectAllButton.textContent = "Select All";
   }
 
   if (dom.clearSelectionButton instanceof HTMLButtonElement) {
     dom.clearSelectionButton.classList.toggle("hidden", !shouldShow);
-    dom.clearSelectionButton.disabled = isDisabled || actionState.selectedCount === 0;
-    dom.clearSelectionButton.textContent = "Clear";
+    dom.clearSelectionButton.disabled = isDisabled || actionState.visibleSelectedCount === 0;
+    dom.clearSelectionButton.textContent = "Select None";
   }
 }
 

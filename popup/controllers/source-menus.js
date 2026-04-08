@@ -348,8 +348,7 @@ export function syncSourceMenuLabels() {
 
 export function syncExportMenu() {
   if (dom.exportButtonLabel instanceof HTMLElement) {
-    dom.exportButtonLabel.textContent =
-      popupState.preferredExportType === "urls" ? "Export as URLs" : "Export as Prompts";
+    dom.exportButtonLabel.textContent = "Download Prompts/URLs";
   }
 
   if (dom.exportMenuButton instanceof HTMLButtonElement) {

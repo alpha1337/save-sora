@@ -1,6 +1,6 @@
 import { dom } from "../dom.js";
 import { popupState } from "../state.js";
-import { setSourceSelectionSummary } from "./character-selection.js";
+import { getSelectionScreenActionState, setSourceSelectionSummary } from "./character-selection.js";
 import { formatFileSize, formatWholeNumber } from "../utils/format.js";
 import { getSelectedSourceValues } from "../utils/settings.js";
 import {
@@ -251,12 +251,21 @@ export function syncSelectionControls(totalCount, selectedCount, visibleCount = 
   const phase = popupState.latestRenderState.phase || "idle";
   const hasLoadedResults = popupState.latestRenderState.items.length > 0;
   const isFetching = phase === "fetching";
+  const sourceSelectionState = getSelectionScreenActionState();
+  const showSourceSelectionActions =
+    sourceSelectionState.visible && sourceSelectionState.visibleCount > 0;
   const showDownloadButton =
     hasLoadedResults && selectedCount > 0 && !popupState.latestBusy && !popupState.latestPaused && !isFetching;
   const showBrowseTools = hasLoadedResults;
   const showSummaryPanel = hasLoadedResults && !isFetching;
+  const normalizedSelectedCount = Math.max(0, Number(selectedCount) || 0);
+  const downloadLabel =
+    normalizedSelectedCount === 1
+      ? "Download 1 Video"
+      : `Download ${formatWholeNumber(normalizedSelectedCount)} Videos`;
 
   if (dom.downloadButton) {
+    dom.downloadButton.textContent = downloadLabel;
     dom.downloadButton.classList.toggle("hidden", !showDownloadButton);
     dom.downloadButton.disabled = !showDownloadButton;
   }
@@ -282,12 +291,18 @@ export function syncSelectionControls(totalCount, selectedCount, visibleCount = 
     popupState.exportMenuOpen = false;
   }
   if (dom.selectAllButton) {
-    dom.selectAllButton.classList.add("hidden");
-    dom.selectAllButton.disabled = true;
+    dom.selectAllButton.textContent = "Select All";
+    dom.selectAllButton.classList.toggle("hidden", !showSourceSelectionActions);
+    dom.selectAllButton.disabled =
+      !showSourceSelectionActions ||
+      sourceSelectionState.visibleCount === 0 ||
+      sourceSelectionState.visibleSelectedCount >= sourceSelectionState.visibleCount;
   }
   if (dom.clearSelectionButton) {
-    dom.clearSelectionButton.classList.add("hidden");
-    dom.clearSelectionButton.disabled = true;
+    dom.clearSelectionButton.textContent = showSourceSelectionActions ? "Select None" : "Clear";
+    dom.clearSelectionButton.classList.toggle("hidden", !showSourceSelectionActions);
+    dom.clearSelectionButton.disabled =
+      !showSourceSelectionActions || sourceSelectionState.visibleSelectedCount === 0;
   }
   if (dom.resultsViewToggle instanceof HTMLElement) {
     dom.resultsViewToggle.classList.toggle("hidden", !showBrowseTools);

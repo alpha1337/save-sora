@@ -127,6 +127,7 @@ async function buildArchive(message, signal) {
   const jobId = typeof message.jobId === "string" ? message.jobId : "";
   const archiveItems = Array.isArray(message.items) ? message.items : [];
   const folderImages = Array.isArray(message.folderImages) ? message.folderImages : [];
+  const supplementalEntries = Array.isArray(message.supplementalEntries) ? message.supplementalEntries : [];
   ensureOffscreenArchiveDebugJob(jobId, {
     archiveFilename: typeof message.archiveFilename === "string" ? message.archiveFilename : "",
     totalItems: archiveItems.length,
@@ -135,11 +136,13 @@ async function buildArchive(message, signal) {
     archiveFilename: typeof message.archiveFilename === "string" ? message.archiveFilename : "",
     totalItems: archiveItems.length,
     folderImageCount: folderImages.length,
+    supplementalEntryCount: supplementalEntries.length,
   });
   console.info("[Save Sora ZIP/offscreen] Starting archive build.", {
     jobId,
     totalItems: archiveItems.length,
     folderImageCount: folderImages.length,
+    supplementalEntryCount: supplementalEntries.length,
   });
 
   try {
@@ -157,11 +160,20 @@ async function buildArchive(message, signal) {
     });
 
     await sendStage(jobId, "preparing", "Preparing archive folders...");
-    await addDirectoryEntries(zipWriter, collectDirectoryPaths(archiveItems, folderImages), signal);
+    await addDirectoryEntries(
+      zipWriter,
+      collectDirectoryPaths(archiveItems, folderImages, supplementalEntries),
+      signal,
+    );
 
     if (folderImages.length > 0) {
       await sendStage(jobId, "folder-images", "Adding folder profile images...");
       await addFolderImages(zipWriter, folderImages, signal);
+    }
+
+    if (supplementalEntries.length > 0) {
+      await sendStage(jobId, "metadata", "Adding prompts and URLs...");
+      await addSupplementalArchiveEntries(zipWriter, supplementalEntries, signal);
     }
 
     await sendStage(jobId, "archiving", "Streaming selected files into the ZIP...");
@@ -229,6 +241,27 @@ async function buildArchive(message, signal) {
       aborted,
       error: aborted ? "The ZIP archive was canceled." : getErrorMessage(error),
       debugRef: "globalThis.__SAVE_SORA_OFFSCREEN_ZIP_DEBUG__",
+    });
+  }
+}
+
+async function addSupplementalArchiveEntries(zipWriter, supplementalEntries, signal) {
+  const zipApi = globalThis.zip;
+  if (!zipApi || typeof zipApi.BlobReader !== "function") {
+    throw new Error("The bundled ZIP runtime could not prepare metadata files.");
+  }
+
+  for (const entry of Array.isArray(supplementalEntries) ? supplementalEntries : []) {
+    throwIfAborted(signal);
+
+    if (!entry || typeof entry.archivePath !== "string" || !entry.archivePath || !(entry.blobContent instanceof Blob)) {
+      continue;
+    }
+
+    await zipWriter.add(entry.archivePath, new zipApi.BlobReader(entry.blobContent), {
+      level: 0,
+      signal,
+      lastModDate: parseEntryDate(entry.createdAt),
     });
   }
 }
@@ -389,7 +422,7 @@ async function addDirectoryEntries(zipWriter, directoryPaths, signal) {
   }
 }
 
-function collectDirectoryPaths(items, folderImages) {
+function collectDirectoryPaths(items, folderImages, supplementalEntries) {
   const directoryPaths = new Set();
 
   for (const item of Array.isArray(items) ? items : []) {
@@ -407,6 +440,14 @@ function collectDirectoryPaths(items, folderImages) {
     }
 
     addDirectoryChain(directoryPaths, folderImage.folderPath);
+  }
+
+  for (const entry of Array.isArray(supplementalEntries) ? supplementalEntries : []) {
+    if (!entry || typeof entry.archivePath !== "string") {
+      continue;
+    }
+
+    addDirectoryChain(directoryPaths, getParentPath(entry.archivePath));
   }
 
   return [...directoryPaths].sort();

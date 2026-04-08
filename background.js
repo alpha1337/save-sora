@@ -5194,6 +5194,145 @@ function buildArchiveFolderImages(items) {
   return [...folderImages.values()].sort((left, right) => left.folderPath.localeCompare(right.folderPath));
 }
 
+function buildArchiveSupplementalEntries(items, now = new Date()) {
+  const createdAt = now.toISOString();
+  return [
+    createArchiveCsvSupplementalEntry(
+      `metadata/${buildArchiveSelectedPromptsFilename(now)}`,
+      "prompt",
+      buildArchivePromptCsvRows(items),
+      createdAt,
+    ),
+    createArchiveCsvSupplementalEntry(
+      `metadata/${buildArchiveSelectedUrlsFilename(now)}`,
+      "url",
+      buildArchiveUrlCsvRows(items),
+      createdAt,
+    ),
+  ];
+}
+
+function createArchiveCsvSupplementalEntry(archivePath, headerLabel, rows, createdAt) {
+  const csvText = buildArchiveCsvText(headerLabel, rows);
+  return {
+    archivePath,
+    createdAt,
+    blobContent: new Blob([csvText], {
+      type: "text/csv;charset=utf-8",
+    }),
+  };
+}
+
+function buildArchiveCsvText(headerLabel, rows) {
+  const csvLines = [headerLabel, ...(Array.isArray(rows) ? rows : []).map(escapeArchiveCsvValue)];
+  return `\uFEFF${csvLines.join("\r\n")}\r\n`;
+}
+
+function buildArchivePromptCsvRows(items) {
+  const rows = [];
+
+  for (const item of Array.isArray(items) ? items : []) {
+    const prompt =
+      item && typeof item.prompt === "string"
+        ? item.prompt.trim()
+        : "";
+    const description =
+      item && typeof item.description === "string"
+        ? item.description.trim()
+        : "";
+    const exportText = prompt || description;
+
+    if (exportText) {
+      rows.push(exportText);
+    }
+  }
+
+  return rows;
+}
+
+function buildArchiveUrlCsvRows(items) {
+  const rows = [];
+
+  for (const item of Array.isArray(items) ? items : []) {
+    const reviewUrl = getArchiveReviewUrl(item);
+    if (reviewUrl) {
+      rows.push(reviewUrl);
+    }
+  }
+
+  return rows;
+}
+
+function buildArchiveSelectedPromptsFilename(now = new Date()) {
+  const isoDate = now.toISOString().slice(0, 10);
+  return `save-sora-selected-prompts-${isoDate}.csv`;
+}
+
+function buildArchiveSelectedUrlsFilename(now = new Date()) {
+  const isoDate = now.toISOString().slice(0, 10);
+  return `save-sora-selected-urls-${isoDate}.csv`;
+}
+
+function escapeArchiveCsvValue(value) {
+  return `"${String(value).replace(/"/g, "\"\"")}"`;
+}
+
+function getArchiveReviewUrl(item) {
+  const detailUrl =
+    item && typeof item.detailUrl === "string" && item.detailUrl.trim() ? item.detailUrl.trim() : "";
+  if (detailUrl) {
+    return detailUrl.startsWith("/")
+      ? `https://sora.chatgpt.com${detailUrl}`
+      : detailUrl;
+  }
+
+  const itemId = item && typeof item.id === "string" ? item.id.trim() : "";
+  const generationId =
+    item && typeof item.generationId === "string" ? item.generationId.trim() : "";
+
+  const shouldUseDraftFallback =
+    item &&
+    (item.sourcePage === "drafts" ||
+      ((item.sourcePage === "cameos" ||
+        item.sourcePage === "characters" ||
+        item.sourcePage === "creatorCharacterCameos") &&
+        item.sourceType === "draft"));
+
+  if (shouldUseDraftFallback) {
+    if (itemId.startsWith("s_")) {
+      return `https://sora.chatgpt.com/p/${itemId}`;
+    }
+
+    if (generationId.startsWith("s_")) {
+      return `https://sora.chatgpt.com/p/${generationId}`;
+    }
+
+    if (generationId.startsWith("gen_")) {
+      return `https://sora.chatgpt.com/d/${generationId}`;
+    }
+
+    if (itemId.startsWith("gen_")) {
+      return `https://sora.chatgpt.com/d/${itemId}`;
+    }
+  }
+
+  if (
+    item &&
+    (item.sourcePage === "profile" ||
+      item.sourcePage === "creatorPublished" ||
+      item.sourcePage === "creatorCameos" ||
+      item.sourcePage === "creatorCharacters" ||
+      item.sourcePage === "likes" ||
+      item.sourcePage === "cameos" ||
+      item.sourcePage === "characters") &&
+    itemId
+  ) {
+    return `https://sora.chatgpt.com/p/${itemId}`;
+  }
+
+  return null;
+}
+
 function getArchiveFolderImageCandidate(item) {
   if (!item) {
     return null;
@@ -5232,6 +5371,7 @@ function createArchiveJobContext(downloadItems, options) {
     successfulItems: [],
     failedItems: [],
     folderImages: buildArchiveFolderImages(archiveItems),
+    supplementalEntries: buildArchiveSupplementalEntries(downloadItems),
     resolve: null,
     reject: null,
   };
@@ -6212,6 +6352,9 @@ async function startOffscreenArchiveBuild(job) {
     archiveFilename: job.archiveFilename,
     items: job.pendingItems.map(serializeArchiveItemForOffscreen),
     folderImages: job.folderImages,
+    supplementalEntries: (Array.isArray(job.supplementalEntries) ? job.supplementalEntries : []).map(
+      serializeArchiveSupplementalEntryForOffscreen,
+    ),
   });
 
   if (!response || !response.ok) {
@@ -6233,6 +6376,17 @@ function serializeArchiveItemForOffscreen(item) {
     archivePath: item && typeof item.archivePath === "string" ? item.archivePath : "",
     createdAt: item && typeof item.createdAt === "string" ? item.createdAt : null,
     postedAt: item && typeof item.postedAt === "string" ? item.postedAt : null,
+  };
+}
+
+function serializeArchiveSupplementalEntryForOffscreen(entry) {
+  return {
+    archivePath: entry && typeof entry.archivePath === "string" ? entry.archivePath : "",
+    createdAt: entry && typeof entry.createdAt === "string" ? entry.createdAt : null,
+    blobContent:
+      entry && entry.blobContent instanceof Blob
+        ? entry.blobContent
+        : new Blob([""], { type: "text/plain;charset=utf-8" }),
   };
 }
 
