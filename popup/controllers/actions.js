@@ -7,7 +7,8 @@ import {
   requestDownloadSelected,
   requestResetState,
   requestScan,
-  saveSelection,
+  saveCharacterSelection,
+  saveCreatorSelection,
 } from "../runtime.js";
 import { popupState } from "../state.js";
 import {
@@ -20,7 +21,11 @@ import {
 import { hideNotice, setControlsDisabled, showNotice } from "../ui/layout.js";
 import { updateDownloadOverlay } from "../ui/overlay.js";
 import { syncFetchProgressPanel } from "../ui/render/fetch-progress.js";
-import { getItemCheckboxesWithOptions, getSelectedKeysFromDom } from "../ui/selection.js";
+import {
+  getSelectedKeysFromDom,
+  getVisibleActiveKeysFromDom,
+  getVisibleArchivedKeysFromDom,
+} from "../ui/selection.js";
 import { getSelectedSourceValues } from "../utils/settings.js";
 import { refreshStatus } from "./polling.js";
 import {
@@ -28,9 +33,9 @@ import {
   closeAllSourceMenus,
   selectAllVisibleSourceScopes,
 } from "./source-menus.js";
-import { updateSelectionFromDom } from "./selection-sync.js";
 import { flushPendingTitleSaves } from "./title-edits.js";
 import { isSourceSelectionScreenVisible } from "../ui/character-selection.js";
+import { handleBatchArchiveStateChange } from "./item-mutations.js";
 
 /**
  * Handles the main fetch/reset form submission.
@@ -61,6 +66,7 @@ export async function handleRunFormSubmit(event) {
     if (isResetMode) {
       await requestResetState();
     } else {
+      await persistScopedSelectionBeforeScan(sources);
       await requestScan(sources, popupState.browseState.query);
     }
   } catch (error) {
@@ -68,6 +74,27 @@ export async function handleRunFormSubmit(event) {
   } finally {
     await refreshStatus();
   }
+}
+
+async function persistScopedSelectionBeforeScan(sources) {
+  if (!isSourceSelectionScreenVisible()) {
+    return;
+  }
+
+  const tasks = [];
+  if (Array.isArray(sources) && sources.includes("characterAccounts")) {
+    tasks.push(saveCharacterSelection(popupState.selectedCharacterAccountIds));
+  }
+
+  if (Array.isArray(sources) && sources.includes("creators")) {
+    tasks.push(saveCreatorSelection(popupState.selectedCreatorProfileIds));
+  }
+
+  if (tasks.length === 0) {
+    return;
+  }
+
+  await Promise.all(tasks);
 }
 
 /**
@@ -102,7 +129,6 @@ export async function handleDownloadButtonClick() {
 
   try {
     await flushPendingTitleSaves();
-    await saveSelection(getSelectedKeysFromDom());
     await requestDownloadSelected();
   } catch (error) {
     popupState.pendingDownloadStart = false;
@@ -287,12 +313,12 @@ export async function handleSelectAllClick() {
     return;
   }
 
-  const checkboxes = getItemCheckboxesWithOptions({ visibleOnly: true, enabledOnly: true });
-  for (const checkbox of checkboxes) {
-    checkbox.checked = true;
+  const archivedKeys = getVisibleArchivedKeysFromDom();
+  if (archivedKeys.length === 0) {
+    return;
   }
 
-  await updateSelectionFromDom();
+  await handleBatchArchiveStateChange(archivedKeys, false);
 }
 
 /**
@@ -304,12 +330,12 @@ export async function handleClearSelectionClick() {
     return;
   }
 
-  const checkboxes = getItemCheckboxesWithOptions({ visibleOnly: true });
-  for (const checkbox of checkboxes) {
-    checkbox.checked = false;
+  const activeKeys = getVisibleActiveKeysFromDom();
+  if (activeKeys.length === 0) {
+    return;
   }
 
-  await updateSelectionFromDom();
+  await handleBatchArchiveStateChange(activeKeys, true);
 }
 
 /**

@@ -117,7 +117,7 @@ export function formatFileSize(value) {
 }
 
 /**
- * Shortens long prompt text for the compact item card layout.
+ * Normalizes prompt text for the compact item card layout.
  *
  * @param {string|null|undefined} value
  * @returns {string}
@@ -127,6 +127,5 @@ export function truncatePrompt(value) {
     return "No prompt text available.";
   }
 
-  const singleLine = value.replace(/\s+/g, " ").trim();
-  return singleLine.length > 120 ? `${singleLine.slice(0, 117)}...` : singleLine;
+  return value.replace(/\s+/g, " ").trim();
 }

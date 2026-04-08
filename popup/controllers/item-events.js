@@ -1,13 +1,5 @@
-import { dom } from "../dom.js";
-import { showNotice } from "../ui/layout.js";
 import { handleRemoveButtonClick } from "./item-mutations.js";
-import { refreshStatus, stopPolling } from "./polling.js";
-import { updateSelectionFromDom } from "./selection-sync.js";
-import {
-  isTitleInput,
-  queueTitleSave,
-  saveTitleOverride,
-} from "./title-edits.js";
+import { openTitleDialog } from "./title-edits.js";
 
 /**
  * Handles clicks inside the item list.
@@ -20,6 +12,18 @@ export async function handleItemsListClick(event) {
     return;
   }
 
+  const prompt = targetElement.closest(".item-prompt");
+  if (prompt instanceof HTMLElement) {
+    togglePromptExpansion(prompt);
+    return;
+  }
+
+  const titleButton = targetElement.closest(".item-title-button");
+  if (titleButton instanceof HTMLButtonElement) {
+    openTitleDialog(titleButton.dataset.itemKey || "");
+    return;
+  }
+
   const removeButton = targetElement.closest(".item-remove-button");
   if (removeButton instanceof HTMLButtonElement) {
     await handleRemoveButtonClick(event, removeButton);
@@ -29,19 +33,6 @@ export async function handleItemsListClick(event) {
   if (isIgnoredCardClickTarget(targetElement)) {
     return;
   }
-
-  const card = targetElement.closest(".item-card");
-  if (!(card instanceof HTMLElement)) {
-    return;
-  }
-
-  const checkbox = card.querySelector(".item-checkbox");
-  if (!(checkbox instanceof HTMLInputElement) || checkbox.disabled) {
-    return;
-  }
-
-  checkbox.checked = !checkbox.checked;
-  await updateSelectionFromDom();
 }
 
 /**
@@ -54,55 +45,25 @@ export async function handleItemsListChange(event) {
   if (!(target instanceof HTMLInputElement) || target.type !== "checkbox") {
     return;
   }
-
-  await updateSelectionFromDom();
 }
 
 /**
- * Handles title input typing inside the item list.
+ * Handles keyboard interaction for inline expandable prompt text.
  *
- * @param {Event} event
+ * @param {KeyboardEvent} event
  */
-export function handleItemsListInput(event) {
-  const target = event.target;
-  if (!isTitleInput(target)) {
+export function handleItemsListKeydown(event) {
+  const targetElement = getEventTargetElement(event.target);
+  if (!(targetElement instanceof HTMLElement) || !targetElement.classList.contains("item-prompt")) {
     return;
   }
 
-  queueTitleSave(target.dataset.itemKey, target.value);
-}
-
-/**
- * Stops polling while a title input is focused.
- *
- * @param {FocusEvent} event
- */
-export function handleItemsListFocusIn(event) {
-  if (isTitleInput(event.target)) {
-    stopPolling();
-  }
-}
-
-/**
- * Flushes title edits when a title input loses focus.
- *
- * @param {FocusEvent} event
- */
-export function handleItemsListFocusOut(event) {
-  const target = event.target;
-  if (!isTitleInput(target)) {
+  if (event.key !== "Enter" && event.key !== " ") {
     return;
   }
 
-  void saveTitleOverride(target.dataset.itemKey, target.value).catch((error) => {
-    showNotice(dom.errorBox, error instanceof Error ? error.message : String(error));
-  });
-
-  window.setTimeout(() => {
-    if (!isTitleInput(document.activeElement)) {
-      void refreshStatus();
-    }
-  }, 0);
+  event.preventDefault();
+  togglePromptExpansion(targetElement);
 }
 
 /**
@@ -113,7 +74,8 @@ export function handleItemsListFocusOut(event) {
  */
 function isIgnoredCardClickTarget(targetElement) {
   return Boolean(
-    targetElement.closest(".item-title-input") ||
+    targetElement.closest(".item-prompt") ||
+      targetElement.closest(".item-title-button") ||
       targetElement.closest(".item-link") ||
       targetElement.closest(".item-metadata-link") ||
       targetElement.closest(".item-media") ||
@@ -139,4 +101,15 @@ function getEventTargetElement(target) {
   }
 
   return null;
+}
+
+function togglePromptExpansion(prompt) {
+  if (!(prompt instanceof HTMLElement) || !prompt.classList.contains("is-expandable")) {
+    return;
+  }
+
+  const isExpanded = !prompt.classList.contains("is-expanded");
+  prompt.classList.toggle("is-expanded", isExpanded);
+  prompt.setAttribute("aria-expanded", isExpanded ? "true" : "false");
+  prompt.title = isExpanded ? "Click to collapse description" : "Click to expand description";
 }

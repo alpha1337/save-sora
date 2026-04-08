@@ -171,3 +171,13 @@ export function normalizeSortValue(value) {
     ? value
     : "newest";
 }
+
+/**
+ * Normalizes the current results layout mode.
+ *
+ * @param {string|null|undefined} value
+ * @returns {"list"|"grid"}
+ */
+export function normalizeResultsViewMode(value) {
+  return value === "grid" ? "grid" : "list";
+}

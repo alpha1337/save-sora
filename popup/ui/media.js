@@ -1,5 +1,5 @@
 import { formatCompactCount, formatDuration } from "../utils/format.js";
-import { getItemSourceLabel, resolveItemTitle } from "../utils/items.js";
+import { getItemSourceLabel, isDraftVideoItem, resolveItemTitle } from "../utils/items.js";
 
 /**
  * Media-preview helpers for item cards.
@@ -258,6 +258,13 @@ export function renderMediaPreview(media, item, titleOverrides = {}) {
     const spacer = document.createElement("span");
     spacer.className = "item-media-spacer";
     topRow.append(spacer);
+  }
+
+  if (isDraftVideoItem(item)) {
+    const draftBadge = document.createElement("span");
+    draftBadge.className = "item-media-state-badge";
+    draftBadge.textContent = "Draft";
+    topRow.append(draftBadge);
   }
   overlay.append(topRow);
 

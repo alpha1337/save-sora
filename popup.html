@@ -98,17 +98,8 @@
               <span class="theme-toggle-label">Theme Picker</span>
               <input id="theme-toggle" class="theme-toggle-input" type="checkbox" name="theme-toggle" />
               <span class="theme-toggle-track" aria-hidden="true">
-                <span class="theme-toggle-icon theme-toggle-icon-dark">
-                  <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
-                    <path d="M14.5 3.2a8.8 8.8 0 1 0 6.3 15.1 8.5 8.5 0 1 1-6.3-15.1Z" fill="currentColor"></path>
-                  </svg>
-                </span>
-                <span class="theme-toggle-icon theme-toggle-icon-light">
-                  <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
-                    <circle cx="12" cy="12" r="4.5" fill="currentColor"></circle>
-                    <path d="M12 2.5v2.6M12 18.9v2.6M21.5 12h-2.6M5.1 12H2.5M18.7 5.3l-1.8 1.8M7.1 16.9l-1.8 1.8M18.7 18.7l-1.8-1.8M7.1 7.1 5.3 5.3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"></path>
-                  </svg>
-                </span>
+                <span class="theme-toggle-icon theme-toggle-icon-dark"></span>
+                <span class="theme-toggle-icon theme-toggle-icon-light"></span>
                 <span class="theme-toggle-thumb"></span>
               </span>
             </label>
@@ -120,122 +111,123 @@
         <!-- Overview: fetch, review, and selectively queue the user's own Sora videos. -->
         <section id="panel-overview" class="tab-panel is-active" data-panel="overview">
           <section class="dashboard-grid">
-            <div class="left-rail">
-              <section class="panel controls-panel" data-has-results="false">
-                <form id="run-form" class="source-form">
-                  <label class="search-field" for="search-input">
-                  <span class="label">Search</span>
-                    <input
-                      id="search-input"
-                      name="search"
-                      class="search-input"
-                      type="search"
-                      inputmode="search"
-                      autocomplete="off"
-                      placeholder="Search descriptions"
-                    />
-                  </label>
+            <div class="overview-sidebar">
+              <div class="left-rail">
+                <section class="panel controls-panel" data-has-results="false">
+                  <form id="run-form" class="source-form">
+                    <label class="search-field" for="search-input">
+                      <span class="label">Search</span>
+                      <input
+                        id="search-input"
+                        name="search"
+                        class="search-input"
+                        type="search"
+                        inputmode="search"
+                        autocomplete="off"
+                        placeholder="Search descriptions"
+                      />
+                    </label>
 
-                  <div class="source-select-field">
-                    <span class="label">Sources</span>
-                    <div id="source-select-control" class="multi-select">
-                      <button
-                        id="source-select-button"
-                        class="multi-select-trigger"
-                        type="button"
-                        aria-haspopup="true"
-                        aria-expanded="false"
-                        aria-controls="source-select-menu"
-                      >
-                        <span id="source-select-label">No sources selected</span>
-                        <span class="multi-select-caret" aria-hidden="true">▾</span>
-                      </button>
-                      <div id="source-select-menu" class="multi-select-menu hidden" role="group" aria-label="Sources">
-                        <label class="multi-select-option">
-                          <input
-                            id="overview-source-profile"
-                            name="overview-sources"
-                            type="checkbox"
-                            value="profile"
-                            data-source-group="overview"
-                          />
-                          <span>Published</span>
-                        </label>
-                        <label class="multi-select-option">
-                          <input
-                            id="overview-source-drafts"
-                            name="overview-sources"
-                            type="checkbox"
-                            value="drafts"
-                            data-source-group="overview"
-                          />
-                          <span>Drafts</span>
-                        </label>
-                        <label class="multi-select-option">
-                          <input
-                            id="overview-source-likes"
-                            name="overview-sources"
-                            type="checkbox"
-                            value="likes"
-                            data-source-group="overview"
-                          />
-                          <span>Likes</span>
-                        </label>
-                        <label class="multi-select-option">
-                          <input
-                            id="overview-source-characters"
-                            name="overview-sources"
-                            type="checkbox"
-                            value="characters"
-                            data-source-group="overview"
-                          />
-                          <span>Cameos</span>
-                        </label>
-                        <label class="multi-select-option">
-                          <input
-                            id="overview-source-character-accounts"
-                            name="overview-sources"
-                            type="checkbox"
-                            value="characterAccounts"
-                            data-source-group="overview"
-                          />
-                          <span>Characters</span>
-                        </label>
-                        <label class="multi-select-option">
-                          <input
-                            id="overview-source-creators"
-                            name="overview-sources"
-                            type="checkbox"
-                            value="creators"
-                            data-source-group="overview"
-                          />
-                          <span>Creators</span>
-                        </label>
+                    <div class="source-select-field">
+                      <span class="label">Sources</span>
+                      <div id="source-select-control" class="multi-select">
+                        <button
+                          id="source-select-button"
+                          class="multi-select-trigger"
+                          type="button"
+                          aria-haspopup="true"
+                          aria-expanded="false"
+                          aria-controls="source-select-menu"
+                        >
+                          <span id="source-select-label">No sources selected</span>
+                          <span class="multi-select-caret" aria-hidden="true">▾</span>
+                        </button>
+                        <div id="source-select-menu" class="multi-select-menu hidden" role="group" aria-label="Sources">
+                          <label class="multi-select-option">
+                            <input
+                              id="overview-source-profile"
+                              name="overview-sources"
+                              type="checkbox"
+                              value="profile"
+                              data-source-group="overview"
+                            />
+                            <span>Published</span>
+                          </label>
+                          <label class="multi-select-option">
+                            <input
+                              id="overview-source-drafts"
+                              name="overview-sources"
+                              type="checkbox"
+                              value="drafts"
+                              data-source-group="overview"
+                            />
+                            <span>Drafts</span>
+                          </label>
+                          <label class="multi-select-option">
+                            <input
+                              id="overview-source-likes"
+                              name="overview-sources"
+                              type="checkbox"
+                              value="likes"
+                              data-source-group="overview"
+                            />
+                            <span>Likes</span>
+                          </label>
+                          <label class="multi-select-option">
+                            <input
+                              id="overview-source-characters"
+                              name="overview-sources"
+                              type="checkbox"
+                              value="characters"
+                              data-source-group="overview"
+                            />
+                            <span>Cameos</span>
+                          </label>
+                          <label class="multi-select-option">
+                            <input
+                              id="overview-source-character-accounts"
+                              name="overview-sources"
+                              type="checkbox"
+                              value="characterAccounts"
+                              data-source-group="overview"
+                            />
+                            <span>Characters</span>
+                          </label>
+                          <label class="multi-select-option">
+                            <input
+                              id="overview-source-creators"
+                              name="overview-sources"
+                              type="checkbox"
+                              value="creators"
+                              data-source-group="overview"
+                            />
+                            <span>Creators</span>
+                          </label>
+                        </div>
                       </div>
                     </div>
-                  </div>
 
-                  <div class="picker-toolbar hidden">
-                    <label class="sort-field" for="sort-select">
-                      <span class="label">Sort</span>
-                      <select id="sort-select" class="sort-select" name="sort" aria-label="Sort videos">
-                        <option value="newest">Newest</option>
-                        <option value="oldest">Oldest</option>
-                        <option value="likes">Most Likes</option>
-                        <option value="views">Most Views</option>
-                        <option value="remixes">Most Remixed</option>
-                      </select>
-                    </label>
-                  </div>
+                    <div class="picker-toolbar hidden">
+                      <label class="sort-field" for="sort-select">
+                        <span class="label">Sort</span>
+                        <select id="sort-select" class="sort-select" name="sort" aria-label="Sort videos">
+                          <option value="newest">Newest</option>
+                          <option value="oldest">Oldest</option>
+                          <option value="likes">Most Likes</option>
+                          <option value="views">Most Views</option>
+                          <option value="remixes">Most Remixed</option>
+                        </select>
+                      </label>
+                    </div>
 
-                  <div class="primary-actions">
-                    <button id="fetch-button" type="submit" class="primary-cta">
-                      <span class="button-spinner" aria-hidden="true"></span>
-                      <span class="button-label">Fetch Videos</span>
-                    </button>
-                  </div>
-                </form>
-              </section>
+                    <div class="primary-actions">
+                      <button id="fetch-button" type="submit" class="primary-cta">
+                        <span class="button-spinner" aria-hidden="true"></span>
+                        <span class="button-label">Fetch Videos</span>
+                      </button>
+                    </div>
+                  </form>
+                </section>
 
               <section class="panel summary-panel hidden">
                 <article class="summary-item">
@@ -277,6 +269,69 @@
               </section>
             </div>
 
+              <section id="fetch-progress-panel" class="fetch-progress-panel hidden" aria-live="polite">
+                <div class="fetch-progress-footer">
+                  <div id="fetch-progress-bar-shell" class="fetch-progress-bar-shell">
+                    <div class="fetch-progress-bar" aria-hidden="true">
+                      <span id="fetch-progress-fill" class="fetch-progress-fill"></span>
+                    </div>
+                  </div>
+                  <button
+                    id="fetch-progress-toggle"
+                    type="button"
+                    class="ghost button-small fetch-progress-toggle"
+                    aria-expanded="false"
+                    aria-controls="fetch-progress-body"
+                  >
+                    <span class="fetch-progress-toggle-icon" aria-hidden="true"></span>
+                    <span class="visually-hidden">Toggle queue</span>
+                  </button>
+                </div>
+                <div id="fetch-progress-body" class="fetch-progress-body hidden">
+                  <div class="fetch-progress-body-shell">
+                    <div class="fetch-progress-head">
+                      <div class="fetch-progress-copy">
+                        <p id="fetch-progress-stage" class="fetch-progress-stage">Opening Sora...</p>
+                        <p id="fetch-progress-detail" class="fetch-progress-detail">
+                          Preparing a background Sora tab...
+                        </p>
+                      </div>
+                      <div class="fetch-progress-head-aside">
+                        <div id="fetch-progress-actions" class="fetch-progress-actions">
+                          <button
+                            id="fetch-progress-pause-action"
+                            type="button"
+                            class="ghost button-small fetch-progress-action"
+                          >
+                            Pause
+                          </button>
+                          <button
+                            id="fetch-progress-action"
+                            type="button"
+                            class="ghost button-small fetch-progress-action"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="fetch-progress-meta">
+                      <span id="fetch-progress-count" class="fetch-progress-pill">0 found</span>
+                      <span id="fetch-progress-eta" class="fetch-progress-pill">0s elapsed</span>
+                      <span id="fetch-progress-source" class="fetch-progress-pill">Source 1 of 1</span>
+                    </div>
+                    <section
+                      id="fetch-progress-queue-shell"
+                      class="fetch-progress-queue-shell"
+                      aria-label="Background fetch queue"
+                    >
+                      <div id="fetch-progress-queue" class="fetch-progress-queue" role="list"></div>
+                    </section>
+                  </div>
+                </div>
+              </section>
+            </div>
+
             <section class="panel picker-panel">
               <div class="picker-header">
                 <div class="picker-copy">
@@ -290,6 +345,31 @@
                   ></div>
                 </div>
                 <div class="picker-header-actions">
+                  <div
+                    id="results-view-toggle"
+                    class="results-view-toggle hidden"
+                    role="group"
+                    aria-label="Results layout"
+                  >
+                    <button
+                      id="results-view-list-button"
+                      type="button"
+                      class="ghost button-small results-view-toggle-button is-active"
+                      data-results-view="list"
+                      aria-pressed="true"
+                    >
+                      List
+                    </button>
+                    <button
+                      id="results-view-grid-button"
+                      type="button"
+                      class="ghost button-small results-view-toggle-button"
+                      data-results-view="grid"
+                      aria-pressed="false"
+                    >
+                      Grid
+                    </button>
+                  </div>
                   <button id="select-all-button" type="button" class="ghost button-small hidden">
                     Select All
                   </button>
@@ -310,64 +390,6 @@
                   <p id="empty-state-text" class="empty-state-text hidden"></p>
                 </div>
                 <div id="items-list" class="item-list hidden" aria-live="polite"></div>
-              </div>
-            </section>
-
-            <section id="fetch-progress-panel" class="fetch-progress-panel hidden" aria-live="polite">
-              <div class="fetch-progress-footer">
-                <div class="fetch-progress-bar-shell">
-                  <div class="fetch-progress-bar" aria-hidden="true">
-                    <span id="fetch-progress-fill" class="fetch-progress-fill"></span>
-                  </div>
-                </div>
-                <button
-                  id="fetch-progress-toggle"
-                  type="button"
-                  class="ghost button-small fetch-progress-toggle"
-                  aria-expanded="false"
-                  aria-controls="fetch-progress-body"
-                >
-                  Toggle queue
-                </button>
-              </div>
-              <div id="fetch-progress-body" class="fetch-progress-body hidden">
-                <div class="fetch-progress-body-shell">
-                  <div class="fetch-progress-head">
-                    <div class="fetch-progress-copy">
-                      <p id="fetch-progress-stage" class="fetch-progress-stage">Opening Sora...</p>
-                      <p id="fetch-progress-detail" class="fetch-progress-detail">
-                        Preparing a background Sora tab...
-                      </p>
-                    </div>
-                    <div class="fetch-progress-head-aside">
-                      <span id="fetch-progress-percent" class="fetch-progress-percent">0%</span>
-                      <div id="fetch-progress-actions" class="fetch-progress-actions">
-                        <button
-                          id="fetch-progress-pause-action"
-                          type="button"
-                          class="ghost button-small fetch-progress-action"
-                        >
-                          Pause
-                        </button>
-                        <button
-                          id="fetch-progress-action"
-                          type="button"
-                          class="ghost button-small fetch-progress-action"
-                        >
-                          Cancel
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                  <div class="fetch-progress-meta">
-                    <span id="fetch-progress-count" class="fetch-progress-pill">0 found</span>
-                    <span id="fetch-progress-eta" class="fetch-progress-pill">0s elapsed</span>
-                    <span id="fetch-progress-source" class="fetch-progress-pill">Source 1 of 1</span>
-                  </div>
-                  <section class="fetch-progress-queue-shell" aria-label="Background fetch queue">
-                    <div id="fetch-progress-queue" class="fetch-progress-queue" role="list"></div>
-                  </section>
-                </div>
               </div>
             </section>
           </section>
@@ -501,6 +523,19 @@
                       <option value="remixes">Most Remixed</option>
                     </select>
                     <p class="settings-help">Applied after new results load.</p>
+                  </div>
+
+                  <div class="settings-group">
+                    <label class="settings-label" for="default-results-layout-input">Results layout</label>
+                    <select
+                      id="default-results-layout-input"
+                      class="settings-input"
+                      name="defaultResultsLayout"
+                    >
+                      <option value="list">List</option>
+                      <option value="grid">Grid</option>
+                    </select>
+                    <p class="settings-help">Used when search results first appear.</p>
                   </div>
 
                   <div class="settings-group">
@@ -741,6 +776,37 @@
         </form>
       </dialog>
 
+      <dialog id="title-dialog" class="creator-dialog title-dialog" aria-labelledby="title-dialog-title">
+        <form id="title-dialog-form" class="creator-dialog-form title-dialog-form" method="dialog">
+          <div class="creator-dialog-head">
+            <span class="label">Rename Video</span>
+            <h2 id="title-dialog-title">Edit Title</h2>
+            <p class="creator-dialog-copy">
+              Update the title Save Sora should use for this video when displaying it here and when building the downloaded filename.
+            </p>
+          </div>
+
+          <label class="creator-dialog-field" for="title-dialog-input">
+            <span class="settings-label">Title</span>
+            <textarea
+              id="title-dialog-input"
+              name="title"
+              class="creator-dialog-input title-dialog-input"
+              rows="5"
+              spellcheck="false"
+              autocomplete="off"
+              autocapitalize="off"
+              placeholder=""
+            ></textarea>
+          </label>
+
+          <div class="creator-dialog-actions">
+            <button id="title-dialog-cancel" type="button" class="secondary">Cancel</button>
+            <button id="title-dialog-submit" type="submit" class="primary-cta">Save Title</button>
+          </div>
+        </form>
+      </dialog>
+
       <dialog id="creator-details-dialog" class="creator-details-dialog" aria-labelledby="creator-details-title">
         <div class="creator-details-panel">
           <div class="creator-details-head">
@@ -802,8 +868,15 @@
       </div>
     </div>
 
-    <button id="back-to-top-button" class="back-to-top hidden" type="button">
-      Back to top
+    <button
+      id="back-to-top-button"
+      class="back-to-top hidden"
+      type="button"
+      aria-label="Back to top"
+      title="Back to top"
+    >
+      <span class="back-to-top-icon" aria-hidden="true"></span>
+      <span class="visually-hidden">Back to top</span>
     </button>
 
     <script src="popup.js"></script>

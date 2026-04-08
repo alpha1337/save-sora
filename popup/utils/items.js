@@ -185,6 +185,33 @@ export function isActiveBatchItem(item) {
 }
 
 /**
+ * Returns the stable keys for every item that is still included in the active batch.
+ *
+ * Archive state is the selection model: active items are selected, archived items are not.
+ *
+ * @param {object[]} items
+ * @returns {string[]}
+ */
+export function getImplicitSelectedKeys(items) {
+  const keys = [];
+
+  for (const item of Array.isArray(items) ? items : []) {
+    if (!isActiveBatchItem(item)) {
+      continue;
+    }
+
+    const key = getItemKey(item);
+    if (!key || keys.includes(key)) {
+      continue;
+    }
+
+    keys.push(key);
+  }
+
+  return keys;
+}
+
+/**
  * Counts the items that are still eligible for selection.
  *
  * @param {object[]} items
@@ -361,6 +388,8 @@ export function getCreatorResultsTabKey(item) {
  */
 export function getCreatorResultsTabLabel(tabKey) {
   switch (tabKey) {
+    case "archived":
+      return "Archived";
     case "published":
       return "Posts";
     case "castIn":
@@ -370,7 +399,7 @@ export function getCreatorResultsTabLabel(tabKey) {
     case "characterCameos":
       return "Character Cameos";
     default:
-      return "All";
+      return "Queue";
   }
 }
 
@@ -385,12 +414,16 @@ export function getCreatorResultsTabLabel(tabKey) {
  */
 export function getCreatorResultsTabs(items) {
   const nextItems = Array.isArray(items) ? items : [];
-  if (!nextItems.length || !nextItems.every((item) => isCreatorScopedItem(item))) {
+  if (!nextItems.length) {
     return [];
   }
 
+  const activeItems = nextItems.filter((item) => !Boolean(item && item.isRemoved));
+  const archivedCount = nextItems.length - activeItems.length;
+  const canShowCreatorTabs =
+    activeItems.length > 0 && activeItems.every((item) => isCreatorScopedItem(item));
   const counts = new Map();
-  for (const item of nextItems) {
+  for (const item of activeItems) {
     const tabKey = getCreatorResultsTabKey(item);
     if (tabKey === "all") {
       continue;
@@ -399,15 +432,34 @@ export function getCreatorResultsTabs(items) {
     counts.set(tabKey, (counts.get(tabKey) || 0) + 1);
   }
 
-  if (counts.size <= 1) {
-    return [];
+  if (!canShowCreatorTabs || counts.size <= 1) {
+    if (archivedCount <= 0) {
+      return [];
+    }
+
+    const tabs = [];
+    if (activeItems.length > 0) {
+      tabs.push({
+        key: "all",
+        label: getCreatorResultsTabLabel("all"),
+        count: activeItems.length,
+      });
+    }
+
+    tabs.push({
+      key: "archived",
+      label: getCreatorResultsTabLabel("archived"),
+      count: archivedCount,
+    });
+
+    return tabs;
   }
 
-  return [
+  const tabs = [
     {
       key: "all",
       label: getCreatorResultsTabLabel("all"),
-      count: nextItems.length,
+      count: activeItems.length,
     },
     ...["published", "castIn", "characters", "characterCameos"]
       .filter((tabKey) => counts.has(tabKey))
@@ -417,6 +469,16 @@ export function getCreatorResultsTabs(items) {
         count: counts.get(tabKey) || 0,
       })),
   ];
+
+  if (archivedCount > 0) {
+    tabs.push({
+      key: "archived",
+      label: getCreatorResultsTabLabel("archived"),
+      count: archivedCount,
+    });
+  }
+
+  return tabs;
 }
 
 /**
@@ -428,9 +490,18 @@ export function getCreatorResultsTabs(items) {
  */
 export function filterItemsForCreatorResultsTab(items, activeTabKey) {
   const nextItems = Array.isArray(items) ? items : [];
-  if (!nextItems.length || !activeTabKey || activeTabKey === "all") {
-    return nextItems;
+  if (!nextItems.length) {
+    return [];
   }
 
-  return nextItems.filter((item) => getCreatorResultsTabKey(item) === activeTabKey);
+  if (activeTabKey === "archived") {
+    return nextItems.filter((item) => Boolean(item && item.isRemoved));
+  }
+
+  const activeItems = nextItems.filter((item) => !Boolean(item && item.isRemoved));
+  if (!activeTabKey || activeTabKey === "all") {
+    return activeItems;
+  }
+
+  return activeItems.filter((item) => getCreatorResultsTabKey(item) === activeTabKey);
 }

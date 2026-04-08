@@ -3,8 +3,8 @@ import { popupState } from "../../state.js";
 import { getSelectedSourceValues } from "../../utils/settings.js";
 import {
   applyCurrentSelectionUi,
-  getItemCheckboxesWithOptions,
-  getSelectedKeysFromDom,
+  getVisibleActiveKeysFromDom,
+  getVisibleArchivedKeysFromDom,
 } from "../selection.js";
 import {
   getSelectionScreenActionState,
@@ -29,7 +29,6 @@ export function syncPrimaryControls({ isBusy, isPaused, isFetching, isFetchPause
   if (dom.fetchButton) {
     dom.fetchButton.disabled =
       isBusy ||
-      isFetchPaused ||
       (!isResetMode && (!hasSelectedSources || !hasRequiredScopedSelection));
     dom.fetchButton.dataset.mode = isResetMode ? "reset" : "scan";
     dom.fetchButton.dataset.loading = String(isFetching);
@@ -61,7 +60,7 @@ export function syncPrimaryControls({ isBusy, isPaused, isFetching, isFetchPause
         isSourceSelectionVisible
           ? selectionScreenState.visibleCount === 0 ||
             selectionScreenState.visibleSelectedCount === selectionScreenState.visibleCount
-          : getItemCheckboxesWithOptions({ visibleOnly: true, enabledOnly: true }).length === 0
+          : getVisibleArchivedKeysFromDom().length === 0
       );
   }
 
@@ -70,7 +69,7 @@ export function syncPrimaryControls({ isBusy, isPaused, isFetching, isFetchPause
       isBusy || isPaused || isFetchPaused || (
         isSourceSelectionVisible
           ? selectionScreenState.visibleSelectedCount === 0
-          : getSelectedKeysFromDom({ visibleOnly: true }).length === 0
+          : getVisibleActiveKeysFromDom().length === 0
       );
   }
 }

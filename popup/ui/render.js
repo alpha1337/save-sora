@@ -1,6 +1,11 @@
 import { dom } from "../dom.js";
 import { popupState } from "../state.js";
-import { normalizeSortValue, normalizeSourceValues } from "../utils/settings.js";
+import {
+  normalizeResultsViewMode,
+  normalizeSortValue,
+  normalizeSourceValues,
+} from "../utils/settings.js";
+import { getImplicitSelectedKeys } from "../utils/items.js";
 import {
   applyTheme,
   hideNotice,
@@ -71,7 +76,7 @@ export function renderState(state) {
     : 0;
   const phase = state && state.phase ? state.phase : "idle";
   const items = Array.isArray(state && state.items) ? state.items : [];
-  const selectedKeys = Array.isArray(state && state.selectedKeys) ? state.selectedKeys : [];
+  const selectedKeys = getImplicitSelectedKeys(items);
   const titleOverrides =
     state && state.titleOverrides && typeof state.titleOverrides === "object"
       ? state.titleOverrides
@@ -83,6 +88,7 @@ export function renderState(state) {
   const theme = settings && settings.theme === "light" ? "light" : "dark";
   const defaultSource = normalizeSourceValues(settings.defaultSource);
   const defaultSort = normalizeSortValue(settings.defaultSort);
+  const resultsViewMode = normalizeResultsViewMode(settings.resultsViewMode);
   const preferredViewMode =
     settings && settings.preferredViewMode === "windowed" ? "windowed" : "fullscreen";
   const downloadMode = settings && settings.downloadMode === "direct" ? "direct" : "archive";
@@ -122,6 +128,7 @@ export function renderState(state) {
     defaultSort,
     preferredViewMode,
     downloadMode,
+    resultsViewMode,
     automaticUpdatesEnabled,
   });
   syncUpdateSurfaces(updateStatus);
@@ -182,27 +189,14 @@ export function renderState(state) {
     disableInputs: isBusy || isPaused,
     phase,
   };
+  popupState.browseState.viewMode = resultsViewMode;
 
   syncFetchProgressPanel(state);
   updateDownloadOverlay(state);
 
-  if (!isEditingTitleInput()) {
-    renderCurrentItems();
-  }
+  renderCurrentItems();
 
   updateAppScrollLock();
   updateBackToTopVisibility();
   syncPrimaryControls({ isBusy, isPaused, isFetching, isFetchPaused, hasResults });
-}
-
-/**
- * Returns whether a title input is currently focused.
- *
- * @returns {boolean}
- */
-function isEditingTitleInput() {
-  return (
-    document.activeElement instanceof HTMLInputElement &&
-    document.activeElement.classList.contains("item-title-input")
-  );
 }

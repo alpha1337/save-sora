@@ -362,14 +362,18 @@ export async function saveRuntimeTitleOverride(itemKey, title) {
  *
  * @param {string} itemKey
  * @param {boolean} removed
+ * @param {{sortKey?: string, query?: string, creatorTab?: string}} [options]
  * @returns {Promise<object>}
  */
-export async function saveRemovedState(itemKey, removed) {
+export async function saveRemovedState(itemKey, removed, options = {}) {
   return sendPopupMessage(
     {
       type: "REMOVE_ITEM",
       itemKey,
       removed,
+      sortKey: options.sortKey,
+      query: options.query,
+      creatorTab: options.creatorTab,
     },
     "Could not remove the video.",
   );

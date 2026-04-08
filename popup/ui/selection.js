@@ -1,18 +1,16 @@
 import { dom } from "../dom.js";
 import { popupState } from "../state.js";
-import {
-  getSelectionScreenActionState,
-  isSourceSelectionScreenVisible,
-  setSourceSelectionSummary,
-} from "./character-selection.js";
+import { setSourceSelectionSummary } from "./character-selection.js";
 import { formatFileSize, formatWholeNumber } from "../utils/format.js";
 import { getSelectedSourceValues } from "../utils/settings.js";
 import {
   getCreatorResultsTabLabel,
   getCreatorResultsTabs,
-  getActiveSelectableCount,
   getDownloadedCount,
   getTotalBatchMetrics,
+  getImplicitSelectedKeys,
+  getItemKey,
+  isActiveBatchItem,
 } from "../utils/items.js";
 
 /**
@@ -20,57 +18,75 @@ import {
  */
 
 /**
- * Returns the rendered item checkboxes, optionally filtered to the visible and/or
- * enabled subset.
+ * Returns the rendered item cards that are currently visible in the results list.
  *
- * @param {{visibleOnly?: boolean, enabledOnly?: boolean}} [options]
- * @returns {HTMLInputElement[]}
+ * @returns {HTMLElement[]}
  */
-export function getItemCheckboxesWithOptions(options = {}) {
-  const visibleOnly = Boolean(options.visibleOnly);
-  const enabledOnly = Boolean(options.enabledOnly);
-
+export function getVisibleItemCards() {
   if (!(dom.itemsList instanceof HTMLElement)) {
     return [];
   }
 
-  return [...dom.itemsList.querySelectorAll('input[type="checkbox"][data-item-key]')].filter((input) => {
-    if (!(input instanceof HTMLInputElement)) {
-      return false;
-    }
-
-    if (enabledOnly && input.disabled) {
-      return false;
-    }
-
-    if (!visibleOnly) {
-      return true;
-    }
-
-    const card = input.closest(".item-card");
-    return !(card instanceof HTMLElement) || !card.classList.contains("hidden");
-  });
+  return [...dom.itemsList.querySelectorAll(".item-card[data-item-key]")].filter((card) =>
+    card instanceof HTMLElement && !card.classList.contains("hidden"),
+  );
 }
 
 /**
- * Returns all rendered item checkboxes.
+ * Returns the visible item keys, optionally restricted to active batch items.
  *
- * @returns {HTMLInputElement[]}
+ * @returns {string[]}
  */
-export function getItemCheckboxes() {
-  return getItemCheckboxesWithOptions();
+export function getVisibleItemKeysFromDom() {
+  return getVisibleItemCards()
+    .map((card) => card.dataset.itemKey || "")
+    .filter(Boolean);
 }
 
 /**
- * Reads the current checked state from the DOM.
+ * Returns the active, download-eligible item keys.
  *
- * @param {{visibleOnly?: boolean, enabledOnly?: boolean}} [options]
+ * Archive state is the selection model, so this derives selection from the working set
+ * instead of a separate checkbox state.
+ *
+ * @param {{visibleOnly?: boolean}} [options]
  * @returns {string[]}
  */
 export function getSelectedKeysFromDom(options = {}) {
-  return getItemCheckboxesWithOptions(options)
-    .filter((input) => input.checked)
-    .map((input) => input.value);
+  const visibleOnly = Boolean(options.visibleOnly);
+  if (!visibleOnly) {
+    return getImplicitSelectedKeys(popupState.latestRenderState.items);
+  }
+
+  const visibleKeySet = new Set(getVisibleItemKeysFromDom());
+  return getImplicitSelectedKeys(popupState.latestRenderState.items)
+    .filter((key) => visibleKeySet.has(key));
+}
+
+/**
+ * Returns the archived item keys visible in the current list.
+ *
+ * @returns {string[]}
+ */
+export function getVisibleArchivedKeysFromDom() {
+  const visibleKeySet = new Set(getVisibleItemKeysFromDom());
+  return (Array.isArray(popupState.latestRenderState.items) ? popupState.latestRenderState.items : [])
+    .filter((item) => Boolean(item && item.isRemoved) && visibleKeySet.has(getItemKey(item)))
+    .map((item) => getItemKey(item))
+    .filter(Boolean);
+}
+
+/**
+ * Returns the active item keys visible in the current list.
+ *
+ * @returns {string[]}
+ */
+export function getVisibleActiveKeysFromDom() {
+  const visibleKeySet = new Set(getVisibleItemKeysFromDom());
+  return (Array.isArray(popupState.latestRenderState.items) ? popupState.latestRenderState.items : [])
+    .filter((item) => isActiveBatchItem(item) && visibleKeySet.has(getItemKey(item)))
+    .map((item) => getItemKey(item))
+    .filter(Boolean);
 }
 
 /**
@@ -105,9 +121,11 @@ export function applySelectionUi(
  * Recomputes the summary and batch controls from current popup state and DOM.
  */
 export function applyCurrentSelectionUi() {
-  const totalCount = getActiveSelectableCount(popupState.latestRenderState.items);
+  const totalCount = Array.isArray(popupState.latestRenderState.items)
+    ? popupState.latestRenderState.items.length
+    : 0;
   const selectedCount = getSelectedKeysFromDom().length;
-  const visibleCount = getItemCheckboxesWithOptions({ visibleOnly: true, enabledOnly: true }).length;
+  const visibleCount = getVisibleActiveKeysFromDom().length;
   const visibleSelectedCount = getSelectedKeysFromDom({ visibleOnly: true }).length;
 
   applySelectionUi(
@@ -136,6 +154,8 @@ export function updateSelectionSummary({
     return;
   }
 
+  dom.selectionSummary.classList.remove("hidden");
+
   if (dom.pickerPanelLabel instanceof HTMLElement) {
     dom.pickerPanelLabel.textContent =
       totalCount > 0
@@ -150,9 +170,9 @@ export function updateSelectionSummary({
     popupState.activeCreatorResultsTab,
   )
     ? popupState.activeCreatorResultsTab
-    : "all";
+    : creatorResultTabs[0]?.key || "all";
   const creatorFilterActive =
-    creatorResultTabs.length > 1 && activeCreatorResultsTab !== "all";
+    creatorResultTabs.length > 0 && activeCreatorResultsTab !== "all";
   const creatorFilterLabel = getCreatorResultsTabLabel(activeCreatorResultsTab);
   const isSourceSelectionMode =
     (selectedSources.includes("characterAccounts") || selectedSources.includes("creators")) &&
@@ -211,6 +231,12 @@ export function updateSelectionSummary({
     return;
   }
 
+  if (selectedCount === totalCount && downloadedCount === 0) {
+    dom.selectionSummary.textContent = "";
+    dom.selectionSummary.classList.add("hidden");
+    return;
+  }
+
   dom.selectionSummary.textContent = `${formatWholeNumber(selectedCount)} of ${formatWholeNumber(totalCount)} selected${downloadedCount > 0 ? ` • ${formatWholeNumber(downloadedCount)} downloaded` : ""}`;
 }
 
@@ -224,15 +250,9 @@ export function updateSelectionSummary({
 export function syncSelectionControls(totalCount, selectedCount, visibleCount = totalCount) {
   const phase = popupState.latestRenderState.phase || "idle";
   const hasLoadedResults = popupState.latestRenderState.items.length > 0;
-  const selectionScreenState = getSelectionScreenActionState();
-  const hasSourceSelection =
-    isSourceSelectionScreenVisible() && selectionScreenState.totalCount > 0;
   const isFetching = phase === "fetching";
   const showDownloadButton =
     hasLoadedResults && selectedCount > 0 && !popupState.latestBusy && !popupState.latestPaused && !isFetching;
-  const showBatchActions =
-    !isFetching &&
-    ((hasLoadedResults && visibleCount > 0) || hasSourceSelection);
   const showBrowseTools = hasLoadedResults;
   const showSummaryPanel = hasLoadedResults && !isFetching;
 
@@ -262,10 +282,15 @@ export function syncSelectionControls(totalCount, selectedCount, visibleCount = 
     popupState.exportMenuOpen = false;
   }
   if (dom.selectAllButton) {
-    dom.selectAllButton.classList.toggle("hidden", !showBatchActions);
+    dom.selectAllButton.classList.add("hidden");
+    dom.selectAllButton.disabled = true;
   }
   if (dom.clearSelectionButton) {
-    dom.clearSelectionButton.classList.toggle("hidden", !showBatchActions);
+    dom.clearSelectionButton.classList.add("hidden");
+    dom.clearSelectionButton.disabled = true;
+  }
+  if (dom.resultsViewToggle instanceof HTMLElement) {
+    dom.resultsViewToggle.classList.toggle("hidden", !showBrowseTools);
   }
   if (dom.summaryPanel instanceof HTMLElement) {
     dom.summaryPanel.classList.toggle("hidden", !showSummaryPanel);

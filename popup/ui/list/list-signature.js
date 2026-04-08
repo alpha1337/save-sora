@@ -26,6 +26,7 @@ export function buildRenderSignature(
   return JSON.stringify({
     phase,
     sort: popupState.browseState.sort,
+    viewMode: popupState.browseState.viewMode === "grid" ? "grid" : "list",
     query: normalizeSearchText(popupState.browseState.query),
     creatorTab: popupState.activeCreatorResultsTab,
     creatorResultTabs,

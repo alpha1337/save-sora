@@ -1,9 +1,12 @@
 import { dom } from "../dom.js";
 import { popupState } from "../state.js";
 import {
+  ArrowUpFromLineIcon,
   createLucideIcon,
   FullscreenIcon,
+  MoonIcon,
   PictureInPicture2Icon,
+  SunIcon,
 } from "../../vendor/lucide.js";
 
 /**
@@ -39,7 +42,9 @@ export function setActiveTab(nextTab) {
 export function initializeShellViewMode() {
   const viewContext = readShellViewContext();
   applyShellViewMode(viewContext.viewMode);
+  syncThemeToggleIcons();
   syncViewModeButtonLabel();
+  syncBackToTopButtonIcon();
   return viewContext;
 }
 
@@ -66,6 +71,7 @@ export function updateAppScrollLock() {
 
 export function isModalTakeoverOpen() {
   return (
+    (dom.titleDialog instanceof HTMLDialogElement && dom.titleDialog.open) ||
     (dom.creatorDialog instanceof HTMLDialogElement && dom.creatorDialog.open) ||
     (dom.creatorDetailsDialog instanceof HTMLDialogElement && dom.creatorDetailsDialog.open)
   );
@@ -222,6 +228,43 @@ function syncViewModeButtonIcon() {
       size: 18,
     }),
   );
+}
+
+function syncBackToTopButtonIcon() {
+  const iconContainer = dom.backToTopButton?.querySelector(".back-to-top-icon");
+  if (!(iconContainer instanceof HTMLElement)) {
+    return;
+  }
+
+  iconContainer.replaceChildren(
+    createLucideIcon(ArrowUpFromLineIcon, {
+      className: "lucide lucide-arrow-up-from-line",
+      size: 16,
+    }),
+  );
+}
+
+function syncThemeToggleIcons() {
+  const darkIconContainer = document.querySelector(".theme-toggle-icon-dark");
+  const lightIconContainer = document.querySelector(".theme-toggle-icon-light");
+
+  if (darkIconContainer instanceof HTMLElement) {
+    darkIconContainer.replaceChildren(
+      createLucideIcon(MoonIcon, {
+        className: "lucide lucide-moon",
+        size: 15,
+      }),
+    );
+  }
+
+  if (lightIconContainer instanceof HTMLElement) {
+    lightIconContainer.replaceChildren(
+      createLucideIcon(SunIcon, {
+        className: "lucide lucide-sun",
+        size: 15,
+      }),
+    );
+  }
 }
 
 function isKnownTopLevelTab(tabName) {

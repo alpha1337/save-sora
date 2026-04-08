@@ -32,14 +32,8 @@ export function renderItemsList(items, selectedKeys, titleOverrides, disableInpu
     return;
   }
 
-  const totalCount = Number(popupState.latestRenderState.totalCount);
-  const selectedCountTotal = Number(popupState.latestRenderState.selectedCountTotal);
-  const effectiveTotalCount =
-    Number.isFinite(totalCount) && totalCount >= 0 ? totalCount : items.length;
-  const effectiveSelectedCount =
-    Number.isFinite(selectedCountTotal) && selectedCountTotal >= 0
-      ? selectedCountTotal
-      : selectedKeys.length;
+  const resultsViewMode = popupState.browseState.viewMode === "grid" ? "grid" : "list";
+  syncResultsViewMode(resultsViewMode, items.length > 0);
 
   const creatorResultTabs = getCreatorResultsTabs(items);
   syncCreatorResultsTabs(creatorResultTabs);
@@ -48,6 +42,12 @@ export function renderItemsList(items, selectedKeys, titleOverrides, disableInpu
     items,
     popupState.activeCreatorResultsTab,
   );
+  const effectiveTotalCount = items.length;
+  const selectedCountTotal = Number(popupState.latestRenderState.selectedCountTotal);
+  const effectiveSelectedCount =
+    Number.isFinite(selectedCountTotal) && selectedCountTotal >= 0
+      ? selectedCountTotal
+      : selectedKeys.length;
   const sortedItems = getSortedItems(filteredItems, popupState.browseState.sort);
   const renderSignature = buildRenderSignature(
     sortedItems,
@@ -128,7 +128,7 @@ function syncCreatorResultsTabs(tabs) {
     return;
   }
 
-  if (!Array.isArray(tabs) || tabs.length <= 1) {
+  if (!Array.isArray(tabs) || tabs.length === 0) {
     popupState.activeCreatorResultsTab = "all";
     dom.creatorResultsTabs.replaceChildren();
     dom.creatorResultsTabs.classList.add("hidden");
@@ -137,7 +137,7 @@ function syncCreatorResultsTabs(tabs) {
 
   const validKeys = new Set(tabs.map((tab) => tab.key));
   if (!validKeys.has(popupState.activeCreatorResultsTab)) {
-    popupState.activeCreatorResultsTab = "all";
+    popupState.activeCreatorResultsTab = tabs[0].key;
   }
 
   const fragment = document.createDocumentFragment();
@@ -164,4 +164,31 @@ function syncCreatorResultsTabs(tabs) {
 
   dom.creatorResultsTabs.replaceChildren(fragment);
   dom.creatorResultsTabs.classList.remove("hidden");
+}
+
+function syncResultsViewMode(viewMode, hasItems) {
+  if (!(dom.itemsList instanceof HTMLElement)) {
+    return;
+  }
+
+  dom.itemsList.classList.toggle("is-grid-view", viewMode === "grid");
+  dom.itemsList.classList.toggle("is-list-view", viewMode !== "grid");
+
+  if (!(dom.resultsViewToggle instanceof HTMLElement)) {
+    return;
+  }
+
+  dom.resultsViewToggle.classList.toggle("hidden", !hasItems);
+
+  if (dom.resultsViewListButton instanceof HTMLButtonElement) {
+    const isActive = viewMode !== "grid";
+    dom.resultsViewListButton.classList.toggle("is-active", isActive);
+    dom.resultsViewListButton.setAttribute("aria-pressed", isActive ? "true" : "false");
+  }
+
+  if (dom.resultsViewGridButton instanceof HTMLButtonElement) {
+    const isActive = viewMode === "grid";
+    dom.resultsViewGridButton.classList.toggle("is-active", isActive);
+    dom.resultsViewGridButton.setAttribute("aria-pressed", isActive ? "true" : "false");
+  }
 }

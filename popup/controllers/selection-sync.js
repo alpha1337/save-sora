@@ -3,7 +3,7 @@ import { popupState } from "../state.js";
 import { renderCurrentItems } from "../ui/render.js";
 import {
   applyCurrentSelectionUi,
-  getItemCheckboxesWithOptions,
+  getVisibleItemKeysFromDom,
   getSelectedKeysFromDom,
 } from "../ui/selection.js";
 
@@ -17,7 +17,7 @@ import {
  */
 export async function updateSelectionFromDom() {
   const selectedKeys = getSelectedKeysFromDom();
-  const visibleKeys = getItemCheckboxesWithOptions().map((input) => input.value);
+  const visibleKeys = getVisibleItemKeysFromDom();
   popupState.latestRenderState.selectedKeys = selectedKeys;
   renderCurrentItems();
   applyCurrentSelectionUi();

@@ -1,7 +1,7 @@
 import { dom } from "../dom.js";
 import { saveDownloadedState, saveRemovedState } from "../runtime.js";
 import { popupState } from "../state.js";
-import { getItemKey } from "../utils/items.js";
+import { getImplicitSelectedKeys, getItemKey } from "../utils/items.js";
 import { hideNotice, showNotice, updateBackToTopVisibility } from "../ui/layout.js";
 import { renderCurrentItems, renderState } from "../ui/render.js";
 import { applyCurrentSelectionUi } from "../ui/selection.js";
@@ -23,34 +23,89 @@ export async function handleRemoveButtonClick(event, removeButton) {
   event.stopPropagation();
   hideNotice(dom.errorBox);
   stopPolling();
+  const previousScrollTop = dom.pickerScrollRegion instanceof HTMLElement
+    ? dom.pickerScrollRegion.scrollTop
+    : 0;
 
   const itemKey = removeButton.dataset.itemKey;
   const currentItem = popupState.latestRenderState.items.find((item) => getItemKey(item) === itemKey);
   const isDownloaded = Boolean(currentItem && currentItem.isDownloaded);
   const nextRemoved = !Boolean(currentItem && currentItem.isRemoved);
   const didOptimisticallyUpdate = isDownloaded
-    ? applyOptimisticDownloadedState(itemKey, false)
-    : applyOptimisticRemovedState(itemKey, nextRemoved);
+    ? applyOptimisticDownloadedState(itemKey, false, previousScrollTop)
+    : applyOptimisticRemovedState([itemKey], nextRemoved, previousScrollTop);
 
   try {
     await flushPendingTitleSaves();
     const response = isDownloaded
       ? await saveDownloadedState(itemKey, false)
-      : await saveRemovedState(itemKey, nextRemoved);
+      : await saveRemovedState(itemKey, nextRemoved, {
+        sortKey: popupState.browseState.sort,
+        query: popupState.browseState.query,
+        creatorTab: popupState.activeCreatorResultsTab,
+      });
 
     if (response.state) {
-      renderState(response.state);
+      renderState({
+        ...response.state,
+        items: popupState.latestRenderState.items,
+        selectedKeys: popupState.latestRenderState.selectedKeys,
+        titleOverrides: popupState.latestRenderState.titleOverrides,
+      });
       syncPollingForState(response.state);
     } else {
       await refreshStatus();
     }
+
+    restorePickerScroll(previousScrollTop);
   } catch (error) {
     if (didOptimisticallyUpdate) {
       await refreshStatus();
     }
 
+    restorePickerScroll(previousScrollTop);
+
     showNotice(dom.errorBox, error instanceof Error ? error.message : String(error));
     return;
+  }
+}
+
+/**
+ * Applies the archive state change to multiple visible items at once.
+ *
+ * @param {string[]} itemKeys
+ * @param {boolean} removed
+ * @returns {Promise<void>}
+ */
+export async function handleBatchArchiveStateChange(itemKeys, removed) {
+  const normalizedKeys = [...new Set((Array.isArray(itemKeys) ? itemKeys : []).filter(Boolean))];
+  if (normalizedKeys.length === 0) {
+    return;
+  }
+
+  hideNotice(dom.errorBox);
+  stopPolling();
+  const previousScrollTop = dom.pickerScrollRegion instanceof HTMLElement
+    ? dom.pickerScrollRegion.scrollTop
+    : 0;
+  const didOptimisticallyUpdate = applyOptimisticRemovedState(
+    normalizedKeys,
+    removed,
+    previousScrollTop,
+  );
+
+  try {
+    await flushPendingTitleSaves();
+    await Promise.all(normalizedKeys.map((itemKey) => saveRemovedState(itemKey, removed)));
+    await refreshStatus();
+    restorePickerScroll(previousScrollTop);
+  } catch (error) {
+    if (didOptimisticallyUpdate) {
+      await refreshStatus();
+    }
+
+    restorePickerScroll(previousScrollTop);
+    showNotice(dom.errorBox, error instanceof Error ? error.message : String(error));
   }
 }
 
@@ -62,15 +117,16 @@ export async function handleRemoveButtonClick(event, removeButton) {
  * @param {boolean} removed
  * @returns {boolean}
  */
-function applyOptimisticRemovedState(itemKey, removed) {
-  if (typeof itemKey !== "string" || !itemKey) {
+function applyOptimisticRemovedState(itemKeys, removed, scrollTop = 0) {
+  const keySet = new Set((Array.isArray(itemKeys) ? itemKeys : []).filter(Boolean));
+  if (keySet.size === 0) {
     return false;
   }
 
   let didUpdate = false;
   const nextItems = popupState.latestRenderState.items.map((item) => {
     const key = getItemKey(item);
-    if (key !== itemKey || Boolean(item.isRemoved) === Boolean(removed)) {
+    if (!keySet.has(key) || Boolean(item.isRemoved) === Boolean(removed)) {
       return item;
     }
 
@@ -85,14 +141,7 @@ function applyOptimisticRemovedState(itemKey, removed) {
     return false;
   }
 
-  const nextSelectedKeySet = new Set(popupState.latestRenderState.selectedKeys);
-  if (removed) {
-    nextSelectedKeySet.delete(itemKey);
-  } else {
-    nextSelectedKeySet.add(itemKey);
-  }
-
-  commitOptimisticItemState(nextItems, nextSelectedKeySet);
+  commitOptimisticItemState(nextItems, getImplicitSelectedKeys(nextItems), scrollTop);
   return true;
 }
 
@@ -104,7 +153,7 @@ function applyOptimisticRemovedState(itemKey, removed) {
  * @param {boolean} downloaded
  * @returns {boolean}
  */
-function applyOptimisticDownloadedState(itemKey, downloaded) {
+function applyOptimisticDownloadedState(itemKey, downloaded, scrollTop = 0) {
   if (typeof itemKey !== "string" || !itemKey) {
     return false;
   }
@@ -127,14 +176,7 @@ function applyOptimisticDownloadedState(itemKey, downloaded) {
     return false;
   }
 
-  const nextSelectedKeySet = new Set(popupState.latestRenderState.selectedKeys);
-  if (downloaded) {
-    nextSelectedKeySet.delete(itemKey);
-  } else {
-    nextSelectedKeySet.add(itemKey);
-  }
-
-  commitOptimisticItemState(nextItems, nextSelectedKeySet);
+  commitOptimisticItemState(nextItems, getImplicitSelectedKeys(nextItems), scrollTop);
   return true;
 }
 
@@ -143,16 +185,25 @@ function applyOptimisticDownloadedState(itemKey, downloaded) {
  * the derived selection UI.
  *
  * @param {object[]} items
- * @param {Set<string>} selectedKeySet
+ * @param {string[]} selectedKeys
  */
-function commitOptimisticItemState(items, selectedKeySet) {
+function commitOptimisticItemState(items, selectedKeys, scrollTop = 0) {
   popupState.latestRenderState = {
     ...popupState.latestRenderState,
     items,
-    selectedKeys: [...selectedKeySet],
+    selectedKeys: Array.isArray(selectedKeys) ? selectedKeys : [],
   };
 
   renderCurrentItems();
   applyCurrentSelectionUi();
+  restorePickerScroll(scrollTop);
   updateBackToTopVisibility();
+}
+
+function restorePickerScroll(scrollTop) {
+  if (!(dom.pickerScrollRegion instanceof HTMLElement)) {
+    return;
+  }
+
+  dom.pickerScrollRegion.scrollTop = Math.max(0, Number(scrollTop) || 0);
 }

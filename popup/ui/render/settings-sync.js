@@ -11,12 +11,13 @@ import {
  * Synchronizes the settings UI without overwriting a currently focused input.
  *
  * @param {object} settings
- * @param {{theme: string, defaultSource: string[], defaultSort: string, preferredViewMode: string, downloadMode: string, automaticUpdatesEnabled: boolean}} defaults
+ * @param {{theme: string, defaultSource: string[], defaultSort: string, resultsViewMode: string, preferredViewMode: string, downloadMode: string, automaticUpdatesEnabled: boolean}} defaults
  */
 export function syncSettingsInputs(settings, {
   theme,
   defaultSource,
   defaultSort,
+  resultsViewMode,
   preferredViewMode,
   downloadMode,
   automaticUpdatesEnabled,
@@ -43,6 +44,10 @@ export function syncSettingsInputs(settings, {
 
   if (dom.defaultSortInput && !isFocusedElement(dom.defaultSortInput)) {
     dom.defaultSortInput.value = defaultSort;
+  }
+
+  if (dom.defaultResultsLayoutInput && !isFocusedElement(dom.defaultResultsLayoutInput)) {
+    dom.defaultResultsLayoutInput.value = resultsViewMode === "grid" ? "grid" : "list";
   }
 
   if (dom.defaultThemeInput && !isFocusedElement(dom.defaultThemeInput)) {
@@ -82,6 +87,7 @@ export function syncSettingsInputs(settings, {
   popupState.appliedSettingsDefaults = {
     source: sourceSignature,
     sort: defaultSort,
+    viewMode: resultsViewMode === "grid" ? "grid" : "list",
   };
 
   if (dom.themeToggle && !isFocusedElement(dom.themeToggle)) {

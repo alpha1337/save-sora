@@ -5,7 +5,6 @@
  * This module only tracks transient UI concerns that belong to the popup itself.
  */
 export const popupState = {
-  titleSaveTimers: new Map(),
   pollTimer: null,
   settingsSaveTimer: null,
   fetchStatusTimer: null,
@@ -33,6 +32,9 @@ export const popupState = {
   creatorDetailsHeroSignature: "",
   creatorPreferenceSavingProfileId: "",
   creatorDialogSubmitting: false,
+  titleDialogItemKey: "",
+  titleDialogDefaultTitle: "",
+  titleDialogInitialTitle: "",
   currentPhase: "idle",
   updateGateHidden: false,
   skippedUpdateVersion: "",
@@ -62,6 +64,7 @@ export const popupState = {
   appliedSettingsDefaults: {
     source: "",
     sort: "",
+    viewMode: "list",
   },
   latestRenderState: {
     items: [],
@@ -76,6 +79,7 @@ export const popupState = {
   browseState: {
     query: "",
     sort: "newest",
+    viewMode: "list",
   },
   latestSummaryContext: {
     totalCount: 0,

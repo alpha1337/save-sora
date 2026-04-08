@@ -14,9 +14,7 @@ import {
 import {
   handleItemsListChange,
   handleItemsListClick,
-  handleItemsListFocusIn,
-  handleItemsListFocusOut,
-  handleItemsListInput,
+  handleItemsListKeydown,
 } from "./item-events.js";
 import { refreshStatus, stopPolling } from "./polling.js";
 import {
@@ -25,6 +23,7 @@ import {
   handleCreatorResultsTabClick,
   handleMaxVideosInput,
   handlePickerScroll,
+  handleResultsViewToggleClick,
   handleSearchInput,
   handleSettingsBlur,
   handleSettingsChange,
@@ -62,6 +61,12 @@ import {
   syncExportMenu,
   syncSourceMenuLabels,
 } from "./source-menus.js";
+import {
+  handleTitleDialogCancelClick,
+  handleTitleDialogCancelEvent,
+  handleTitleDialogClick,
+  handleTitleDialogSubmit,
+} from "./title-edits.js";
 
 /**
  * Attaches every popup event listener.
@@ -81,11 +86,10 @@ export function initializeEventHandlers() {
   dom.downloadOverlayCancel?.addEventListener("click", handleDownloadOverlayCancel);
   dom.selectAllButton?.addEventListener("click", handleSelectAllClick);
   dom.clearSelectionButton?.addEventListener("click", handleClearSelectionClick);
+  dom.resultsViewToggle?.addEventListener("click", handleResultsViewToggleClick);
   dom.itemsList?.addEventListener("click", handleItemsListClick);
   dom.itemsList?.addEventListener("change", handleItemsListChange);
-  dom.itemsList?.addEventListener("input", handleItemsListInput);
-  dom.itemsList?.addEventListener("focusin", handleItemsListFocusIn);
-  dom.itemsList?.addEventListener("focusout", handleItemsListFocusOut);
+  dom.itemsList?.addEventListener("keydown", handleItemsListKeydown);
   dom.searchInput?.addEventListener("input", handleSearchInput);
   dom.creatorResultsTabs?.addEventListener("click", handleCreatorResultsTabClick);
   dom.sortSelect?.addEventListener("change", handleSortChange);
@@ -99,6 +103,10 @@ export function initializeEventHandlers() {
   dom.creatorDialogForm?.addEventListener("submit", handleCreatorDialogSubmit);
   dom.creatorDialogCancel?.addEventListener("click", handleCreatorDialogCancelClick);
   dom.creatorDialog?.addEventListener("cancel", handleCreatorDialogCancelEvent);
+  dom.titleDialogForm?.addEventListener("submit", handleTitleDialogSubmit);
+  dom.titleDialogCancel?.addEventListener("click", handleTitleDialogCancelClick);
+  dom.titleDialog?.addEventListener("cancel", handleTitleDialogCancelEvent);
+  dom.titleDialog?.addEventListener("click", handleTitleDialogClick);
   dom.creatorDetailsClose?.addEventListener("click", handleCreatorDetailsCloseClick);
   dom.creatorDetailsDialog?.addEventListener("cancel", handleCreatorDetailsCancelEvent);
   dom.creatorDetailsDialog?.addEventListener("change", handleCreatorDetailsChange);
@@ -107,6 +115,7 @@ export function initializeEventHandlers() {
   dom.defaultSourceButton?.addEventListener("click", handleSettingsSourceTriggerClick);
   dom.defaultSourceMenu?.addEventListener("change", handleSettingsSourceMenuChange);
   dom.defaultSortInput?.addEventListener("change", handleSettingsChange);
+  dom.defaultResultsLayoutInput?.addEventListener("change", handleSettingsChange);
   dom.defaultThemeInput?.addEventListener("change", handleSettingsChange);
   dom.downloadModeInput?.addEventListener("change", handleSettingsChange);
   dom.automaticUpdatesInput?.addEventListener("change", handleSettingsChange);

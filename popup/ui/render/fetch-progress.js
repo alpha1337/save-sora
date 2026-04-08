@@ -1,5 +1,6 @@
 import { dom } from "../../dom.js";
 import { popupState } from "../../state.js";
+import { CircleChevronUpIcon, createLucideIcon } from "../../../vendor/lucide.js";
 
 /**
  * Renders the fixed fetch-status drawer shown while the background worker is
@@ -10,10 +11,10 @@ import { popupState } from "../../state.js";
 export function syncFetchProgressPanel(state) {
   if (
     !(dom.fetchProgressPanel instanceof HTMLElement) ||
+    !(dom.fetchProgressBarShell instanceof HTMLElement) ||
     !(dom.fetchProgressActions instanceof HTMLElement) ||
     !(dom.fetchProgressStage instanceof HTMLElement) ||
     !(dom.fetchProgressDetail instanceof HTMLElement) ||
-    !(dom.fetchProgressPercent instanceof HTMLElement) ||
     !(dom.fetchProgressFill instanceof HTMLElement) ||
     !(dom.fetchProgressToggle instanceof HTMLButtonElement) ||
     !(dom.fetchProgressBody instanceof HTMLElement) ||
@@ -22,6 +23,7 @@ export function syncFetchProgressPanel(state) {
     !(dom.fetchProgressSource instanceof HTMLElement) ||
     !(dom.fetchProgressCount instanceof HTMLElement) ||
     !(dom.fetchProgressEta instanceof HTMLElement) ||
+    !(dom.fetchProgressQueueShell instanceof HTMLElement) ||
     !(dom.fetchProgressQueue instanceof HTMLElement)
   ) {
     return;
@@ -51,14 +53,19 @@ export function syncFetchProgressPanel(state) {
   );
   dom.fetchProgressToggle.title =
     isVisible && popupState.fetchDrawerExpanded ? "Collapse queue" : "Expand queue";
-  dom.fetchProgressToggle.textContent = "";
+  syncFetchProgressToggleIcon();
 
   if (!isVisible) {
     dom.fetchProgressFill.style.width = "0%";
+    dom.fetchProgressBarShell.removeAttribute("data-progress-tooltip");
+    dom.fetchProgressBarShell.removeAttribute("aria-label");
+    dom.fetchProgressBarShell.style.removeProperty("--fetch-progress-tooltip-position");
     dom.fetchProgressPauseAction.disabled = false;
     dom.fetchProgressPauseAction.textContent = "Pause";
     dom.fetchProgressAction.disabled = false;
     dom.fetchProgressAction.textContent = "Cancel";
+    dom.fetchProgressSource.classList.add("hidden");
+    dom.fetchProgressQueueShell.classList.add("hidden");
     dom.fetchProgressQueue.replaceChildren();
     setFooterHeight(0);
     return;
@@ -91,6 +98,14 @@ export function syncFetchProgressPanel(state) {
       ? progress.currentSourceLabel
       : "videos";
   const queueLabels = getQueueLabels(progress, currentSourceLabel);
+  const shouldShowSourceStatus = totalSources > 1;
+  const shouldShowQueue = queueLabels.length > 1;
+  const tooltipText = getProgressTooltipLabel({
+    hasConcreteSourceEstimate,
+    isPaused,
+    progressPercent,
+  });
+  const tooltipPosition = `${Math.max(10, Math.min(90, progressPercent || 0))}%`;
 
   dom.fetchProgressStage.textContent =
     (progress && progress.stageLabel) || "Fetching videos";
@@ -103,15 +118,19 @@ export function syncFetchProgressPanel(state) {
     "hidden",
     !detailText || detailText === dom.fetchProgressStage.textContent,
   );
-  dom.fetchProgressPercent.textContent = isPaused
-    ? "Paused"
-    : progress && progress.stage === "fetching-source" && !hasConcreteSourceEstimate
-      ? "Live"
-      : `${progressPercent}%`;
   dom.fetchProgressFill.style.width = `${visibleWidth}%`;
-  dom.fetchProgressSource.textContent = `${toTitleCase(currentSourceLabel)} • ${currentSourceIndex} of ${totalSources}`;
+  dom.fetchProgressBarShell.dataset.progressTooltip = tooltipText;
+  dom.fetchProgressBarShell.setAttribute("aria-label", tooltipText);
+  dom.fetchProgressBarShell.style.setProperty(
+    "--fetch-progress-tooltip-position",
+    tooltipPosition,
+  );
+  dom.fetchProgressSource.textContent = shouldShowSourceStatus
+    ? `${currentSourceIndex} of ${totalSources} sources · ${toTitleCase(currentSourceLabel)}`
+    : "";
+  dom.fetchProgressSource.classList.toggle("hidden", !shouldShowSourceStatus);
   dom.fetchProgressCount.textContent = hasConcreteSourceEstimate
-    ? `${formatCompactCount(sourceItemsFound)} of ${formatCompactCount(estimatedTotalCount)}`
+    ? `${formatCompactCount(sourceItemsFound)} found of ${formatCompactCount(estimatedTotalCount)}`
     : itemsFound > 0
       ? `${formatCompactCount(itemsFound)} found`
       : "Searching...";
@@ -129,11 +148,30 @@ export function syncFetchProgressPanel(state) {
         : "Cancel";
 
   renderQueue(queueLabels, currentSourceIndex);
+  dom.fetchProgressQueueShell.classList.toggle("hidden", !shouldShowQueue);
   setFooterHeight(0);
+}
+
+function syncFetchProgressToggleIcon() {
+  const iconContainer = dom.fetchProgressToggle?.querySelector(".fetch-progress-toggle-icon");
+  if (!(iconContainer instanceof HTMLElement)) {
+    return;
+  }
+
+  iconContainer.replaceChildren(
+    createLucideIcon(CircleChevronUpIcon, {
+      className: "lucide lucide-circle-chevron-up",
+      size: 18,
+    }),
+  );
 }
 
 function renderQueue(queueLabels, currentSourceIndex) {
   dom.fetchProgressQueue.replaceChildren();
+
+  if (!Array.isArray(queueLabels) || queueLabels.length <= 1) {
+    return;
+  }
 
   queueLabels.forEach((label, index) => {
     const queueItem = document.createElement("div");
@@ -150,17 +188,7 @@ function renderQueue(queueLabels, currentSourceIndex) {
     const title = document.createElement("span");
     title.className = "fetch-progress-queue-title";
     title.textContent = toTitleCase(label);
-
-    const status = document.createElement("span");
-    status.className = "fetch-progress-queue-status";
-    status.textContent =
-      index + 1 < currentSourceIndex
-        ? "Done"
-        : index + 1 === currentSourceIndex
-          ? "Live"
-          : "Next";
-
-    queueItem.append(title, status);
+    queueItem.append(title);
     dom.fetchProgressQueue.append(queueItem);
   });
 }
@@ -196,6 +224,18 @@ function clampProgressRatio(value) {
   }
 
   return Math.max(0, Math.min(1, numeric));
+}
+
+function getProgressTooltipLabel({ hasConcreteSourceEstimate, isPaused, progressPercent }) {
+  if (hasConcreteSourceEstimate) {
+    return `${progressPercent}% complete`;
+  }
+
+  if (isPaused) {
+    return "Paused";
+  }
+
+  return "Streaming live results";
 }
 
 function getElapsedLabel(state, isPaused) {

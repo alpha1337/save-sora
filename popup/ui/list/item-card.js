@@ -3,6 +3,7 @@ import { matchesSmartSearch } from "../../utils/search.js";
 import { renderMediaPreview } from "../media.js";
 import {
   createFooter,
+  createGridTooltip,
   createMetaRow,
   createPrompt,
   createTitleRow,
@@ -34,7 +35,6 @@ export function createItemCard(item, context) {
   card.classList.toggle("hidden", !matchesQuery);
   card.dataset.itemKey = key;
 
-  const checkbox = createItemCheckbox(key, isSelected, context.disableInputs, item);
   const media = document.createElement("div");
   media.className = "item-media";
   media.dataset.itemKey = key;
@@ -46,28 +46,14 @@ export function createItemCard(item, context) {
     titleOverrides: context.titleOverrides,
   });
 
-  card.append(checkbox, media, body);
-  return { card, matchesQuery, isSelected };
-}
+  const gridTooltip = createGridTooltip(item, {
+    key,
+    disableInputs: context.disableInputs,
+    titleOverrides: context.titleOverrides,
+  });
 
-/**
- * Creates the card checkbox used for item selection.
- *
- * @param {string} key
- * @param {boolean} checked
- * @param {boolean} disableInputs
- * @param {object} item
- * @returns {HTMLInputElement}
- */
-function createItemCheckbox(key, checked, disableInputs, item) {
-  const checkbox = document.createElement("input");
-  checkbox.type = "checkbox";
-  checkbox.className = "item-checkbox";
-  checkbox.value = key;
-  checkbox.checked = checked;
-  checkbox.disabled = disableInputs || Boolean(item.isRemoved) || Boolean(item.isDownloaded);
-  checkbox.dataset.itemKey = key;
-  return checkbox;
+  card.append(media, body, gridTooltip);
+  return { card, matchesQuery, isSelected };
 }
 
 /**

@@ -8,11 +8,6 @@
 export const POLL_INTERVAL_MS = 1200;
 
 /**
- * Debounce delay used before persisting a renamed title.
- */
-export const TITLE_SAVE_DEBOUNCE_MS = 250;
-
-/**
  * Debounce delay used before persisting settings edits.
  */
 export const SETTINGS_SAVE_DEBOUNCE_MS = 250;

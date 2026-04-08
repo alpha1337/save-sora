@@ -10,12 +10,12 @@ import { popupState } from "../state.js";
 import {
   formatSourceSelectionLabel,
   getSelectedSourceValues,
+  normalizeResultsViewMode,
   normalizeSortValue,
   serializeSourceValues,
 } from "../utils/settings.js";
 import { applyTheme, showNotice, updateBackToTopVisibility } from "../ui/layout.js";
 import { renderCurrentItems } from "../ui/render.js";
-import { applyCurrentSelectionUi } from "../ui/selection.js";
 import { refreshStatus } from "./polling.js";
 
 /**
@@ -32,6 +32,47 @@ export function handleSearchInput() {
 export function handleSortChange() {
   popupState.browseState.sort = dom.sortSelect?.value || "newest";
   rerenderBrowseResults();
+}
+
+/**
+ * Switches the current results presentation between list and grid modes.
+ *
+ * @param {MouseEvent} event
+ */
+export async function handleResultsViewToggleClick(event) {
+  const button = event.target instanceof Element
+    ? event.target.closest("[data-results-view]")
+    : null;
+  if (!(button instanceof HTMLButtonElement)) {
+    return;
+  }
+
+  const nextViewMode = normalizeResultsViewMode(button.dataset.resultsView);
+  if (nextViewMode === popupState.browseState.viewMode) {
+    return;
+  }
+
+  popupState.browseState.viewMode = nextViewMode;
+  if (dom.defaultResultsLayoutInput instanceof HTMLSelectElement) {
+    dom.defaultResultsLayoutInput.value = nextViewMode;
+  }
+  renderCurrentItems();
+
+  if (dom.settingsStatus instanceof HTMLElement) {
+    dom.settingsStatus.textContent = "Saving...";
+  }
+
+  try {
+    await saveRuntimeSettings({ resultsViewMode: nextViewMode });
+    if (dom.settingsStatus instanceof HTMLElement) {
+      dom.settingsStatus.textContent = "Saved automatically.";
+    }
+  } catch (error) {
+    if (dom.settingsStatus instanceof HTMLElement) {
+      dom.settingsStatus.textContent = "Could not save.";
+    }
+    showNotice(dom.errorBox, error instanceof Error ? error.message : String(error));
+  }
 }
 
 /**
@@ -207,13 +248,16 @@ export async function handleClearVolatileBackupsClick() {
 }
 
 /**
- * Re-renders the list after a local browse-state change.
+ * Re-renders the list after a local browse-state change without asking the
+ * background worker for a fresh snapshot.
  */
 function rerenderBrowseResults() {
   if (dom.pickerScrollRegion instanceof HTMLElement) {
     dom.pickerScrollRegion.scrollTop = 0;
   }
-  void refreshStatus();
+
+  renderCurrentItems();
+  updateBackToTopVisibility();
 }
 
 /**
@@ -225,6 +269,7 @@ async function saveSettingsFromForm() {
   if (
     !(dom.maxVideosInput instanceof HTMLInputElement) ||
     !(dom.defaultSortInput instanceof HTMLSelectElement) ||
+    !(dom.defaultResultsLayoutInput instanceof HTMLSelectElement) ||
     !(dom.defaultThemeInput instanceof HTMLSelectElement) ||
     !(dom.defaultShellInput instanceof HTMLSelectElement) ||
     !(dom.downloadModeInput instanceof HTMLSelectElement) ||
@@ -241,6 +286,7 @@ async function saveSettingsFromForm() {
     Number.isFinite(normalizedValue) && normalizedValue > 0 ? Math.floor(normalizedValue) : null;
   const defaultSource = getSelectedSourceValues(dom.defaultSourceInputs);
   const defaultSort = normalizeSortValue(dom.defaultSortInput.value);
+  const resultsViewMode = normalizeResultsViewMode(dom.defaultResultsLayoutInput.value);
   const theme = dom.defaultThemeInput.value === "light" ? "light" : "dark";
   const preferredViewMode =
     dom.defaultShellInput.value === "windowed" ? "windowed" : "fullscreen";
@@ -252,6 +298,7 @@ async function saveSettingsFromForm() {
       maxVideos,
       defaultSource,
       defaultSort,
+      resultsViewMode,
       theme,
       preferredViewMode,
       hasExplicitPreferredViewModeChoice: true,
@@ -267,6 +314,7 @@ async function saveSettingsFromForm() {
   popupState.appliedSettingsDefaults = {
     source: serializeSourceValues(defaultSource),
     sort: defaultSort,
+    viewMode: resultsViewMode,
   };
 
   if (dom.defaultSourceLabel instanceof HTMLElement) {
@@ -276,8 +324,10 @@ async function saveSettingsFromForm() {
   if (dom.sortSelect) {
     dom.sortSelect.value = defaultSort;
     popupState.browseState.sort = defaultSort;
-    rerenderBrowseResults();
   }
+
+  popupState.browseState.viewMode = resultsViewMode;
+  rerenderBrowseResults();
 
   if (dom.themeToggle) {
     dom.themeToggle.checked = theme === "light";

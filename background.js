@@ -514,7 +514,14 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
     void setItemRemovedState(message.itemKey, message.removed !== false)
       .then(() => {
-        sendResponse({ ok: true, state: buildPopupStateSnapshot(currentState) });
+        return buildPopupStateSnapshotForView(currentState, {
+          sortKey: message.sortKey,
+          query: message.query,
+          creatorTab: message.creatorTab,
+        });
+      })
+      .then((state) => {
+        sendResponse({ ok: true, state });
       })
       .catch((error) => {
         console.error("Failed to remove the item from the Sora master set.", error);
@@ -739,7 +746,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       return false;
     }
 
-    if (!Array.isArray(currentState.selectedKeys) || currentState.selectedKeys.length === 0) {
+    if (getImplicitSelectedKeys(currentState.items).length === 0) {
       sendResponse({ ok: false, error: "Select at least one video before downloading." });
       return false;
     }
@@ -866,6 +873,7 @@ function createDefaultState(overrides = {}) {
       maxVideos: null,
       defaultSource: [...DEFAULT_SOURCE_VALUES],
       defaultSort: "newest",
+      resultsViewMode: "list",
       theme: "dark",
       downloadMode: "archive",
       hasExplicitDownloadModeChoice: false,
@@ -897,6 +905,10 @@ function normalizeResumableFetchRequest(request) {
 
 function normalizePreferredViewMode(value) {
   return value === "fullscreen" ? "fullscreen" : "windowed";
+}
+
+function normalizeResultsViewMode(value) {
+  return value === "grid" ? "grid" : "list";
 }
 
 function normalizeExplicitPreferredViewModeChoice(value) {
@@ -3710,12 +3722,9 @@ function buildPopupStateSnapshot(state = currentState) {
   }
 
   const visibleKeys = new Set(limitedItems.map((item) => getCanonicalItemKey(item)));
-  const selectedKeysTotal = Array.isArray(sourceState.selectedKeys)
-    ? sourceState.selectedKeys.filter((key) => typeof key === "string").length
-    : 0;
-  const selectedKeys = Array.isArray(sourceState.selectedKeys)
-    ? sourceState.selectedKeys.filter((key) => typeof key === "string" && visibleKeys.has(key))
-    : [];
+  const implicitSelectedKeys = getImplicitSelectedKeys(sourceItems);
+  const selectedKeysTotal = implicitSelectedKeys.length;
+  const selectedKeys = implicitSelectedKeys.filter((key) => typeof key === "string" && visibleKeys.has(key));
   const titleOverrides = pruneLegacyTitleOverrides(limitedItems, sourceState.titleOverrides);
   const totalItemCount = sourceItems.length + backedUpItemCount;
   const hiddenItemCount = Math.max(0, totalItemCount - limitedItems.length);
@@ -3906,11 +3915,8 @@ async function buildPopupStateSnapshotForView(state = currentState, options = {}
   const popupSnapshot = buildPopupStateSnapshot(sourceState);
   const sortKey = typeof options.sortKey === "string" && options.sortKey ? options.sortKey : "newest";
   const query = typeof options.query === "string" ? options.query : "";
-  const creatorTab =
-    typeof options.creatorTab === "string" && options.creatorTab ? options.creatorTab : "all";
   const mergedItems = await loadMergedFetchItemsForState(sourceState);
-  const creatorFilteredItems = filterPopupItemsForCreatorTab(mergedItems, creatorTab);
-  const queryFilteredItems = creatorFilteredItems.filter((item) =>
+  const queryFilteredItems = mergedItems.filter((item) =>
     matchesPopupSearch(item, sourceState.titleOverrides, query),
   );
   const sortedItems = getSortedPopupItems(queryFilteredItems, sortKey);
@@ -3919,27 +3925,7 @@ async function buildPopupStateSnapshotForView(state = currentState, options = {}
     .filter(Boolean);
   const totalItemCount = fullItems.length;
   const visibleKeys = new Set(fullItems.map((item) => getCanonicalItemKey(item)));
-  const selectableSourceItemKeys = normalizeSelectedKeys(
-    sourceState.items,
-    (Array.isArray(sourceState.items) ? sourceState.items : []).map((item) => getCanonicalItemKey(item)),
-  );
-  const normalizedSelectedSourceKeys = normalizeSelectedKeys(
-    sourceState.items,
-    sourceState.selectedKeys,
-  );
-  const shouldExpandImplicitSelection =
-    fullItems.length > selectableSourceItemKeys.length &&
-    selectableSourceItemKeys.length > 0 &&
-    normalizedSelectedSourceKeys.length === selectableSourceItemKeys.length &&
-    (sourceState.phase === "fetching" ||
-      sourceState.phase === "fetch-paused" ||
-      Number(sourceState.backedUpItemCount) > 0);
-  const resolvedSelectedKeys = shouldExpandImplicitSelection
-    ? normalizeSelectedKeys(
-      fullItems,
-      fullItems.map((item) => getCanonicalItemKey(item)),
-    )
-    : normalizeSelectedKeys(fullItems, sourceState.selectedKeys);
+  const resolvedSelectedKeys = getImplicitSelectedKeys(fullItems);
   const selectedKeysTotal = resolvedSelectedKeys.length;
 
   return {
@@ -3963,6 +3949,10 @@ async function loadMergedFetchItemsForState(state = currentState) {
   const mergedItems = new Map();
 
   for (const item of Array.isArray(sourceState.items) ? sourceState.items : []) {
+    mergedItems.set(getCanonicalItemKey(item), item);
+  }
+
+  for (const item of normalizeCatalogItems(currentCatalog.items)) {
     mergedItems.set(getCanonicalItemKey(item), item);
   }
 
@@ -4294,6 +4284,7 @@ async function restoreState() {
         maxVideos: getMaxVideosSetting(currentState.settings),
         defaultSource: normalizeDefaultSource(currentState.settings.defaultSource),
         defaultSort: normalizeDefaultSort(currentState.settings.defaultSort),
+        resultsViewMode: normalizeResultsViewMode(currentState.settings.resultsViewMode),
         theme: normalizeTheme(currentState.settings.theme),
         downloadMode: normalizeDownloadMode(currentState.settings.downloadMode),
         hasExplicitDownloadModeChoice: normalizeExplicitDownloadModeChoice(
@@ -4426,7 +4417,7 @@ function normalizeRestoredTransientState(state) {
   }
 
   const restoredItems = normalizeCatalogItems(nextState.items);
-  const restoredSelectedKeys = normalizeSelectedKeys(restoredItems, nextState.selectedKeys);
+  const restoredSelectedKeys = getImplicitSelectedKeys(restoredItems);
   const hasRecoveredPreview = restoredItems.length > 0;
 
   return {
@@ -4553,6 +4544,8 @@ async function resetExtensionState() {
   } catch (error) {
     console.warn("Failed to clear volatile backups while resetting the extension state.", error);
   }
+
+  await setCatalogState(createDefaultCatalogState());
 
   await setState(
     createDefaultState({
@@ -4740,6 +4733,13 @@ function normalizeSelectedKeys(items, requestedKeys) {
   return normalized;
 }
 
+function getImplicitSelectedKeys(items) {
+  return normalizeSelectedKeys(
+    items,
+    (Array.isArray(items) ? items : []).map((item) => getCanonicalItemKey(item)),
+  );
+}
+
 function sanitizeFilenamePart(value) {
   if (typeof value !== "string") {
     return "";
@@ -4847,8 +4847,8 @@ function applyTitleOverride(item, titleOverrides) {
   };
 }
 
-function getSelectedItems(items, selectedKeys, titleOverrides) {
-  const validSelection = new Set(normalizeSelectedKeys(items, selectedKeys));
+function getSelectedItems(items, _selectedKeys, titleOverrides) {
+  const validSelection = new Set(getImplicitSelectedKeys(items));
   return (Array.isArray(items) ? items : [])
     .filter((item) => validSelection.has(getCanonicalItemKey(item)))
     .map((item) => applyTitleOverride(item, titleOverrides));
@@ -6017,7 +6017,7 @@ async function buildScanSelectionState(items, options = {}) {
       characterIds: [...characterIds],
       creatorIds: [...creatorIds],
     },
-    selectedKeys: normalizeSelectedKeys(sourceItems, selectedKeys),
+    selectedKeys: getImplicitSelectedKeys(sourceItems),
   };
 }
 
@@ -6725,10 +6725,7 @@ async function scanSources(sources, searchQuery = "") {
   }
 
   const cachedFilteredItems = filterItemsBySearchQuery(cachedWorkingItems, searchQuery);
-  const cachedSelectedKeys = normalizeSelectedKeys(
-    cachedFilteredItems,
-    cachedFilteredItems.map((item) => getCanonicalItemKey(item)),
-  );
+  const cachedSelectedKeys = getImplicitSelectedKeys(cachedFilteredItems);
   const cachedSourceIds = deriveSourceIdsFromItems(cachedFilteredItems);
   const cachedTitleOverrides = pruneLegacyTitleOverrides(
     cachedFilteredItems,
@@ -7856,32 +7853,36 @@ async function removeCreatorProfile(creatorProfileId) {
 }
 
 async function setTitleOverride(itemKey, requestedTitle) {
-  const validKeys = new Set(
-    (Array.isArray(currentState.items) ? currentState.items : []).map(
-      (item) => item.key || getItemKey(item),
-    ),
-  );
-
-  if (!validKeys.has(itemKey)) {
-    throw new Error("That video is no longer in the current list.");
-  }
-
   const nextOverrides = {
     ...(currentState.titleOverrides && typeof currentState.titleOverrides === "object"
       ? currentState.titleOverrides
       : {}),
   };
 
-  const matchingItem = (currentState.items || []).find(
-    (item) => (item.key || getItemKey(item)) === itemKey,
-  );
-  const defaultTitle = sanitizeFilenamePart(getDefaultItemTitle(matchingItem));
   const sanitized = sanitizeFilenamePart(requestedTitle);
+  const matchingItem =
+    normalizeCatalogItems(currentState.items).find((item) => getCanonicalItemKey(item) === itemKey) ||
+    normalizeCatalogItems(currentCatalog.items).find((item) => getCanonicalItemKey(item) === itemKey) ||
+    null;
 
-  if (!sanitized || sanitized === defaultTitle) {
+  if (!sanitized) {
     delete nextOverrides[itemKey];
-  } else {
+  } else if (!matchingItem) {
     nextOverrides[itemKey] = sanitized;
+  } else {
+    const defaultTitle = sanitizeFilenamePart(getDefaultItemTitle(matchingItem));
+    const hasDiscoveryPhrase =
+      typeof matchingItem.discoveryPhrase === "string" && matchingItem.discoveryPhrase.trim().length > 0;
+    const legacyDefaultTitle = sanitizeFilenamePart(getLegacyDefaultItemTitle(matchingItem));
+
+    if (
+      sanitized === defaultTitle ||
+      (hasDiscoveryPhrase && sanitized === legacyDefaultTitle)
+    ) {
+      delete nextOverrides[itemKey];
+    } else {
+      nextOverrides[itemKey] = sanitized;
+    }
   }
 
   await setState({
@@ -7894,11 +7895,18 @@ async function setItemRemovedState(itemKey, removed) {
     throw new Error("Wait until the current fetch or download run finishes before removing videos.");
   }
 
-  const currentItems = Array.isArray(currentState.items) ? currentState.items : [];
+  const currentItems = await loadMergedFetchItemsForState(currentState);
+  let nextBackedUpItemCount = 0;
+  let foundMatch = false;
   let didUpdate = false;
   const nextItems = currentItems.map((item) => {
-    const key = item.key || getItemKey(item);
-    if (key !== itemKey || Boolean(item.isRemoved) === Boolean(removed)) {
+    const key = getCanonicalItemKey(item);
+    if (key !== itemKey) {
+      return item;
+    }
+
+    foundMatch = true;
+    if (Boolean(item.isRemoved) === Boolean(removed)) {
       return item;
     }
 
@@ -7909,24 +7917,14 @@ async function setItemRemovedState(itemKey, removed) {
     };
   });
 
-  if (!didUpdate) {
-    throw new Error("That video is no longer in the current set.");
+  if (!foundMatch) {
+    console.warn("Ignoring archive toggle for a popup item that is no longer present in the merged working set.", {
+      itemKey,
+      removed: Boolean(removed),
+    });
   }
 
-  const nextSelectedKeysSeed = Array.isArray(currentState.selectedKeys)
-    ? [...currentState.selectedKeys]
-    : [];
-  const nextSelectedKeySet = new Set(nextSelectedKeysSeed);
-  if (removed) {
-    nextSelectedKeySet.delete(itemKey);
-  } else {
-    nextSelectedKeySet.add(itemKey);
-  }
-
-  const nextSelectedKeys = normalizeSelectedKeys(
-    nextItems,
-    [...nextSelectedKeySet],
-  );
+  const nextSelectedKeys = getImplicitSelectedKeys(nextItems);
 
   const nextFailedItems = (currentState.failedItems || []).filter(
     (item) => (item.key || getItemKey(item)) !== itemKey,
@@ -7945,6 +7943,7 @@ async function setItemRemovedState(itemKey, removed) {
     characterIds: sourceIds.characterIds,
     creatorIds: sourceIds.creatorIds,
     fetchedCount: nextItems.length,
+    backedUpItemCount: nextBackedUpItemCount,
     selectedKeys: nextSelectedKeys,
     titleOverrides:
       currentState.titleOverrides && typeof currentState.titleOverrides === "object"
@@ -7967,7 +7966,7 @@ async function setItemRemovedState(itemKey, removed) {
   await setState(patch);
 }
 
-function applyDownloadedState(items, selectedKeys, itemKeys, downloaded) {
+function applyDownloadedState(items, _selectedKeys, itemKeys, downloaded) {
   const keySet = new Set(Array.isArray(itemKeys) ? itemKeys : []);
   let didUpdate = false;
 
@@ -7984,19 +7983,7 @@ function applyDownloadedState(items, selectedKeys, itemKeys, downloaded) {
     };
   });
 
-  const nextSelectedKeySeed = Array.isArray(selectedKeys) ? [...selectedKeys] : [];
-  const nextSelectedKeySet = new Set(nextSelectedKeySeed);
-  if (downloaded) {
-    for (const key of keySet) {
-      nextSelectedKeySet.delete(key);
-    }
-  } else {
-    for (const key of keySet) {
-      nextSelectedKeySet.add(key);
-    }
-  }
-
-  const nextSelectedKeys = normalizeSelectedKeys(nextItems, [...nextSelectedKeySet]);
+  const nextSelectedKeys = getImplicitSelectedKeys(nextItems);
   return {
     didUpdate,
     nextItems,
@@ -8066,6 +8053,12 @@ async function updateSettings(nextSettings) {
     settings.defaultSort = normalizeDefaultSort(nextSettings.defaultSort);
   } else {
     settings.defaultSort = normalizeDefaultSort(settings.defaultSort);
+  }
+
+  if (nextSettings && Object.prototype.hasOwnProperty.call(nextSettings, "resultsViewMode")) {
+    settings.resultsViewMode = normalizeResultsViewMode(nextSettings.resultsViewMode);
+  } else {
+    settings.resultsViewMode = normalizeResultsViewMode(settings.resultsViewMode);
   }
 
   if (nextSettings && Object.prototype.hasOwnProperty.call(nextSettings, "theme")) {
