@@ -2223,6 +2223,98 @@ async function loadMirrorItemsForSyncSession(sessionRecord) {
   return sortItemsByNewest([...mergedItems.values()]);
 }
 
+function getSyncSessionSelectionOptions(sessionRecord, state = currentState) {
+  const normalizedSession = normalizeSyncSessionRecord(sessionRecord);
+  const sourceState = state && typeof state === "object" ? state : currentState;
+  const characterAccounts = normalizeCharacterAccounts(sourceState.characterAccounts);
+  const creatorProfiles = normalizeCreatorProfiles(sourceState.creatorProfiles);
+
+  return {
+    characterAccounts,
+    selectedCharacterAccountIds: normalizeSelectedCharacterAccountIds(
+      characterAccounts,
+      normalizedSession && Array.isArray(normalizedSession.selectedCharacterAccountIds)
+        ? normalizedSession.selectedCharacterAccountIds
+        : sourceState.selectedCharacterAccountIds,
+      [],
+      { allowEmpty: true },
+    ),
+    creatorProfiles,
+    selectedCreatorProfileIds: normalizeSelectedCreatorProfileIds(
+      creatorProfiles,
+      normalizedSession && Array.isArray(normalizedSession.selectedCreatorProfileIds)
+        ? normalizedSession.selectedCreatorProfileIds
+        : sourceState.selectedCreatorProfileIds,
+      [],
+      { allowEmpty: true },
+    ),
+  };
+}
+
+async function loadVolatileBackupItemsForSyncSession(sessionRecord, state = currentState) {
+  const normalizedSession = normalizeSyncSessionRecord(sessionRecord);
+  if (!normalizedSession || !normalizedSession.sessionId || normalizedSession.sources.length === 0) {
+    return [];
+  }
+
+  const selectionOptions = getSyncSessionSelectionOptions(normalizedSession, state);
+  const sessionMetas = (await listVolatileBackupMetas())
+    .filter((meta) => meta && meta.syncSessionId === normalizedSession.sessionId)
+    .sort((left, right) => {
+      const leftTime = new Date(left.updatedAt || left.startedAt || 0).getTime();
+      const rightTime = new Date(right.updatedAt || right.startedAt || 0).getTime();
+      return rightTime - leftTime;
+    });
+
+  if (!sessionMetas.length) {
+    return [];
+  }
+
+  const mergedItems = new Map();
+  for (const source of normalizedSession.sources) {
+    const matchingMeta = sessionMetas.find((meta) => meta.source === source);
+    if (!matchingMeta) {
+      continue;
+    }
+
+    const restoredPreview = await loadVolatileBackupPreviewForSource(
+      source,
+      matchingMeta,
+      selectionOptions,
+      Number.MAX_SAFE_INTEGER,
+    );
+    if (!restoredPreview || !Array.isArray(restoredPreview.items)) {
+      continue;
+    }
+
+    for (const item of restoredPreview.items) {
+      mergedItems.set(getCanonicalItemKey(item), item);
+    }
+  }
+
+  return sortItemsByNewest([...mergedItems.values()]);
+}
+
+async function loadHydratedItemsForSyncSession(sessionRecord, state = currentState) {
+  const normalizedSession = normalizeSyncSessionRecord(sessionRecord);
+  if (!normalizedSession) {
+    return [];
+  }
+
+  const mergedItems = new Map();
+  const mirroredItems = await loadMirrorItemsForSyncSession(normalizedSession);
+  for (const item of mirroredItems) {
+    mergedItems.set(getCanonicalItemKey(item), item);
+  }
+
+  const backupItems = await loadVolatileBackupItemsForSyncSession(normalizedSession, state);
+  for (const item of backupItems) {
+    mergedItems.set(getCanonicalItemKey(item), item);
+  }
+
+  return sortItemsByNewest([...mergedItems.values()]);
+}
+
 function buildResumableFetchRequestFromSyncSession(sessionRecord) {
   const normalizedSession = normalizeSyncSessionRecord(sessionRecord);
   if (!normalizedSession || normalizedSession.sources.length === 0) {
@@ -5420,6 +5512,10 @@ async function loadMergedFetchItemsForState(state = currentState) {
       for (const item of mirroredItems) {
         mergedMirrorItems.set(getCanonicalItemKey(item), item);
       }
+      const backupItems = await loadVolatileBackupItemsForSyncSession(syncSession, sourceState);
+      for (const item of backupItems) {
+        mergedMirrorItems.set(getCanonicalItemKey(item), item);
+      }
     } else {
       for (const source of mirrorMergeSources) {
         const mirroredItems = await loadMirroredItemsForSourceSelection(source, {
@@ -5678,7 +5774,7 @@ async function buildPausedFetchStateFromSyncSession(sessionRecord, state = curre
     return null;
   }
 
-  const restoredItems = await loadMirrorItemsForSyncSession(normalizedSession);
+  const restoredItems = await loadHydratedItemsForSyncSession(normalizedSession, state);
   if (!restoredItems.length) {
     return null;
   }
@@ -5840,7 +5936,7 @@ async function restoreInterruptedFetchState(state) {
       }
     }
 
-    const mirroredItems = await loadMirrorItemsForSyncSession(interruptedSyncSession);
+    const mirroredItems = await loadHydratedItemsForSyncSession(interruptedSyncSession, nextState);
     return {
       ...normalizeRestoredTransientState({
         ...nextState,

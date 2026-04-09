@@ -524,6 +524,8 @@ async function testStructuralInvariants() {
   assert.match(backgroundSource, /async function executeSourceFetchWithRecovery/);
   assert.match(backgroundSource, /async function findInterruptedSyncSession/);
   assert.match(backgroundSource, /async function getRecoverablePausedSyncSession/);
+  assert.match(backgroundSource, /async function loadVolatileBackupItemsForSyncSession\(sessionRecord, state = currentState\)/);
+  assert.match(backgroundSource, /async function loadHydratedItemsForSyncSession\(sessionRecord, state = currentState\)/);
   assert.match(popupRuntimeSource, /requestRestoreInterruptedSession/);
   assert.match(popupRuntimeSource, /requestResumeScan/);
   assert.match(popupUpdaterSource, /restorePreviousSessionFromGate/);
@@ -598,6 +600,9 @@ async function testStructuralInvariants() {
   assert.match(backgroundSource, /const mirrorItems = await loadSourceMirrorItems\(/);
   assert.match(backgroundSource, /if \(mirrorItems\[0\] \|\| options\.allowLegacyFallback !== true\) \{/);
   assert.match(backgroundSource, /if \(options\.allowLegacyFallback === true\) \{\s*return loadVolatileBackupItemsByProgressKey\(sessionKey, progressKey, limit\);/);
+  assert.match(backgroundSource, /const restoredItems = await loadHydratedItemsForSyncSession\(normalizedSession, state\);/);
+  assert.match(backgroundSource, /const mirroredItems = await loadHydratedItemsForSyncSession\(interruptedSyncSession, nextState\);/);
+  assert.match(backgroundSource, /const backupItems = await loadVolatileBackupItemsForSyncSession\(syncSession, sourceState\);/);
   assert.doesNotMatch(backgroundSource, /await clearVolatileBackupProgress\(sessionKey, progressKey\);/);
   assert.match(backgroundSource, /VOLATILE_BACKUP_UPDATER_STORE/);
   assert.doesNotMatch(backgroundSource, /transaction\.objectStore\(SOURCE_MIRROR_ITEM_STORE\)\.clear\(\);/);
