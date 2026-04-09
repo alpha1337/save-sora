@@ -54,11 +54,11 @@ export function updateDownloadOverlay(state) {
 
   if (popupState.pendingDownloadStart && phase !== "downloading") {
     dom.downloadOverlayThanks.classList.add("hidden");
-    dom.downloadOverlayTitle.textContent = isArchiveRun ? "Preparing ZIP archive..." : "Preparing downloads...";
+    dom.downloadOverlayTitle.textContent = isArchiveRun ? "Preparing archive download..." : "Preparing downloads...";
     dom.downloadOverlayStatus.textContent =
       (state && state.message) ||
       (isArchiveRun
-        ? "Saving your latest changes and preparing the ZIP archive."
+        ? "Saving your latest changes and preparing the archive download."
         : "Saving your latest changes and building the queue.");
     dom.downloadOverlayCount.textContent = runTotal > 0 ? `0 / ${runTotal}` : "Preparing";
     dom.downloadOverlayPercent.textContent = "0%";
@@ -72,7 +72,7 @@ export function updateDownloadOverlay(state) {
 
   if (phase === "downloading") {
     dom.downloadOverlayThanks.classList.add("hidden");
-    dom.downloadOverlayTitle.textContent = isArchiveRun ? "Building ZIP archive" : "Downloading videos";
+    dom.downloadOverlayTitle.textContent = isArchiveRun ? "Downloading and packaging videos" : "Downloading videos";
     dom.downloadOverlayStatus.textContent =
       (state && state.message) || "Working through your selected videos...";
     dom.downloadOverlayCount.textContent = `${processed} / ${runTotal || processed}`;
@@ -98,10 +98,10 @@ export function updateDownloadOverlay(state) {
       ? "Downloads paused"
       : wasCanceled
         ? isArchiveRun
-          ? "ZIP archive canceled"
+          ? "Archive download canceled"
           : "Downloads canceled"
       : isArchiveRun
-        ? "ZIP archive finished"
+        ? "Archive download finished"
         : "Downloads finished";
   dom.downloadOverlayStatus.textContent = settledMessage;
   dom.downloadOverlayCount.textContent = `${settledProcessed} / ${runTotal || settledProcessed}`;

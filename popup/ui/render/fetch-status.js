@@ -4,6 +4,7 @@ import {
 } from "../../config.js";
 import { dom } from "../../dom.js";
 import { popupState } from "../../state.js";
+import { buildFetchSelectionSummary } from "../../utils/fetch-copy.js";
 
 /**
  * Starts rotating the fetch status flavor text.
@@ -46,12 +47,13 @@ function applyFetchStatusMessage() {
     return;
   }
 
-  const flavor = popupState.activeFetchStatusMessage || "Finding videos...";
-  const fetchedCount = Math.max(0, Number(popupState.latestSummaryContext.fetchedCount) || 0);
-  dom.selectionSummary.textContent =
-    fetchedCount > 0
-      ? `${flavor} • ${fetchedCount.toLocaleString()} found so far.`
-      : flavor;
+  dom.selectionSummary.textContent = buildFetchSelectionSummary({
+    runtimeState: popupState.latestRuntimeState,
+    flavorMessage: popupState.activeFetchStatusMessage || "Finding videos...",
+    hasRenderableResults:
+      Array.isArray(popupState.latestRenderState.items) &&
+      popupState.latestRenderState.items.length > 0,
+  });
 }
 
 /**

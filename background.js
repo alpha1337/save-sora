@@ -9,6 +9,7 @@ const OFFSCREEN_DOCUMENT_PATH = "offscreen.html";
 const OFFSCREEN_TARGET = "offscreen";
 const START_ARCHIVE_BUILD = "START_ARCHIVE_BUILD";
 const ABORT_ARCHIVE_BUILD = "ABORT_ARCHIVE_BUILD";
+const PREPARE_ARCHIVE_ITEM_URL = "PREPARE_ARCHIVE_ITEM_URL";
 const RELEASE_ARCHIVE_OBJECT_URL = "RELEASE_ARCHIVE_OBJECT_URL";
 const PROFILE_LIMIT = 100;
 const CREATOR_PROFILE_FEED_LIMIT = 8;
@@ -109,6 +110,7 @@ const SOURCE_ROUTES = {
   creatorPublished: "https://sora.chatgpt.com/profile",
   creatorCameos: "https://sora.chatgpt.com/profile",
   creatorCharacters: "https://sora.chatgpt.com/profile",
+  draftShare: "https://sora.chatgpt.com/drafts",
 };
 
 let currentState = createDefaultState();
@@ -118,6 +120,8 @@ let hiddenWindowId = null;
 let activeRun = null;
 let activeDownloadId = null;
 let activeArchiveJob = null;
+const draftSharePreparationPromises = new Map();
+let draftSharePreparationChain = Promise.resolve();
 let creatingOffscreenDocument = null;
 let requestedControlAction = null;
 let keepAwakeRequested = false;
@@ -339,6 +343,17 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   if (message.type === "REFRESH_ARCHIVE_ITEM_URL") {
     void refreshArchiveItemUrl(message.itemKey)
+      .then((item) => {
+        sendResponse({ ok: true, item });
+      })
+      .catch((error) => {
+        sendResponse({ ok: false, error: getErrorMessage(error) });
+      });
+    return true;
+  }
+
+  if (message.type === PREPARE_ARCHIVE_ITEM_URL) {
+    void prepareArchiveItemUrl(message.itemKey)
       .then((item) => {
         sendResponse({ ok: true, item });
       })
@@ -3496,6 +3511,17 @@ function isUpdaterBusyPhase() {
   );
 }
 
+function shouldDeferAutomaticUpdateChecks(state = currentState) {
+  const phase = state && typeof state.phase === "string" ? state.phase : "idle";
+  return (
+    Boolean(activeRun) ||
+    phase === "fetching" ||
+    phase === "downloading" ||
+    phase === "fetch-paused" ||
+    phase === "paused"
+  );
+}
+
 function isUpdaterApplyBlocked(options = {}) {
   const allowPausedOverride = options && options.allowPausedOverride === true;
   return (
@@ -3984,6 +4010,9 @@ async function runUpdateCheck(options = {}) {
     options.interactive === true ||
     options.trigger === "manual" ||
     options.trigger === "folder-link";
+  if (!isManualRequest && shouldDeferAutomaticUpdateChecks(currentState)) {
+    return buildUpdateStatusSnapshot();
+  }
   if (!automaticUpdatesEnabled && !isManualRequest) {
     await setUpdateState({
       phase: "idle",
@@ -6606,6 +6635,24 @@ function buildNoWatermarkProxyUrl(postId) {
   return `https://soravdl.com/api/proxy/video/${encodeURIComponent(postId)}`;
 }
 
+function extractSharedPostId(value) {
+  if (typeof value !== "string" || !value) {
+    return "";
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "";
+  }
+
+  if (/^s_[A-Za-z0-9_-]+$/.test(trimmed)) {
+    return trimmed;
+  }
+
+  const match = trimmed.match(/(?:\/p\/|\/video\/)(s_[A-Za-z0-9_-]+)/i);
+  return match && typeof match[1] === "string" ? match[1] : "";
+}
+
 function resolveNoWatermarkDownloadUrl(item) {
   if (!item || typeof item !== "object") {
     return "";
@@ -6624,6 +6671,141 @@ function resolveNoWatermarkDownloadUrl(item) {
     buildNoWatermarkProxyUrl(generationId) ||
     ""
   );
+}
+
+function getSharedPostIdForItem(item) {
+  if (!item || typeof item !== "object") {
+    return "";
+  }
+
+  return (
+    (typeof item.sharedPostId === "string" && /^s_[A-Za-z0-9_-]+$/.test(item.sharedPostId)
+      ? item.sharedPostId
+      : "") ||
+    extractSharedPostId(resolveNoWatermarkDownloadUrl(item)) ||
+    extractSharedPostId(typeof item.detailUrl === "string" ? item.detailUrl : "") ||
+    ""
+  );
+}
+
+function getDraftGenerationIdForItem(item) {
+  if (!item || typeof item !== "object") {
+    return "";
+  }
+
+  const generationId =
+    typeof item.generationId === "string" && item.generationId
+      ? item.generationId
+      : typeof item.id === "string"
+        ? item.id
+        : "";
+  return /^gen_[A-Za-z0-9_-]+$/.test(generationId) ? generationId : "";
+}
+
+function shouldPrepareDraftShareForDownload(item) {
+  return Boolean(
+    item &&
+      typeof item === "object" &&
+      item.sourceType === "draft" &&
+      getDraftGenerationIdForItem(item) &&
+      !getSharedPostIdForItem(item),
+  );
+}
+
+function mergeDraftShareReferenceIntoItem(item, sharedReference) {
+  const baseItem = item && typeof item === "object" ? item : {};
+  const reference =
+    sharedReference && typeof sharedReference === "object" ? sharedReference : {};
+  const sharedPostId = extractSharedPostId(
+    typeof reference.sharedPostId === "string" ? reference.sharedPostId : "",
+  );
+  if (!sharedPostId) {
+    return baseItem;
+  }
+
+  const shareUrl =
+    (typeof reference.shareUrl === "string" && reference.shareUrl) ||
+    (typeof baseItem.detailUrl === "string" ? baseItem.detailUrl : "") ||
+    `https://sora.chatgpt.com/p/${encodeURIComponent(sharedPostId)}`;
+  const noWatermarkUrl =
+    (typeof reference.noWatermarkUrl === "string" && reference.noWatermarkUrl) ||
+    buildNoWatermarkProxyUrl(sharedPostId);
+  const watermarkUrl =
+    (baseItem.download_urls &&
+    typeof baseItem.download_urls === "object" &&
+    typeof baseItem.download_urls.watermark === "string" &&
+    baseItem.download_urls.watermark) ||
+    "";
+
+  return {
+    ...baseItem,
+    detailUrl: shareUrl || baseItem.detailUrl || "",
+    downloadUrl: noWatermarkUrl || watermarkUrl || baseItem.downloadUrl || "",
+    no_watermark: noWatermarkUrl,
+    sharedPostId,
+    download_urls: {
+      ...(baseItem.download_urls && typeof baseItem.download_urls === "object"
+        ? baseItem.download_urls
+        : {}),
+      no_watermark: noWatermarkUrl,
+      watermark: watermarkUrl,
+    },
+  };
+}
+
+function queueDraftSharePreparation(task) {
+  const nextTask = draftSharePreparationChain.then(task, task);
+  draftSharePreparationChain = nextTask.catch(() => {});
+  return nextTask;
+}
+
+async function requestDraftSharedReference(item) {
+  const generationId = getDraftGenerationIdForItem(item);
+  if (!generationId) {
+    return null;
+  }
+
+  if (!draftSharePreparationPromises.has(generationId)) {
+    draftSharePreparationPromises.set(
+      generationId,
+      queueDraftSharePreparation(async () => {
+        const response = await fetchSourceDataFromTab("draftShare", {
+          generationId,
+          prompt: typeof item?.prompt === "string" ? item.prompt : "",
+          detailUrl: typeof item?.detailUrl === "string" ? item.detailUrl : "",
+        });
+        return response && response.sharedReference && typeof response.sharedReference === "object"
+          ? response.sharedReference
+          : null;
+      }),
+    );
+  }
+
+  let sharedReference = null;
+  try {
+    sharedReference = await draftSharePreparationPromises.get(generationId);
+    return sharedReference;
+  } finally {
+    if (!sharedReference) {
+      draftSharePreparationPromises.delete(generationId);
+    }
+  }
+}
+
+async function prepareDraftItemForDownload(item) {
+  if (!shouldPrepareDraftShareForDownload(item)) {
+    return item;
+  }
+
+  try {
+    const sharedReference = await requestDraftSharedReference(item);
+    if (!sharedReference) {
+      return item;
+    }
+    return mergeDraftShareReferenceIntoItem(item, sharedReference);
+  } catch (_error) {
+    return item;
+  }
 }
 
 function getPreferredDownloadUrl(item) {
@@ -7379,6 +7561,7 @@ function createArchiveJobContext(downloadItems, options) {
     pendingItems: [...archiveItems],
     successfulItems: [],
     failedItems: [],
+    scopeRefreshPromisesByKey: new Map(),
     folderImages: buildArchiveFolderImages(archiveItems),
     supplementalEntries: buildArchiveSupplementalEntries(downloadItems),
     resolve: null,
@@ -8381,7 +8564,9 @@ function serializeArchiveItemForOffscreen(item) {
     id: item && typeof item.id === "string" ? item.id : "",
     filename: item && typeof item.filename === "string" ? item.filename : "",
     sourcePage: item && typeof item.sourcePage === "string" ? item.sourcePage : "",
+    sourceType: item && typeof item.sourceType === "string" ? item.sourceType : "",
     downloadUrl: getPreferredDownloadUrl(item),
+    requiresSharedDraftPreparation: shouldPrepareDraftShareForDownload(item),
     archivePath: item && typeof item.archivePath === "string" ? item.archivePath : "",
     createdAt: item && typeof item.createdAt === "string" ? item.createdAt : null,
     postedAt: item && typeof item.postedAt === "string" ? item.postedAt : null,
@@ -8531,7 +8716,7 @@ async function handleOffscreenArchiveItemResult(message) {
         ? ""
         : message.error,
     message: message.success
-      ? `Packed ${completed + failedCount} of ${activeArchiveJob.total} into the ZIP archive...`
+      ? `Packaged ${completed + failedCount} of ${activeArchiveJob.total} videos...`
       : `Skipped ${item.filename}`,
   }, {
     persist: shouldPersistProgress,
@@ -8619,6 +8804,62 @@ function takeActiveArchivePendingItem(itemKey) {
   return item;
 }
 
+async function prepareArchiveItemUrl(itemKey) {
+  if (typeof itemKey !== "string" || !itemKey) {
+    throw new Error("A valid archive item key is required.");
+  }
+
+  const activeItem =
+    activeArchiveJob && activeArchiveJob.itemsByKey instanceof Map
+      ? activeArchiveJob.itemsByKey.get(itemKey)
+      : null;
+  const currentItem =
+    activeItem ||
+    normalizeCatalogItems(currentState.items).find((item) => (item.key || getItemKey(item)) === itemKey);
+
+  if (!currentItem) {
+    throw new Error("The archive item could not be found.");
+  }
+
+  const preparedItem = await prepareDraftItemForDownload(currentItem);
+  if (
+    !preparedItem ||
+    typeof preparedItem !== "object" ||
+    !getSharedPostIdForItem(preparedItem) ||
+    !getPreferredDownloadUrl(preparedItem)
+  ) {
+    return {
+      downloadUrl: getPreferredDownloadUrl(currentItem),
+    };
+  }
+
+  if (activeArchiveJob && activeArchiveJob.itemsByKey instanceof Map) {
+    const previousItem = activeArchiveJob.itemsByKey.get(itemKey);
+    const nextItem = {
+      ...(previousItem || currentItem),
+      ...preparedItem,
+      archivePath:
+        previousItem && typeof previousItem.archivePath === "string"
+          ? previousItem.archivePath
+          : preparedItem.archivePath,
+    };
+    activeArchiveJob.itemsByKey.set(itemKey, nextItem);
+    activeArchiveJob.pendingItems = activeArchiveJob.pendingItems.map((pendingItem) =>
+      (pendingItem.key || getItemKey(pendingItem)) === itemKey
+        ? {
+            ...pendingItem,
+            ...nextItem,
+            archivePath: pendingItem.archivePath,
+          }
+        : pendingItem,
+    );
+  }
+
+  return {
+    downloadUrl: getPreferredDownloadUrl(preparedItem),
+  };
+}
+
 async function refreshArchiveItemUrl(itemKey) {
   if (typeof itemKey !== "string" || !itemKey) {
     throw new Error("A valid archive item key is required.");
@@ -8636,37 +8877,128 @@ async function refreshArchiveItemUrl(itemKey) {
     throw new Error("The archive item could not be found.");
   }
 
-  const refreshedItem = applyTitleOverride(
-    {
-      ...currentItem,
-      ...(await refreshDownloadUrl(currentItem)),
-      key: itemKey,
-      archivePath: activeItem && typeof activeItem.archivePath === "string" ? activeItem.archivePath : undefined,
-    },
-    currentState.titleOverrides,
-  );
+  const refreshScopeKey = getArchiveRefreshScopeKey(currentItem);
+  const canBatchRefreshScope =
+    activeArchiveJob &&
+    activeArchiveJob.itemsByKey instanceof Map &&
+    activeArchiveJob.scopeRefreshPromisesByKey instanceof Map &&
+    refreshScopeKey;
 
-  if (activeArchiveJob && activeArchiveJob.itemsByKey instanceof Map) {
-    const previousItem = activeArchiveJob.itemsByKey.get(itemKey);
-    const nextItem = {
-      ...(previousItem || currentItem),
-      ...refreshedItem,
-      archivePath:
-        previousItem && typeof previousItem.archivePath === "string"
-          ? previousItem.archivePath
-          : refreshedItem.archivePath,
-    };
-    activeArchiveJob.itemsByKey.set(itemKey, nextItem);
-    activeArchiveJob.pendingItems = activeArchiveJob.pendingItems.map((item) =>
-      (item.key || getItemKey(item)) === itemKey
-        ? {
-            ...item,
-            ...nextItem,
-            archivePath: item.archivePath,
-          }
-        : item,
+  if (!canBatchRefreshScope) {
+    const refreshedItem = applyTitleOverride(
+      {
+        ...currentItem,
+        ...(await refreshDownloadUrl(currentItem)),
+        key: itemKey,
+        archivePath:
+          activeItem && typeof activeItem.archivePath === "string"
+            ? activeItem.archivePath
+            : undefined,
+      },
+      currentState.titleOverrides,
     );
+
+    if (activeArchiveJob && activeArchiveJob.itemsByKey instanceof Map) {
+      const previousItem = activeArchiveJob.itemsByKey.get(itemKey);
+      const nextItem = {
+        ...(previousItem || currentItem),
+        ...refreshedItem,
+        archivePath:
+          previousItem && typeof previousItem.archivePath === "string"
+            ? previousItem.archivePath
+            : refreshedItem.archivePath,
+      };
+      activeArchiveJob.itemsByKey.set(itemKey, nextItem);
+      activeArchiveJob.pendingItems = activeArchiveJob.pendingItems.map((item) =>
+        (item.key || getItemKey(item)) === itemKey
+          ? {
+              ...item,
+              ...nextItem,
+              archivePath: item.archivePath,
+            }
+          : item,
+      );
+    }
+
+    return {
+      downloadUrl: getPreferredDownloadUrl(refreshedItem),
+    };
   }
+
+  const existingScopeRefresh = activeArchiveJob.scopeRefreshPromisesByKey.get(refreshScopeKey);
+  const scopeRefreshPromise =
+    existingScopeRefresh ||
+    (async () => {
+      const refreshedItems = await refreshArchiveScopeItems(currentItem);
+      const refreshedItemsByMatchKey = new Map();
+      for (const refreshedItem of refreshedItems) {
+        const refreshedMatchKey = getArchiveRefreshMatchKey(refreshedItem);
+        if (!refreshedMatchKey) {
+          continue;
+        }
+        refreshedItemsByMatchKey.set(refreshedMatchKey, refreshedItem);
+      }
+
+      activeArchiveJob.pendingItems = activeArchiveJob.pendingItems.map((pendingItem) => {
+        if (getArchiveRefreshScopeKey(pendingItem) !== refreshScopeKey) {
+          return pendingItem;
+        }
+
+        const refreshedMatch = refreshedItemsByMatchKey.get(
+          getArchiveRefreshMatchKey(pendingItem),
+        );
+        if (!refreshedMatch) {
+          return pendingItem;
+        }
+
+        const nextItem = applyTitleOverride(
+          {
+            ...pendingItem,
+            ...mergeRefreshedDownloadFields(pendingItem, refreshedMatch),
+            key: pendingItem.key || getCanonicalItemKey(pendingItem),
+            archivePath: pendingItem.archivePath,
+          },
+          currentState.titleOverrides,
+        );
+        activeArchiveJob.itemsByKey.set(nextItem.key || getCanonicalItemKey(nextItem), nextItem);
+        return nextItem;
+      });
+
+      return refreshedItemsByMatchKey;
+    })();
+
+  if (!existingScopeRefresh) {
+    activeArchiveJob.scopeRefreshPromisesByKey.set(refreshScopeKey, scopeRefreshPromise);
+  }
+
+  let refreshedItemsByMatchKey;
+  try {
+    refreshedItemsByMatchKey = await scopeRefreshPromise;
+  } finally {
+    if (activeArchiveJob.scopeRefreshPromisesByKey.get(refreshScopeKey) === scopeRefreshPromise) {
+      activeArchiveJob.scopeRefreshPromisesByKey.delete(refreshScopeKey);
+    }
+  }
+
+  const refreshedMatch = refreshedItemsByMatchKey.get(getArchiveRefreshMatchKey(currentItem));
+  if (!refreshedMatch) {
+    throw new Error(getArchiveRefreshFailureMessage(currentItem));
+  }
+
+  const refreshedItem =
+    activeArchiveJob.itemsByKey.get(itemKey) ||
+    applyTitleOverride(
+      {
+        ...currentItem,
+        ...mergeRefreshedDownloadFields(currentItem, refreshedMatch),
+        key: itemKey,
+        archivePath:
+          activeItem && typeof activeItem.archivePath === "string"
+            ? activeItem.archivePath
+            : undefined,
+      },
+      currentState.titleOverrides,
+    );
 
   return {
     downloadUrl: getPreferredDownloadUrl(refreshedItem),
@@ -10495,7 +10827,7 @@ async function downloadSelected() {
           startingCompleted: 0,
           startingFailedItems: [],
           totalTarget: selectedItems.length,
-          introMessage: `Building a ZIP archive for ${selectedItems.length} selected item(s)...`,
+          introMessage: `Downloading and packaging ${selectedItems.length} selected video(s)...`,
           completionMessage: (completed, failed) =>
             failed === 0
               ? `Saved a ZIP archive with ${completed} item(s).`
@@ -10544,7 +10876,7 @@ async function beginSelectedDownload() {
       ? "archive-selected"
       : "selected";
   const startingMessage = isArchiveDownloadMode
-    ? `Building a ZIP archive for ${selectedItems.length} selected item(s)...`
+    ? `Downloading and packaging ${selectedItems.length} selected video(s)...`
     : `Starting ${selectedItems.length} selected download(s)...`;
 
   await setState({
@@ -10573,7 +10905,7 @@ async function beginSelectedDownload() {
           totalTarget: selectedItems.length,
           initialStateApplied: true,
           restorePausedFetch,
-          introMessage: `Building a ZIP archive for ${selectedItems.length} selected item(s)...`,
+          introMessage: `Downloading and packaging ${selectedItems.length} selected video(s)...`,
           completionMessage: (completed, failed) =>
             failed === 0
               ? `Saved a ZIP archive with ${completed} item(s).`
@@ -10706,7 +11038,7 @@ async function retryFailed() {
         startingCompleted: Number(currentState.completed) || 0,
         startingFailedItems: [],
         totalTarget: retryItems.length,
-        introMessage: `Rebuilding a ZIP archive for ${retryItems.length} failed item(s)...`,
+        introMessage: `Downloading and packaging ${retryItems.length} retry video(s)...`,
         completionMessage: (_completed, failed) =>
           failed === 0
             ? "Saved a recovery ZIP archive for all failed items."
@@ -10740,7 +11072,7 @@ async function requestRunControl(action) {
       action === "pause"
         ? "Pausing the active download..."
         : typeof currentState.runMode === "string" && currentState.runMode.startsWith("archive")
-          ? "Stopping the active ZIP archive..."
+          ? "Stopping the active archive download..."
           : "Aborting the active download...",
   }, { persist: false });
 
@@ -10878,7 +11210,7 @@ async function performArchiveDownloadRun(downloadItems, options) {
       lastError: "",
       finishedAt: null,
       message:
-        (options && options.introMessage) || `Building a ZIP archive for ${total} item(s)...`,
+        (options && options.introMessage) || `Downloading and packaging ${total} video(s)...`,
     });
   }
 
@@ -15824,8 +16156,10 @@ async function fetchSourceDataFromTab(source, options) {
                         ? "cameo drafts"
                         : source === "characterAccountDrafts"
                           ? "character account drafts"
-                          : source === "creatorProfileLookup"
+          : source === "creatorProfileLookup"
                             ? "creator profile"
+                            : source === "draftShare"
+                              ? "draft share"
                             : "cameo";
     throw new Error(`Failed to fetch ${sourceLabel} data: ${getErrorMessage(error)}`);
   }
@@ -16019,7 +16353,7 @@ async function waitForTabComplete(tabId, timeoutMs = 20000) {
 
 async function downloadItemWithRetry(item) {
   let lastError = null;
-  let candidate = item;
+  let candidate = await prepareDraftItemForDownload(item);
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
@@ -16054,36 +16388,94 @@ function matchesRefreshTarget(candidate, item) {
   );
 }
 
-async function refreshDownloadUrl(item) {
+function getArchiveRefreshMatchKey(item) {
+  if (!item || typeof item !== "object") {
+    return "";
+  }
+
+  const itemId = typeof item.id === "string" ? item.id : "";
+  const sourceType = typeof item.sourceType === "string" ? item.sourceType : "";
+  const attachmentIndex =
+    item && Number.isInteger(item.attachmentIndex) ? Number(item.attachmentIndex) : 0;
+
+  return itemId ? `${itemId}:${attachmentIndex}:${sourceType}` : "";
+}
+
+function getArchiveRefreshScopeKey(item) {
+  if (!item || typeof item !== "object") {
+    return "";
+  }
+
+  const sourcePage = typeof item.sourcePage === "string" ? item.sourcePage : "";
+  const creatorProfileId =
+    typeof item.creatorProfileId === "string" ? item.creatorProfileId : "";
+  const characterAccountId =
+    typeof item.characterAccountId === "string" ? item.characterAccountId : "";
+
+  if (sourcePage === "characters") {
+    return characterAccountId ? `${sourcePage}:${characterAccountId}` : sourcePage;
+  }
+
+  if (
+    sourcePage === "creatorPublished" ||
+    sourcePage === "creatorCameos" ||
+    sourcePage === "creatorCharacters" ||
+    sourcePage === "creatorCharacterCameos"
+  ) {
+    return creatorProfileId ? `${sourcePage}:${creatorProfileId}` : sourcePage;
+  }
+
+  return sourcePage;
+}
+
+function findArchiveRefreshMatch(items, item) {
+  const targetKey = getArchiveRefreshMatchKey(item);
+  if (!targetKey) {
+    return null;
+  }
+
+  return (
+    (Array.isArray(items) ? items : []).find((candidate) => {
+      const candidateKey = getArchiveRefreshMatchKey(candidate);
+      return candidateKey === targetKey || matchesRefreshTarget(candidate, item);
+    }) || null
+  );
+}
+
+function getArchiveRefreshFailureMessage(item) {
+  switch (item && item.sourcePage) {
+    case "profile":
+      return `Could not refresh ${item.id} from your published feed.`;
+    case "likes":
+      return `Could not refresh liked post ${item.id}.`;
+    case "cameos":
+      return `Could not refresh cameo video ${item.id}.`;
+    case "characters":
+      return `Could not refresh character video ${item.id}.`;
+    case "creatorPublished":
+    case "creatorCameos":
+    case "creatorCharacters":
+    case "creatorCharacterCameos":
+      return `Could not refresh creator video ${item.id}.`;
+    default:
+      return `Could not refresh draft ${item.id}.`;
+  }
+}
+
+async function refreshArchiveScopeItems(item) {
   if (item.sourcePage === "profile") {
     const refreshed = await fetchAllProfileItems();
-    const match = refreshed.items.find((candidate) => matchesRefreshTarget(candidate, item));
-    if (!match) {
-      throw new Error(`Could not refresh ${item.id} from your published feed.`);
-    }
-    return mergeRefreshedDownloadFields(item, match);
+    return Array.isArray(refreshed && refreshed.items) ? refreshed.items : [];
   }
 
   if (item.sourcePage === "likes") {
     const refreshed = await fetchAllLikesItems();
-    const match = refreshed.items.find((candidate) => matchesRefreshTarget(candidate, item));
-
-    if (!match) {
-      throw new Error(`Could not refresh liked post ${item.id}.`);
-    }
-
-    return mergeRefreshedDownloadFields(item, match);
+    return Array.isArray(refreshed && refreshed.items) ? refreshed.items : [];
   }
 
   if (item.sourcePage === "cameos") {
     const refreshed = await fetchAllCameoItems();
-    const match = refreshed.items.find((candidate) => matchesRefreshTarget(candidate, item));
-
-    if (!match) {
-      throw new Error(`Could not refresh cameo video ${item.id}.`);
-    }
-
-    return mergeRefreshedDownloadFields(item, match);
+    return Array.isArray(refreshed && refreshed.items) ? refreshed.items : [];
   }
 
   if (item.sourcePage === "characters") {
@@ -16093,13 +16485,7 @@ async function refreshDownloadUrl(item) {
         ? [item.characterAccountId]
         : currentState.selectedCharacterAccountIds,
     });
-    const match = refreshed.items.find((candidate) => matchesRefreshTarget(candidate, item));
-
-    if (!match) {
-      throw new Error(`Could not refresh character video ${item.id}.`);
-    }
-
-    return mergeRefreshedDownloadFields(item, match);
+    return Array.isArray(refreshed && refreshed.items) ? refreshed.items : [];
   }
 
   if (
@@ -16114,20 +16500,28 @@ async function refreshDownloadUrl(item) {
         ? [item.creatorProfileId]
         : currentState.selectedCreatorProfileIds,
     });
-    const match = refreshed.items.find((candidate) => matchesRefreshTarget(candidate, item));
-
-    if (!match) {
-      throw new Error(`Could not refresh creator video ${item.id}.`);
-    }
-
-    return mergeRefreshedDownloadFields(item, match);
+    return Array.isArray(refreshed && refreshed.items) ? refreshed.items : [];
   }
 
   const refreshed = await fetchAllDraftItems();
-  const match = refreshed.items.find((candidate) => matchesRefreshTarget(candidate, item));
+  return Array.isArray(refreshed && refreshed.items) ? refreshed.items : [];
+}
 
+async function refreshDownloadUrl(item) {
+  const preparedDraftItem = await prepareDraftItemForDownload(item);
+  if (
+    preparedDraftItem &&
+    typeof preparedDraftItem === "object" &&
+    getSharedPostIdForItem(preparedDraftItem) &&
+    getPreferredDownloadUrl(preparedDraftItem)
+  ) {
+    return preparedDraftItem;
+  }
+
+  const refreshedItems = await refreshArchiveScopeItems(item);
+  const match = findArchiveRefreshMatch(refreshedItems, item);
   if (!match) {
-    throw new Error(`Could not refresh draft ${item.id}.`);
+    throw new Error(getArchiveRefreshFailureMessage(item));
   }
 
   return mergeRefreshedDownloadFields(item, match);
@@ -17535,6 +17929,53 @@ function injectedFetchSource(config) {
       return typeof generationId === "string" && generationId.startsWith("gen_") ? generationId : "";
     }
 
+    function hasDraftEditedVersion(row) {
+      return (
+        pickFirstNumber([
+          row && row.c_version,
+          row && row.cVersion,
+          row && row.draft && row.draft.c_version,
+          row && row.draft && row.draft.cVersion,
+          row && row.item && row.item.c_version,
+          row && row.item && row.item.cVersion,
+          row && row.data && row.data.c_version,
+          row && row.data && row.data.cVersion,
+          row && row.output && row.output.c_version,
+          row && row.output && row.output.cVersion,
+        ]) !== null
+      );
+    }
+
+    function shouldSkipDraftRow(row) {
+      const kind = getDraftKind(row);
+      return Boolean(
+        !row ||
+          kind === "sora_error" ||
+          hasDraftEditedVersion(row) ||
+          (typeof kind === "string" && kind !== "sora_draft" && kind !== "draft"),
+      );
+    }
+
+    function getExistingSharedDraftPost(row) {
+      const candidates = [
+        row && row.post && row.post.post,
+        row && row.post,
+        row && row.draft && row.draft.post && row.draft.post.post,
+        row && row.draft && row.draft.post,
+        row && row.item && row.item.post && row.item.post.post,
+        row && row.item && row.item.post,
+        row && row.data && row.data.post && row.data.post.post,
+        row && row.data && row.data.post,
+      ].filter((candidate) => candidate && typeof candidate === "object");
+
+      return (
+        candidates.find((candidate) => {
+          const candidateId = getPostId(candidate);
+          return typeof candidateId === "string" && candidateId.startsWith("s_");
+        }) || null
+      );
+    }
+
     function getDraftShareText(row) {
       return (
         pickFirstString([
@@ -17650,6 +18091,10 @@ function injectedFetchSource(config) {
     }
 
     async function createSharedDraftReference(row) {
+      if (shouldSkipDraftRow(row)) {
+        return null;
+      }
+
       const generationId = getDraftShareGenerationId(row);
       if (!generationId) {
         return null;
@@ -17701,6 +18146,10 @@ function injectedFetchSource(config) {
       const existingReference = resolveSharedPostReferenceFromValue(row);
       if (existingReference) {
         return existingReference;
+      }
+
+      if (shouldSkipDraftRow(row)) {
+        return null;
       }
 
       const generationId = getDraftShareGenerationId(row);
@@ -19444,14 +19893,21 @@ function injectedFetchSource(config) {
           config && config.sourceLabel,
         ]) || (sourcePage === "cameos" ? "Cameo" : sourcePage === "characters" ? "Character" : "Draft");
       const allowMediaUrlFallback = Boolean(config && config.allowMediaUrlFallback);
-      const sharedReferenceMap = await buildDraftSharedReferenceMap(rows, {
-        attemptCreate: config && config.attemptCreateSharedLinks !== false,
-      });
 
       for (const row of rows) {
         const kind = getDraftKind(row);
+        if (shouldSkipDraftRow(row)) {
+          continue;
+        }
+
         const id = getDraftId(row);
         const watermarkUrl = getDownloadUrl(row) || (allowMediaUrlFallback ? getDirectMediaUrl(row) : null);
+        if (!watermarkUrl || typeof id !== "string") {
+          continue;
+        }
+
+        const existingSharedPost = getExistingSharedDraftPost(row);
+        const sharedReference = resolveSharedPostReferenceFromValue(row);
         const durationSeconds =
           getDurationSeconds(row) ||
           (row.draft && getDurationSeconds(row.draft)) ||
@@ -19538,6 +19994,8 @@ function injectedFetchSource(config) {
         const discoveryPhrase = getDraftDiscoveryPhrase(row);
         const preferredTitle = pickFirstString([
           discoveryPhrase,
+          row && row.post && row.post.prompt,
+          existingSharedPost && existingSharedPost.prompt,
           row && row.prompt,
           row && row.draft && row.draft.prompt,
           row && row.item && row.item.prompt,
@@ -19545,10 +20003,6 @@ function injectedFetchSource(config) {
           row && row.creation_config && row.creation_config.prompt,
           id,
         ]);
-        const shareLookupKey = getDraftShareGenerationId(row) || id;
-        const sharedReference =
-          (shareLookupKey && sharedReferenceMap.get(shareLookupKey)) ||
-          resolveSharedPostReferenceFromValue(row);
         const detailUrl =
           (sharedReference && sharedReference.shareUrl) ||
           draftDetailUrl;
@@ -19556,6 +20010,10 @@ function injectedFetchSource(config) {
           (sharedReference && sharedReference.noWatermarkUrl) ||
           buildNoWatermarkProxyUrl(id || generationId);
         const prompt =
+          (row.post && typeof row.post.prompt === "string" && row.post.prompt) ||
+          (existingSharedPost && typeof existingSharedPost.prompt === "string"
+            ? existingSharedPost.prompt
+            : null) ||
           (typeof row.prompt === "string" && row.prompt) ||
           (row.draft && typeof row.draft.prompt === "string" ? row.draft.prompt : null) ||
           (row.item && typeof row.item.prompt === "string" ? row.item.prompt : null) ||
@@ -19567,16 +20025,6 @@ function injectedFetchSource(config) {
         const creatorUsername = getCreatorUsername(row) || null;
         const creatorProfilePictureUrl = getCreatorProfilePictureUrl(row) || null;
 
-        if (
-          !row ||
-          kind === "sora_error" ||
-          (typeof kind === "string" && kind !== "sora_draft" && kind !== "draft") ||
-          !watermarkUrl ||
-          typeof id !== "string"
-        ) {
-          continue;
-        }
-
         ids.push(id);
         items.push({
           id,
@@ -19586,6 +20034,7 @@ function injectedFetchSource(config) {
           detailUrl,
           downloadUrl: noWatermarkUrl || watermarkUrl,
           no_watermark: noWatermarkUrl,
+          sharedPostId: sharedReference && sharedReference.sharedPostId ? sharedReference.sharedPostId : "",
           download_urls: {
             no_watermark: noWatermarkUrl,
             watermark: watermarkUrl,
@@ -19747,6 +20196,28 @@ function injectedFetchSource(config) {
           }),
           await getSessionUserProfile(),
         );
+      }
+
+      if (source === "draftShare") {
+        const generationId =
+          typeof options.generationId === "string" ? options.generationId.trim() : "";
+        if (!/^gen_[A-Za-z0-9_-]+$/.test(generationId)) {
+          throw new Error("A valid draft generation id is required to create a shared link.");
+        }
+
+        const sharedReference = await resolveDraftSharedPostReference(
+          {
+            id: generationId,
+            generation_id: generationId,
+            kind: "sora_draft",
+            prompt: typeof options.prompt === "string" ? options.prompt : "",
+            detail_url: typeof options.detailUrl === "string" ? options.detailUrl : "",
+          },
+          { attemptCreate: true },
+        );
+        return {
+          sharedReference,
+        };
       }
 
       if (source === "likes") {

@@ -2,6 +2,7 @@ const OFFSCREEN_TARGET = "offscreen";
 const RELEASE_ARCHIVE_URL = "RELEASE_ARCHIVE_OBJECT_URL";
 const START_ARCHIVE_BUILD = "START_ARCHIVE_BUILD";
 const ABORT_ARCHIVE_BUILD = "ABORT_ARCHIVE_BUILD";
+const PREPARE_ARCHIVE_ITEM_URL = "PREPARE_ARCHIVE_ITEM_URL";
 const ITEM_RESULT_MESSAGE = "OFFSCREEN_ARCHIVE_ITEM_RESULT";
 const STAGE_MESSAGE = "OFFSCREEN_ARCHIVE_STAGE";
 const COMPLETE_MESSAGE = "OFFSCREEN_ARCHIVE_COMPLETE";
@@ -9,6 +10,7 @@ const ERROR_MESSAGE = "OFFSCREEN_ARCHIVE_ERROR";
 const ZIP_MIME_TYPE = "application/zip";
 const PROFILE_IMAGE_BASENAME = "profile-image";
 const ARCHIVE_DEBUG_MAX_JOBS = 8;
+const ARCHIVE_PARALLEL_DOWNLOADS = 5;
 
 let activeArchiveController = null;
 let activeArchiveJobId = null;
@@ -137,12 +139,14 @@ async function buildArchive(message, signal) {
     totalItems: archiveItems.length,
     folderImageCount: folderImages.length,
     supplementalEntryCount: supplementalEntries.length,
+    parallelDownloads: resolveArchiveParallelDownloads(archiveItems.length),
   });
   console.info("[Save Sora ZIP/offscreen] Starting archive build.", {
     jobId,
     totalItems: archiveItems.length,
     folderImageCount: folderImages.length,
     supplementalEntryCount: supplementalEntries.length,
+    parallelDownloads: resolveArchiveParallelDownloads(archiveItems.length),
   });
 
   try {
@@ -176,20 +180,8 @@ async function buildArchive(message, signal) {
       await addSupplementalArchiveEntries(zipWriter, supplementalEntries, signal);
     }
 
-    await sendStage(jobId, "archiving", "Streaming selected files into the ZIP...");
-
-    for (const item of archiveItems) {
-      throwIfAborted(signal);
-      const result = await addArchiveItem(zipWriter, item, signal);
-      await chrome.runtime.sendMessage({
-        type: ITEM_RESULT_MESSAGE,
-        jobId,
-        itemKey: item && typeof item.key === "string" ? item.key : "",
-        success: result.success,
-        error: result.error || "",
-        debug: result.debug || null,
-      });
-    }
+    await sendStage(jobId, "archiving", "Downloading and packaging videos...");
+    await runArchiveItemsWithConcurrency(zipWriter, archiveItems, signal, jobId);
 
     await sendStage(jobId, "finalizing", "Finalizing the ZIP archive...");
     const archiveBlob = await zipWriter.close();
@@ -245,6 +237,43 @@ async function buildArchive(message, signal) {
   }
 }
 
+function resolveArchiveParallelDownloads(totalItems) {
+  return Math.max(
+    1,
+    Math.min(ARCHIVE_PARALLEL_DOWNLOADS, Math.max(0, Number(totalItems) || 0)),
+  );
+}
+
+async function runArchiveItemsWithConcurrency(zipWriter, archiveItems, signal, jobId) {
+  const items = Array.isArray(archiveItems) ? archiveItems : [];
+  const workerCount = resolveArchiveParallelDownloads(items.length);
+  let nextIndex = 0;
+
+  async function runWorker() {
+    while (true) {
+      throwIfAborted(signal);
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      if (currentIndex >= items.length) {
+        return;
+      }
+
+      const item = items[currentIndex];
+      const result = await addArchiveItem(zipWriter, item, signal);
+      await chrome.runtime.sendMessage({
+        type: ITEM_RESULT_MESSAGE,
+        jobId,
+        itemKey: item && typeof item.key === "string" ? item.key : "",
+        success: result.success,
+        error: result.error || "",
+        debug: result.debug || null,
+      });
+    }
+  }
+
+  await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
+}
+
 async function addSupplementalArchiveEntries(zipWriter, supplementalEntries, signal) {
   const zipApi = globalThis.zip;
   if (!zipApi || typeof zipApi.BlobReader !== "function") {
@@ -295,6 +324,18 @@ async function addArchiveItem(zipWriter, item, signal) {
     debug.attempts.push(attemptDebug);
 
     try {
+      if (attempt === 0 && candidate && candidate.requiresSharedDraftPreparation === true) {
+        const preparedItem = await prepareArchiveItem(candidate);
+        if (preparedItem && typeof preparedItem.downloadUrl === "string" && preparedItem.downloadUrl) {
+          attemptDebug.preparedDownloadUrl = preparedItem.downloadUrl;
+          candidate = {
+            ...candidate,
+            ...preparedItem,
+            requiresSharedDraftPreparation: false,
+          };
+        }
+      }
+
       const response = await fetchArchiveResponse(candidate.downloadUrl, signal);
       attemptDebug.status = response.status;
       attemptDebug.statusText = response.statusText;
@@ -305,6 +346,8 @@ async function addArchiveItem(zipWriter, item, signal) {
           : "";
       await zipWriter.add(candidate.archivePath, response.body, {
         level: 0,
+        keepOrder: false,
+        bufferedWrite: true,
         signal,
         lastModDate: parseEntryDate(candidate.postedAt || candidate.createdAt),
       });
@@ -361,6 +404,22 @@ async function refreshArchiveItem(item) {
   try {
     const response = await chrome.runtime.sendMessage({
       type: "REFRESH_ARCHIVE_ITEM_URL",
+      itemKey: item.key,
+    });
+    return response && response.ok ? response.item : null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+async function prepareArchiveItem(item) {
+  if (!item || typeof item.key !== "string" || !item.key) {
+    return null;
+  }
+
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: PREPARE_ARCHIVE_ITEM_URL,
       itemKey: item.key,
     });
     return response && response.ok ? response.item : null;

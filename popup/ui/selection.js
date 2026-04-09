@@ -3,6 +3,7 @@ import { popupState } from "../state.js";
 import { getFetchUiState } from "../utils/runtime-state.js";
 import { getSelectionScreenActionState, setSourceSelectionSummary } from "./character-selection.js";
 import { formatFileSize, formatWholeNumber } from "../utils/format.js";
+import { buildFetchSelectionSummary } from "../utils/fetch-copy.js";
 import { getSelectedSourceValues } from "../utils/settings.js";
 import {
   getCreatorResultsTabLabel,
@@ -190,7 +191,9 @@ export function updateSelectionSummary({
     dom.pickerPanelLabel.textContent =
       totalCount > 0
         ? `Search Results (${formatWholeNumber(totalCount)})`
-        : "Search Results";
+        : phase === "fetching"
+          ? "Search Results (Loading...)"
+          : "Search Results";
   }
 
   const countSnapshot =
@@ -250,11 +253,13 @@ export function updateSelectionSummary({
   };
 
   if (phase === "fetching") {
-    const flavor = popupState.activeFetchStatusMessage || "Finding videos...";
-    dom.selectionSummary.textContent =
-      fetchedCount > 0
-        ? `${flavor} • ${formatWholeNumber(fetchedCount)} found so far.`
-        : flavor;
+    dom.selectionSummary.textContent = buildFetchSelectionSummary({
+      runtimeState: popupState.latestRuntimeState,
+      flavorMessage: popupState.activeFetchStatusMessage || "Finding videos...",
+      hasRenderableResults:
+        Array.isArray(popupState.latestRenderState.items) &&
+        popupState.latestRenderState.items.length > 0,
+    });
     return;
   }
 

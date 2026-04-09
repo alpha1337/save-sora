@@ -512,6 +512,93 @@ function simulateRuntimeCatalogMerge(existingItems = [], restoredItems = []) {
   return [...merged.values()];
 }
 
+function shouldDeferAutomaticUpdateChecks({ phase = "idle", hasActiveRun = false } = {}) {
+  return (
+    Boolean(hasActiveRun) ||
+    phase === "fetching" ||
+    phase === "downloading" ||
+    phase === "fetch-paused" ||
+    phase === "paused"
+  );
+}
+
+function simulateAutomaticUpdateCheckDecision({
+  phase = "idle",
+  hasActiveRun = false,
+  trigger = "alarm",
+  interactive = false,
+  automaticUpdatesEnabled = true,
+} = {}) {
+  const isManualRequest =
+    interactive === true || trigger === "manual" || trigger === "folder-link";
+
+  if (!isManualRequest && shouldDeferAutomaticUpdateChecks({ phase, hasActiveRun })) {
+    return "deferred";
+  }
+
+  if (!automaticUpdatesEnabled && !isManualRequest) {
+    return "disabled";
+  }
+
+  return "allowed";
+}
+
+function getArchiveRefreshScopeKey(item) {
+  if (!item || typeof item !== "object") {
+    return "";
+  }
+
+  const sourcePage = typeof item.sourcePage === "string" ? item.sourcePage : "";
+  const creatorProfileId =
+    typeof item.creatorProfileId === "string" ? item.creatorProfileId : "";
+  const characterAccountId =
+    typeof item.characterAccountId === "string" ? item.characterAccountId : "";
+
+  if (sourcePage === "characters") {
+    return characterAccountId ? `${sourcePage}:${characterAccountId}` : sourcePage;
+  }
+
+  if (
+    sourcePage === "creatorPublished" ||
+    sourcePage === "creatorCameos" ||
+    sourcePage === "creatorCharacters" ||
+    sourcePage === "creatorCharacterCameos"
+  ) {
+    return creatorProfileId ? `${sourcePage}:${creatorProfileId}` : sourcePage;
+  }
+
+  return sourcePage;
+}
+
+function simulateArchiveScopeRefresh({ pendingItems = [], refreshedItems = [], targetItem } = {}) {
+  const refreshedById = new Map(
+    (Array.isArray(refreshedItems) ? refreshedItems : [])
+      .filter((item) => item && typeof item.id === "string")
+      .map((item) => [item.id, item]),
+  );
+  const targetScopeKey = getArchiveRefreshScopeKey(targetItem);
+
+  return (Array.isArray(pendingItems) ? pendingItems : []).map((pendingItem) => {
+    if (getArchiveRefreshScopeKey(pendingItem) !== targetScopeKey) {
+      return pendingItem;
+    }
+
+    const refreshedItem = refreshedById.get(pendingItem.id);
+    if (!refreshedItem) {
+      return pendingItem;
+    }
+
+    return {
+      ...pendingItem,
+      downloadUrl: refreshedItem.downloadUrl,
+    };
+  });
+}
+
+function simulateArchiveParallelWorkerCount(totalItems) {
+  return Math.max(1, Math.min(5, Math.max(0, Number(totalItems) || 0)));
+}
+
 function simulateRenderedCardSections(viewMode) {
   return {
     includesBody: viewMode !== "grid",
@@ -604,6 +691,34 @@ function simulatePreferredDownloadUrl(item) {
     "";
 
   return noWatermarkUrl || watermarkUrl || (typeof item.downloadUrl === "string" ? item.downloadUrl : "") || "";
+}
+
+function simulateShouldSkipDraftRow(row) {
+  const kind = row && typeof row.kind === "string" ? row.kind : "";
+  const hasEditedVersion =
+    row &&
+    Object.prototype.hasOwnProperty.call(row, "c_version") &&
+    Number.isFinite(Number(row.c_version));
+
+  return (
+    !row ||
+    kind === "sora_error" ||
+    hasEditedVersion ||
+    (typeof kind === "string" && kind !== "" && kind !== "sora_draft" && kind !== "draft")
+  );
+}
+
+function simulateExistingSharedDraftPrompt(row) {
+  return (
+    (row && row.post && typeof row.post.prompt === "string" && row.post.prompt) ||
+    (row &&
+    row.post &&
+    row.post.post &&
+    typeof row.post.post.prompt === "string" &&
+    row.post.post.prompt) ||
+    (row && typeof row.prompt === "string" && row.prompt) ||
+    null
+  );
 }
 
 function simulateReviewUrlFromSharedDraft(item) {
@@ -732,6 +847,10 @@ async function testStructuralInvariants() {
     path.join(projectRoot, "popup/ui/render/fetch-status.js"),
     "utf8",
   );
+  const popupFetchCopySource = await readFile(
+    path.join(projectRoot, "popup/utils/fetch-copy.js"),
+    "utf8",
+  );
   const popupFetchProgressSource = await readFile(
     path.join(projectRoot, "popup/ui/render/fetch-progress.js"),
     "utf8",
@@ -744,16 +863,22 @@ async function testStructuralInvariants() {
     path.join(projectRoot, "popup/utils/counts.js"),
     "utf8",
   );
+  const popupOverlaySource = await readFile(
+    path.join(projectRoot, "popup/ui/overlay.js"),
+    "utf8",
+  );
   const popupHtmlSource = await readFile(path.join(projectRoot, "popup.html"), "utf8");
   const popupUpdateGateSource = await readFile(
     path.join(projectRoot, "popup/ui/render/update-gate.js"),
     "utf8",
   );
+  const offscreenSource = await readFile(path.join(projectRoot, "offscreen.js"), "utf8");
 
   assert.match(backgroundSource, /const SOURCE_MIRROR_ITEM_STORE = "source_mirror_items"/);
   assert.match(backgroundSource, /const SOURCE_CHECKPOINT_STORE = "source_checkpoints"/);
   assert.match(backgroundSource, /const SYNC_SESSION_STORE = "sync_sessions"/);
   assert.match(backgroundSource, /const SOURCE_RETRY_STATE_STORE = "source_retry_state"/);
+  assert.match(backgroundSource, /const PREPARE_ARCHIVE_ITEM_URL = "PREPARE_ARCHIVE_ITEM_URL"/);
   assert.match(backgroundSource, /if \(message\.type === "RESTORE_INTERRUPTED_SESSION"\)/);
   assert.match(backgroundSource, /if \(message\.type === "START_SCAN"\) \{[\s\S]*?const state = await startScan\(message\.sources, message\.searchQuery\);[\s\S]*?sendResponse\(\{ ok: true, state \}\);[\s\S]*?return true;/);
   assert.match(backgroundSource, /if \(message\.type === "RESUME_SCAN"\) \{[\s\S]*?const state = await resumeScan\(\);[\s\S]*?sendResponse\(\{ ok: true, state \}\);[\s\S]*?return true;/);
@@ -818,6 +943,8 @@ async function testStructuralInvariants() {
   assert.match(popupControllersIndexSource, /dom\.fetchProgressPanel\?\.addEventListener\("mouseenter", handleFetchProgressPanelMouseEnter\);/);
   assert.match(popupControllersIndexSource, /dom\.fetchProgressPanel\?\.addEventListener\("mouseleave", handleFetchProgressPanelMouseLeave\);/);
   assert.match(popupEmptyStateSource, /dom\.emptyStateImage\.classList\.remove\("hidden"\);/);
+  assert.match(popupEmptyStateSource, /buildFetchEmptyStateText\(popupState\.latestRuntimeState\)/);
+  assert.match(popupEmptyStateSource, /dom\.emptyState\?\.classList\.remove\("hidden"\);/);
   assert.match(popupStateSource, /fetchDrawerHoverExpanded: false,/);
   assert.match(popupUpdaterSource, /const UPDATE_GATE_STARTUP_CHECK_TIMEOUT_MS = 15000;/);
   assert.match(popupUpdaterSource, /timeoutMs: UPDATE_GATE_STARTUP_CHECK_TIMEOUT_MS,/);
@@ -835,6 +962,8 @@ async function testStructuralInvariants() {
   assert.match(popupRenderSource, /const selectedCountTotal = countSnapshot\.downloadableCount;/);
   assert.match(popupRenderSource, /downloadableBytes: countSnapshot\.downloadableBytes,/);
   assert.match(popupSelectionSource, /const fetchUiState = getFetchUiState\(/);
+  assert.match(popupSelectionSource, /buildFetchSelectionSummary\(/);
+  assert.match(popupSelectionSource, /Search Results \(Loading\.\.\.\)/);
   assert.match(popupSelectionSource, /popupState\.latestRenderState\.counts && typeof popupState\.latestRenderState\.counts === "object"/);
   assert.match(popupSelectionSource, /const hasAnyResults =\s+\(Array\.isArray\(popupState\.latestRenderState\.items\)/s);
   assert.match(popupSelectionSource, /phase !== "fetching" &&\s+!hasAnyResults/s);
@@ -842,13 +971,19 @@ async function testStructuralInvariants() {
   assert.match(popupSelectionSource, /!fetchUiState\.isBusy[\s\S]*?!fetchUiState\.isAnyPaused/);
   assert.match(popupSelectionSource, /Object\.prototype\.hasOwnProperty\.call\(countSnapshot, "downloadableBytes"\)/);
   assert.match(popupListSource, /const effectiveTotalCount = Number\.isFinite\(Number\(popupState\.latestRenderState\.totalCount\)\)/);
-  assert.match(popupFetchStatusSource, /const fetchedCount = Math\.max\(0, Number\(popupState\.latestSummaryContext\.fetchedCount\) \|\| 0\);/);
+  assert.match(popupFetchStatusSource, /buildFetchSelectionSummary\(/);
+  assert.match(popupFetchCopySource, /export function buildFetchSelectionSummary/);
+  assert.match(popupFetchCopySource, /export function buildFetchEmptyStateText/);
+  assert.match(popupFetchCopySource, /Results will start appearing after the first batch finishes loading\./);
+  assert.match(popupFetchCopySource, /Results will appear after this batch finishes processing\./);
   assert.match(popupFetchProgressSource, /const isExpanded =\s+isVisible && \(popupState\.fetchDrawerExpanded \|\| popupState\.fetchDrawerHoverExpanded\);/s);
   assert.match(popupFetchProgressSource, /dom\.fetchProgressSource\.textContent = "";/);
   assert.match(popupFetchProgressSource, /dom\.fetchProgressSource\.classList\.add\("hidden"\);/);
   assert.match(popupFetchProgressSource, /dom\.fetchProgressCount\.textContent =\s*itemsFound > 0/s);
   assert.doesNotMatch(popupFetchProgressSource, /in source/);
   assert.match(popupCssSource, /\.empty-state-image \{\s+display: block;\s+width: auto;\s+height: auto;/s);
+  assert.match(popupCssSource, /\.empty-state-text \{[\s\S]*?white-space: pre-line;[\s\S]*?max-width: 44ch;/s);
+  assert.match(popupCssSource, /\.empty-state\.is-fetching \.empty-state-text \{/);
   assert.doesNotMatch(popupCssSource, /body\.is-fullscreen-view \.empty-state-image \{\s+display: none;/s);
   assert.match(popupCssSource, /\.item-list\.is-grid-view \.item-card \{[\s\S]*?content-visibility: visible;[\s\S]*?contain: layout style;[\s\S]*?overflow: visible;/s);
   assert.match(popupCharacterSelectionSource, /const fetchUiState = getFetchUiState\(/);
@@ -856,11 +991,14 @@ async function testStructuralInvariants() {
   assert.match(backgroundSource, /function createDefaultRestoreStatus/);
   assert.match(backgroundSource, /function resolveAuthoritativeFetchCountSnapshot\(options = \{\}\)/);
   assert.match(backgroundSource, /function resolveNoWatermarkDownloadUrl\(item\)/);
+  assert.match(backgroundSource, /function shouldPrepareDraftShareForDownload\(item\)/);
+  assert.match(backgroundSource, /async function prepareDraftItemForDownload\(item\)/);
+  assert.match(backgroundSource, /let candidate = await prepareDraftItemForDownload\(item\);/);
+  assert.match(backgroundSource, /const preparedDraftItem = await prepareDraftItemForDownload\(item\);/);
   assert.match(backgroundSource, /async function postJson\(relativeUrl, jsonBody, requestOptions = \{\}\)/);
   assert.match(backgroundSource, /async function buildDraftSharedReferenceMap\(rows, config = \{\}\)/);
   assert.match(backgroundSource, /type:\s*"shared_link_unlisted"/);
   assert.match(backgroundSource, /attachments_to_create:\s*\[/);
-  assert.match(backgroundSource, /const sharedReferenceMap = await buildDraftSharedReferenceMap\(rows,/);
   assert.match(backgroundSource, /const isRecoverableAuthError = isRecoverableSoraAuthError\(error\);/);
   assert.match(backgroundSource, /lastAuthRefreshAt: now,/);
   assert.match(backgroundSource, /Save Sora refreshed its hidden Sora worker after your session expired/);
@@ -872,6 +1010,22 @@ async function testStructuralInvariants() {
   assert.match(backgroundSource, /const installRecord = await getLinkedInstallFolderRecord\(\{ bypassCache: true \}\);/);
   assert.match(backgroundSource, /if \(!isCachedInterfaceStateError\(error\)\) \{\s+throw error;\s+\}/s);
   assert.match(backgroundSource, /return installPendingUpdate\(\{ pendingUpdate, refreshLatest: false \}\);/);
+  assert.match(backgroundSource, /function shouldDeferAutomaticUpdateChecks\(state = currentState\)/);
+  assert.match(backgroundSource, /Boolean\(activeRun\) \|\|[\s\S]*phase === "fetching" \|\|[\s\S]*phase === "downloading" \|\|[\s\S]*phase === "fetch-paused" \|\|[\s\S]*phase === "paused"/);
+  assert.match(backgroundSource, /if \(!isManualRequest && shouldDeferAutomaticUpdateChecks\(currentState\)\) \{\s*return buildUpdateStatusSnapshot\(\);\s*\}/s);
+  assert.match(backgroundSource, /scopeRefreshPromisesByKey: new Map\(\),/);
+  assert.match(backgroundSource, /function getArchiveRefreshScopeKey\(item\)/);
+  assert.match(backgroundSource, /async function refreshArchiveScopeItems\(item\)/);
+  assert.match(backgroundSource, /const refreshScopeKey = getArchiveRefreshScopeKey\(currentItem\);/);
+  assert.match(backgroundSource, /activeArchiveJob\.scopeRefreshPromisesByKey\.set\(refreshScopeKey, scopeRefreshPromise\);/);
+  assert.match(backgroundSource, /activeArchiveJob\.pendingItems = activeArchiveJob\.pendingItems\.map\(\(pendingItem\) =>/);
+  assert.match(backgroundSource, /function shouldSkipDraftRow\(row\)/);
+  assert.match(backgroundSource, /function getExistingSharedDraftPost\(row\)/);
+  assert.match(backgroundSource, /if \(shouldSkipDraftRow\(row\)\) \{\s*continue;\s*\}/);
+  assert.doesNotMatch(backgroundSource, /const sharedReferenceMap = await buildDraftSharedReferenceMap\(/);
+  assert.match(backgroundSource, /row && row\.post && row\.post\.prompt/);
+  assert.match(backgroundSource, /existingSharedPost && existingSharedPost\.prompt/);
+  assert.match(backgroundSource, /sharedPostId: sharedReference && sharedReference\.sharedPostId/);
   assert.match(backgroundSource, /function buildPopupBatchMetricSnapshot\(items = \[\]\)/);
   assert.match(backgroundSource, /const countSnapshot = resolveAuthoritativeFetchCountSnapshot\(\{\s+items: sourceItems,/s);
   assert.match(backgroundSource, /popupDownloadableBytes: metricSnapshot\.downloadableBytes,/);
@@ -901,6 +1055,12 @@ async function testStructuralInvariants() {
   assert.match(backgroundSource, /workerWindow = await chrome\.windows\.create\(\{\s*url,\s*focused: false,\s*state: "minimized",/s);
   assert.match(backgroundSource, /await ensureHiddenWorkerWindowMinimized\(hiddenWindowId\);/);
   assert.match(backgroundSource, /await chrome\.windows\.remove\(windowId\);/);
+  assert.match(backgroundSource, /draftShare: "https:\/\/sora\.chatgpt\.com\/drafts"/);
+  assert.match(backgroundSource, /if \(message\.type === PREPARE_ARCHIVE_ITEM_URL\) \{/);
+  assert.match(backgroundSource, /async function prepareArchiveItemUrl\(itemKey\)/);
+  assert.match(backgroundSource, /source === "draftShare"/);
+  assert.match(backgroundSource, /sharedReference = await resolveDraftSharedPostReference/);
+  assert.match(backgroundSource, /requiresSharedDraftPreparation: shouldPrepareDraftShareForDownload\(item\),/);
   assert.doesNotMatch(backgroundSource, /await clearVolatileBackupProgress\(sessionKey, progressKey\);/);
   assert.match(backgroundSource, /VOLATILE_BACKUP_UPDATER_STORE/);
   assert.doesNotMatch(backgroundSource, /transaction\.objectStore\(SOURCE_MIRROR_ITEM_STORE\)\.clear\(\);/);
@@ -925,6 +1085,20 @@ async function testStructuralInvariants() {
   assert.match(popupStateSource, /downloadedBytes: null,/);
   assert.match(popupStateSource, /archivedBytes: null,/);
   assert.match(popupUpdateGateSource, /Local recovery needs attention/);
+  assert.match(popupOverlaySource, /Preparing archive download\.\.\./);
+  assert.match(popupOverlaySource, /Downloading and packaging videos/);
+  assert.match(popupOverlaySource, /Archive download finished/);
+  assert.match(offscreenSource, /const ARCHIVE_PARALLEL_DOWNLOADS = 5;/);
+  assert.match(offscreenSource, /const PREPARE_ARCHIVE_ITEM_URL = "PREPARE_ARCHIVE_ITEM_URL";/);
+  assert.match(offscreenSource, /candidate && candidate\.requiresSharedDraftPreparation === true/);
+  assert.match(offscreenSource, /const preparedItem = await prepareArchiveItem\(candidate\);/);
+  assert.match(offscreenSource, /async function prepareArchiveItem\(item\)/);
+  assert.match(offscreenSource, /type: PREPARE_ARCHIVE_ITEM_URL,/);
+  assert.match(offscreenSource, /async function runArchiveItemsWithConcurrency\(zipWriter, archiveItems, signal, jobId\)/);
+  assert.match(offscreenSource, /await runArchiveItemsWithConcurrency\(zipWriter, archiveItems, signal, jobId\);/);
+  assert.match(offscreenSource, /keepOrder: false,/);
+  assert.match(offscreenSource, /bufferedWrite: true,/);
+  assert.match(offscreenSource, /Downloading and packaging videos\.\.\./);
   assert.match(backgroundSource, /preservedCharacterAccounts = normalizeCharacterAccounts\(currentState\.characterAccounts\)/);
   assert.match(backgroundSource, /selectedCharacterAccountIds: preservedSelectedCharacterAccountIds/);
   assert.match(backgroundSource, /creatorProfiles: preservedCreatorProfiles/);
@@ -1610,6 +1784,54 @@ function testDraftsPreferSharedNoWatermarkDownloadsWhenAvailable() {
   );
 }
 
+function testDraftFetchSkipsErroredAndEditedRows() {
+  assert.equal(
+    simulateShouldSkipDraftRow({
+      id: "gen_error",
+      kind: "sora_error",
+    }),
+    true,
+    "errored draft rows should be skipped instead of entering the sharing or preview pipeline",
+  );
+
+  assert.equal(
+    simulateShouldSkipDraftRow({
+      id: "gen_edit",
+      kind: "sora_draft",
+      c_version: 1,
+    }),
+    true,
+    "edited draft rows should be skipped because they are not shareable draft outputs",
+  );
+
+  assert.equal(
+    simulateShouldSkipDraftRow({
+      id: "gen_ok",
+      kind: "sora_draft",
+    }),
+    false,
+    "plain sora drafts should still flow through the normal preview pipeline",
+  );
+}
+
+function testDraftPromptPrefersExistingSharedPostMetadata() {
+  assert.equal(
+    simulateExistingSharedDraftPrompt({
+      id: "gen_01draft",
+      prompt: "fallback draft prompt",
+      post: {
+        prompt: "shared wrapper prompt",
+        post: {
+          id: "s_01shared",
+          prompt: "shared post prompt",
+        },
+      },
+    }),
+    "shared wrapper prompt",
+    "when a draft already has shared-post metadata, the shared prompt should win over the old draft prompt",
+  );
+}
+
 function testSharedDraftProxyResolvesBackToPublicReviewUrl() {
   const reviewUrl = simulateReviewUrlFromSharedDraft({
     id: "gen_01draft",
@@ -1702,6 +1924,112 @@ function testStartupGateLockPreventsDashboardFlash() {
   );
 }
 
+function testAutomaticUpdateChecksDeferDuringFetchWork() {
+  assert.equal(
+    simulateAutomaticUpdateCheckDecision({
+      phase: "fetching",
+      hasActiveRun: true,
+      trigger: "alarm",
+    }),
+    "deferred",
+    "scheduled update checks should stay out of the way while a fetch is actively running",
+  );
+
+  assert.equal(
+    simulateAutomaticUpdateCheckDecision({
+      phase: "downloading",
+      hasActiveRun: true,
+      trigger: "startup",
+    }),
+    "deferred",
+    "startup update checks should also defer while file work is already in progress",
+  );
+
+  assert.equal(
+    simulateAutomaticUpdateCheckDecision({
+      phase: "fetch-paused",
+      trigger: "alarm",
+    }),
+    "deferred",
+    "background update checks should not interrupt resumable paused fetch sessions either",
+  );
+}
+
+function testManualUpdateChecksStillWorkDuringFetchSessions() {
+  assert.equal(
+    simulateAutomaticUpdateCheckDecision({
+      phase: "fetching",
+      hasActiveRun: true,
+      trigger: "manual",
+    }),
+    "allowed",
+    "manual checks should still be available when the user explicitly asks for them",
+  );
+
+  assert.equal(
+    simulateAutomaticUpdateCheckDecision({
+      phase: "paused",
+      trigger: "folder-link",
+    }),
+    "allowed",
+    "folder-link recovery checks should still be allowed during resumable work states",
+  );
+}
+
+function testArchiveRefreshReusesScopedSourceResults() {
+  const refreshedPendingItems = simulateArchiveScopeRefresh({
+    pendingItems: [
+      {
+        id: "video-1",
+        sourcePage: "creatorPublished",
+        creatorProfileId: "creator-a",
+        downloadUrl: "stale-a-1",
+      },
+      {
+        id: "video-2",
+        sourcePage: "creatorPublished",
+        creatorProfileId: "creator-a",
+        downloadUrl: "stale-a-2",
+      },
+      {
+        id: "video-3",
+        sourcePage: "creatorPublished",
+        creatorProfileId: "creator-b",
+        downloadUrl: "stale-b-1",
+      },
+    ],
+    refreshedItems: [
+      { id: "video-1", downloadUrl: "fresh-a-1" },
+      { id: "video-2", downloadUrl: "fresh-a-2" },
+      { id: "video-3", downloadUrl: "fresh-b-1" },
+    ],
+    targetItem: {
+      id: "video-1",
+      sourcePage: "creatorPublished",
+      creatorProfileId: "creator-a",
+    },
+  });
+
+  assert.deepEqual(
+    refreshedPendingItems.map((item) => item.downloadUrl),
+    ["fresh-a-1", "fresh-a-2", "stale-b-1"],
+    "a source-scoped archive refresh should update every pending item in the same scope without touching other scopes",
+  );
+}
+
+function testArchiveConcurrencyCapsAtFiveWorkers() {
+  assert.equal(
+    simulateArchiveParallelWorkerCount(2),
+    2,
+    "small archive runs should only spawn the workers they need",
+  );
+  assert.equal(
+    simulateArchiveParallelWorkerCount(12),
+    5,
+    "archive packaging should cap concurrency at five parallel downloads",
+  );
+}
+
 await testStructuralInvariants();
 testIdempotentMirrorWrites();
 testCheckpointBackedResumeNeverStartsFromZero();
@@ -1735,11 +2063,17 @@ testRestoredMirrorItemsMergeIntoRuntimeCatalog();
 testGridCardsDoNotDuplicateHiddenListBodies();
 testDownloadedTabFilteringAndQueueExclusion();
 testDraftsPreferSharedNoWatermarkDownloadsWhenAvailable();
+testDraftFetchSkipsErroredAndEditedRows();
+testDraftPromptPrefersExistingSharedPostMetadata();
 testSharedDraftProxyResolvesBackToPublicReviewUrl();
 testPausedFetchPersistencePreservesRecoveryMetadata();
 testPausedSessionAutoRestoresWithoutPrompt();
 testRestoreGateOnlyReleasesAfterFetchActuallyStarts();
 testSummaryPanelStaysVisibleDuringFetch();
 testStartupGateLockPreventsDashboardFlash();
+testAutomaticUpdateChecksDeferDuringFetchWork();
+testManualUpdateChecksStillWorkDuringFetchSessions();
+testArchiveRefreshReusesScopedSourceResults();
+testArchiveConcurrencyCapsAtFiveWorkers();
 
 console.log("Fetch recovery regression checks passed.");
