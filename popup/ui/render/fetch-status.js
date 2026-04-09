@@ -47,7 +47,11 @@ function applyFetchStatusMessage() {
   }
 
   const flavor = popupState.activeFetchStatusMessage || "Finding videos...";
-  dom.selectionSummary.textContent = flavor;
+  const fetchedCount = Math.max(0, Number(popupState.latestSummaryContext.fetchedCount) || 0);
+  dom.selectionSummary.textContent =
+    fetchedCount > 0
+      ? `${flavor} • ${fetchedCount.toLocaleString()} found so far.`
+      : flavor;
 }
 
 /**

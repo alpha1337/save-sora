@@ -77,6 +77,12 @@ export const popupState = {
     titleOverrides: {},
     totalCount: 0,
     selectedCountTotal: 0,
+    counts: {
+      fetchedCount: 0,
+      downloadableCount: 0,
+      downloadedCount: 0,
+      archivedCount: 0,
+    },
     disableInputs: false,
     phase: "idle",
   },
@@ -89,6 +95,10 @@ export const popupState = {
   latestSummaryContext: {
     totalCount: 0,
     selectedCount: 0,
+    fetchedCount: 0,
+    downloadableCount: 0,
+    downloadedCount: 0,
+    archivedCount: 0,
     visibleCount: 0,
     visibleSelectedCount: 0,
     phase: "idle",

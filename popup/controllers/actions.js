@@ -239,7 +239,7 @@ export async function handleDownloadOverlayCancel() {
     popupState.pendingDownloadStart = false;
     updateDownloadOverlay({
       phase: popupState.latestRenderState.phase || "idle",
-      runTotal: popupState.latestSummaryContext.totalCount,
+      runTotal: popupState.latestSummaryContext.downloadableCount,
       completed: 0,
       failed: 0,
     });

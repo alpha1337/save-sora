@@ -1,6 +1,7 @@
 import { dom } from "../dom.js";
 import { popupState } from "../state.js";
 import { getFetchUiState } from "../utils/runtime-state.js";
+import { buildRenderCountSnapshot } from "../utils/counts.js";
 import {
   normalizeResultsViewMode,
   normalizeSortValue,
@@ -92,13 +93,10 @@ export function renderState(state) {
   const popupTotalItemCount = Number.isFinite(Number(state && state.popupTotalItemCount))
     ? Math.max(0, Number(state.popupTotalItemCount))
     : items.length;
-  const fetchedCount = Number.isFinite(Number(state && state.fetchedCount))
-    ? Math.max(0, Number(state.fetchedCount))
-    : 0;
-  const totalVideos = Math.max(popupTotalItemCount, fetchedCount);
-  const selectedCountTotal = Number.isFinite(Number(state && state.popupSelectedCountTotal))
-    ? Math.max(0, Number(state.popupSelectedCountTotal))
-    : selectedKeys.length;
+  const countSnapshot = buildRenderCountSnapshot(state, items);
+  const foundVideos = Math.max(popupTotalItemCount, countSnapshot.fetchedCount);
+  const totalVideos = foundVideos;
+  const selectedCountTotal = countSnapshot.downloadableCount;
 
   if (
     popupState.pendingDownloadStart &&
@@ -114,6 +112,10 @@ export function renderState(state) {
   popupState.latestSummaryContext = {
     totalCount: totalVideos,
     selectedCount: selectedCountTotal,
+    fetchedCount: countSnapshot.fetchedCount,
+    downloadableCount: countSnapshot.downloadableCount,
+    downloadedCount: countSnapshot.downloadedCount,
+    archivedCount: countSnapshot.archivedCount,
     phase,
   };
 
@@ -197,6 +199,7 @@ export function renderState(state) {
     titleOverrides,
     totalCount: totalVideos,
     selectedCountTotal,
+    counts: countSnapshot,
     disableInputs: isBusy || isPaused,
     phase,
   };

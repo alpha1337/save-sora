@@ -7,7 +7,6 @@ import { getSelectedSourceValues } from "../utils/settings.js";
 import {
   getCreatorResultsTabLabel,
   getCreatorResultsTabs,
-  getDownloadedCount,
   getTotalBatchMetrics,
   getImplicitSelectedKeys,
   getItemKey,
@@ -134,14 +133,22 @@ export function applyCurrentSelectionUi() {
     popupState.latestRuntimeState,
     popupState.latestRenderState,
   );
-  const totalCount = Number.isFinite(Number(popupState.latestRenderState.totalCount))
-    ? Math.max(0, Number(popupState.latestRenderState.totalCount))
-    : Array.isArray(popupState.latestRenderState.items)
-      ? popupState.latestRenderState.items.length
-      : 0;
-  const selectedCount = Number.isFinite(Number(popupState.latestRenderState.selectedCountTotal))
-    ? Math.max(0, Number(popupState.latestRenderState.selectedCountTotal))
-    : getSelectedKeysFromDom().length;
+  const countSnapshot =
+    popupState.latestRenderState.counts && typeof popupState.latestRenderState.counts === "object"
+      ? popupState.latestRenderState.counts
+      : null;
+  const totalCount = Number.isFinite(Number(countSnapshot && countSnapshot.fetchedCount))
+    ? Math.max(0, Number(countSnapshot.fetchedCount))
+    : Number.isFinite(Number(popupState.latestRenderState.totalCount))
+      ? Math.max(0, Number(popupState.latestRenderState.totalCount))
+      : Array.isArray(popupState.latestRenderState.items)
+        ? popupState.latestRenderState.items.length
+        : 0;
+  const selectedCount = Number.isFinite(Number(countSnapshot && countSnapshot.downloadableCount))
+    ? Math.max(0, Number(countSnapshot.downloadableCount))
+    : Number.isFinite(Number(popupState.latestRenderState.selectedCountTotal))
+      ? Math.max(0, Number(popupState.latestRenderState.selectedCountTotal))
+      : getSelectedKeysFromDom().length;
   const visibleCount =
     Number.isFinite(popupState.virtualList.visibleCount) && popupState.virtualList.visibleCount >= 0
       ? popupState.virtualList.visibleCount
@@ -187,7 +194,16 @@ export function updateSelectionSummary({
         : "Search Results";
   }
 
-  const downloadedCount = getDownloadedCount(popupState.latestRenderState.items);
+  const countSnapshot =
+    popupState.latestRenderState.counts && typeof popupState.latestRenderState.counts === "object"
+      ? popupState.latestRenderState.counts
+      : null;
+  const downloadedCount = Number.isFinite(Number(countSnapshot && countSnapshot.downloadedCount))
+    ? Math.max(0, Number(countSnapshot.downloadedCount))
+    : 0;
+  const fetchedCount = Number.isFinite(Number(countSnapshot && countSnapshot.fetchedCount))
+    ? Math.max(0, Number(countSnapshot.fetchedCount))
+    : totalCount;
   const selectedSources = getSelectedSourceValues(dom.sourceSelectInputs);
   const creatorResultTabs = getCreatorResultsTabs(popupState.latestRenderState.items);
   const activeCreatorResultsTab = new Set(creatorResultTabs.map((tab) => tab.key)).has(
@@ -200,13 +216,23 @@ export function updateSelectionSummary({
   const creatorFilterLabel = getCreatorResultsTabLabel(activeCreatorResultsTab);
   const isDownloadedTab = activeCreatorResultsTab === "downloaded";
   const isArchivedTab = activeCreatorResultsTab === "archived";
+  const hasAnyResults =
+    (Array.isArray(popupState.latestRenderState.items) &&
+      popupState.latestRenderState.items.length > 0) ||
+    fetchedCount > 0;
   const isSourceSelectionMode =
     (selectedSources.includes("characterAccounts") || selectedSources.includes("creators")) &&
     phase !== "fetching" &&
-    totalCount === 0;
+    !hasAnyResults;
   popupState.latestSummaryContext = {
     totalCount,
     selectedCount,
+    fetchedCount,
+    downloadableCount: selectedCount,
+    downloadedCount,
+    archivedCount: Number.isFinite(Number(countSnapshot && countSnapshot.archivedCount))
+      ? Math.max(0, Number(countSnapshot.archivedCount))
+      : 0,
     visibleCount,
     visibleSelectedCount,
     phase,
@@ -214,14 +240,17 @@ export function updateSelectionSummary({
 
   if (phase === "fetching") {
     const flavor = popupState.activeFetchStatusMessage || "Finding videos...";
-    dom.selectionSummary.textContent = flavor;
+    dom.selectionSummary.textContent =
+      fetchedCount > 0
+        ? `${flavor} • ${formatWholeNumber(fetchedCount)} found so far.`
+        : flavor;
     return;
   }
 
   if (phase === "fetch-paused") {
     dom.selectionSummary.textContent =
-      totalCount > 0
-        ? `Fetch paused • ${formatWholeNumber(totalCount)} found so far.`
+      fetchedCount > 0
+        ? `Fetch paused • ${formatWholeNumber(fetchedCount)} found so far.`
         : "Fetch paused. Resume when you're ready.";
     return;
   }
@@ -231,12 +260,12 @@ export function updateSelectionSummary({
     return;
   }
 
-  if (selectedSources.length === 0 && totalCount === 0) {
+  if (selectedSources.length === 0 && !hasAnyResults) {
     dom.selectionSummary.textContent = "Choose at least one source to fetch.";
     return;
   }
 
-  if (totalCount === 0) {
+  if (!hasAnyResults) {
     dom.selectionSummary.textContent =
       phase === "fetching" ? "Finding videos..." : "Content Violation?";
     return;
@@ -310,7 +339,7 @@ export function syncSelectionControls(totalCount, selectedCount, visibleCount = 
     !fetchUiState.isAnyPaused &&
     !isFetching;
   const showBrowseTools = hasLoadedResults;
-  const showSummaryPanel = hasLoadedResults && !isFetching;
+  const showSummaryPanel = hasLoadedResults;
   const normalizedSelectedCount = Math.max(0, Number(selectedCount) || 0);
   const downloadLabel =
     normalizedSelectedCount === 1
@@ -385,9 +414,15 @@ export function updateTotalSummary(items) {
   }
 
   const { totalCount: visibleTotalCount, totalBytes } = getTotalBatchMetrics(items);
-  const totalCount = Number.isFinite(Number(popupState.latestRenderState.totalCount))
-    ? Math.max(0, Number(popupState.latestRenderState.totalCount))
-    : visibleTotalCount;
+  const countSnapshot =
+    popupState.latestRenderState.counts && typeof popupState.latestRenderState.counts === "object"
+      ? popupState.latestRenderState.counts
+      : null;
+  const totalCount = Number.isFinite(Number(countSnapshot && countSnapshot.fetchedCount))
+    ? Math.max(0, Number(countSnapshot.fetchedCount))
+    : Number.isFinite(Number(popupState.latestRenderState.totalCount))
+      ? Math.max(0, Number(popupState.latestRenderState.totalCount))
+      : visibleTotalCount;
   const formattedSize = formatFileSize(totalBytes);
   dom.totalCount.textContent =
     formattedSize ? `${formatWholeNumber(totalCount)} / ${formattedSize}` : formatWholeNumber(totalCount);

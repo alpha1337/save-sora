@@ -412,6 +412,31 @@ function simulateResumeVisibleFetchedCount({
   );
 }
 
+function simulateAuthoritativeFetchCountSnapshot({
+  items = [],
+  fetchedCount = 0,
+  totalItems = 0,
+  loadedItems = 0,
+} = {}) {
+  const resolvedItems = Array.isArray(items) ? items : [];
+  let authoritativeFetchedCount = resolvedItems.length;
+
+  for (const value of [fetchedCount, totalItems, loadedItems]) {
+    const numericValue = Number(value);
+    if (Number.isFinite(numericValue)) {
+      authoritativeFetchedCount = Math.max(
+        authoritativeFetchedCount,
+        Math.max(0, numericValue),
+      );
+    }
+  }
+
+  return {
+    fetchedCount: authoritativeFetchedCount,
+    backedUpItemCount: Math.max(0, authoritativeFetchedCount - resolvedItems.length),
+  };
+}
+
 function simulateRuntimeCatalogMerge(existingItems = [], restoredItems = []) {
   const merged = new Map(existingItems.map((item) => [item.id, item]));
   for (const item of restoredItems) {
@@ -426,6 +451,11 @@ function simulateRenderedCardSections(viewMode) {
     includesPerCardGridTooltip: false,
     usesSharedGridTooltip: viewMode === "grid",
   };
+}
+
+function simulateSummaryPanelVisibility({ items = [] } = {}) {
+  const hasLoadedResults = Array.isArray(items) && items.length > 0;
+  return hasLoadedResults;
 }
 
 function simulateIsActiveBatchItem(item) {
@@ -471,17 +501,23 @@ function simulateTotalBatchMetrics(items) {
 }
 
 function simulateAuthoritativePopupTotals({ runtimeState = {}, renderState = {} } = {}) {
+  const countSnapshot =
+    renderState && renderState.counts && typeof renderState.counts === "object"
+      ? renderState.counts
+      : {};
   return {
-    totalCount: Number.isFinite(Number(renderState.totalCount))
-      ? Math.max(0, Number(renderState.totalCount))
-      : Array.isArray(renderState.items)
-        ? renderState.items.length
+    totalCount: Number.isFinite(Number(countSnapshot.fetchedCount))
+      ? Math.max(0, Number(countSnapshot.fetchedCount))
+      : Number.isFinite(Number(renderState.totalCount))
+        ? Math.max(0, Number(renderState.totalCount))
         : 0,
-    selectedCount: Number.isFinite(Number(renderState.selectedCountTotal))
-      ? Math.max(0, Number(renderState.selectedCountTotal))
-      : Array.isArray(renderState.selectedKeys)
-        ? renderState.selectedKeys.length
-        : 0,
+    selectedCount: Number.isFinite(Number(countSnapshot.downloadableCount))
+      ? Math.max(0, Number(countSnapshot.downloadableCount))
+      : Number.isFinite(Number(renderState.selectedCountTotal))
+        ? Math.max(0, Number(renderState.selectedCountTotal))
+        : Array.isArray(renderState.selectedKeys)
+          ? renderState.selectedKeys.length
+          : 0,
     fetchedCount: Math.max(0, Number(runtimeState.fetchedCount) || 0),
   };
 }
@@ -561,8 +597,20 @@ async function testStructuralInvariants() {
     path.join(projectRoot, "popup/ui/list/index.js"),
     "utf8",
   );
+  const popupFetchStatusSource = await readFile(
+    path.join(projectRoot, "popup/ui/render/fetch-status.js"),
+    "utf8",
+  );
   const popupFetchProgressSource = await readFile(
     path.join(projectRoot, "popup/ui/render/fetch-progress.js"),
+    "utf8",
+  );
+  const itemMutationsSource = await readFile(
+    path.join(projectRoot, "popup/controllers/item-mutations.js"),
+    "utf8",
+  );
+  const popupCountsSource = await readFile(
+    path.join(projectRoot, "popup/utils/counts.js"),
     "utf8",
   );
   const popupHtmlSource = await readFile(path.join(projectRoot, "popup.html"), "utf8");
@@ -631,15 +679,21 @@ async function testStructuralInvariants() {
   assert.match(popupUpdaterSource, /timeoutMs: UPDATE_GATE_STARTUP_CHECK_TIMEOUT_MS,/);
   assert.match(popupUpdaterSource, /popupState\.updateGateHidden = true;\s+setStartupGateLocked\(false\);/s);
   assert.match(popupUpdaterSource, /if \(!settled && timeoutMs > 0 && Date\.now\(\) - startedAt >= timeoutMs\) \{\s+throw new Error\("Save Sora timed out while checking GitHub for updates\."\);\s+\}/s);
+  assert.match(popupCountsSource, /export function buildRenderCountSnapshot\(runtimeState, items\)/);
+  assert.match(popupCountsSource, /downloadableCount: Math\.max\(0, fetchedCount - downloadedCount - archivedCount\),/);
   assert.match(popupRenderSource, /const popupTotalItemCount = Number\.isFinite\(Number\(state && state\.popupTotalItemCount\)\)/);
-  assert.match(popupRenderSource, /const fetchedCount = Number\.isFinite\(Number\(state && state\.fetchedCount\)\)/);
-  assert.match(popupRenderSource, /const totalVideos = Math\.max\(popupTotalItemCount, fetchedCount\);/);
-  assert.match(popupRenderSource, /const selectedCountTotal = Number\.isFinite\(Number\(state && state\.popupSelectedCountTotal\)\)/);
+  assert.match(popupRenderSource, /const countSnapshot = buildRenderCountSnapshot\(state, items\);/);
+  assert.match(popupRenderSource, /const foundVideos = Math\.max\(popupTotalItemCount, countSnapshot\.fetchedCount\);/);
+  assert.match(popupRenderSource, /const totalVideos = foundVideos;/);
+  assert.match(popupRenderSource, /const selectedCountTotal = countSnapshot\.downloadableCount;/);
   assert.match(popupSelectionSource, /const fetchUiState = getFetchUiState\(/);
-  assert.match(popupSelectionSource, /Number\.isFinite\(Number\(popupState\.latestRenderState\.totalCount\)\)/);
-  assert.match(popupSelectionSource, /Number\.isFinite\(Number\(popupState\.latestRenderState\.selectedCountTotal\)\)/);
+  assert.match(popupSelectionSource, /popupState\.latestRenderState\.counts && typeof popupState\.latestRenderState\.counts === "object"/);
+  assert.match(popupSelectionSource, /const hasAnyResults =\s+\(Array\.isArray\(popupState\.latestRenderState\.items\)/s);
+  assert.match(popupSelectionSource, /phase !== "fetching" &&\s+!hasAnyResults/s);
+  assert.match(popupSelectionSource, /found so far/);
   assert.match(popupSelectionSource, /!fetchUiState\.isBusy[\s\S]*?!fetchUiState\.isAnyPaused/);
   assert.match(popupListSource, /const effectiveTotalCount = Number\.isFinite\(Number\(popupState\.latestRenderState\.totalCount\)\)/);
+  assert.match(popupFetchStatusSource, /const fetchedCount = Math\.max\(0, Number\(popupState\.latestSummaryContext\.fetchedCount\) \|\| 0\);/);
   assert.match(popupFetchProgressSource, /const isExpanded =\s+isVisible && \(popupState\.fetchDrawerExpanded \|\| popupState\.fetchDrawerHoverExpanded\);/s);
   assert.match(popupFetchProgressSource, /dom\.fetchProgressSource\.textContent = "";/);
   assert.match(popupFetchProgressSource, /dom\.fetchProgressSource\.classList\.add\("hidden"\);/);
@@ -651,6 +705,11 @@ async function testStructuralInvariants() {
   assert.match(popupCharacterSelectionSource, /const fetchUiState = getFetchUiState\(/);
   assert.match(popupSourceMenusSource, /const fetchUiState = getFetchUiState\(/);
   assert.match(backgroundSource, /function createDefaultRestoreStatus/);
+  assert.match(backgroundSource, /function resolveAuthoritativeFetchCountSnapshot\(options = \{\}\)/);
+  assert.match(backgroundSource, /const countSnapshot = resolveAuthoritativeFetchCountSnapshot\(\{\s+items: sourceItems,/s);
+  assert.match(backgroundSource, /const countSnapshot = resolveAuthoritativeFetchCountSnapshot\(\{\s+items: restoredItems,/s);
+  assert.match(backgroundSource, /const countSnapshot = resolveAuthoritativeFetchCountSnapshot\(\{\s+items: nextItems,/s);
+  assert.match(backgroundSource, /const countSnapshot = resolveAuthoritativeFetchCountSnapshot\(\{\s+items: activeItems,/s);
   assert.match(backgroundSource, /if \(!updateAvailable\) \{[\s\S]*?phase: "idle"/);
   assert.match(backgroundSource, /if \(missingManifestForOlderOrCurrentRelease \|\| noPublishedReleaseYet\) \{[\s\S]*?phase: "idle"/);
   assert.match(backgroundSource, /async function resolvePausedFetchRequest/);
@@ -680,6 +739,8 @@ async function testStructuralInvariants() {
   assert.doesNotMatch(backgroundSource, /transaction\.objectStore\(SOURCE_RETRY_STATE_STORE\)\.clear\(\);/);
   assert.match(backgroundSource, /async function resetExtensionState\(options = \{\}\)/);
   assert.match(backgroundSource, /const preserveRecoveryData = options\.preserveRecoveryData !== false;/);
+  assert.match(popupSelectionSource, /const showSummaryPanel = hasLoadedResults;/);
+  assert.match(itemMutationsSource, /const countSnapshot = buildRenderCountSnapshot\(popupState\.latestRuntimeState, items\);/);
   assert.match(popupSelectionSource, /activeCreatorResultsTab === "downloaded"/);
   assert.match(popupSelectionSource, /downloaded in view/);
   assert.match(popupItemCardPartsSource, /removeButton\.textContent = "Download Again";/);
@@ -750,15 +811,16 @@ function testPopupTotalsPreferAuthoritativeRenderCountsOverPreviewLength() {
       fetchedCount: 3800,
     },
     renderState: {
-      items: new Array(3000).fill(null),
-      totalCount: 3800,
-      selectedCountTotal: 3800,
+      counts: {
+        fetchedCount: 3800,
+        downloadableCount: 3125,
+      },
       selectedKeys: new Array(3000).fill("preview"),
     },
   });
 
   assert.equal(totals.totalCount, 3800);
-  assert.equal(totals.selectedCount, 3800);
+  assert.equal(totals.selectedCount, 3125);
   assert.equal(totals.fetchedCount, 3800);
 }
 
@@ -1219,6 +1281,24 @@ function testResumeProgressKeepsRestoredBaseline() {
   );
 }
 
+function testPausedFetchCountsPreferAuthoritativeFetchedTotal() {
+  const countSnapshot = simulateAuthoritativeFetchCountSnapshot({
+    items: Array.from({ length: 3000 }, (_, index) => ({ id: `preview-${index}` })),
+    fetchedCount: 27080,
+  });
+
+  assert.equal(
+    countSnapshot.fetchedCount,
+    27080,
+    "paused fetch state should preserve the highest known fetched total instead of collapsing to the preview slice",
+  );
+  assert.equal(
+    countSnapshot.backedUpItemCount,
+    24080,
+    "paused fetch state should carry the hidden remainder so popup totals stay aligned with the global counter",
+  );
+}
+
 function testRestoredMirrorItemsMergeIntoRuntimeCatalog() {
   const mergedCatalog = simulateRuntimeCatalogMerge(
     [{ id: "item-1" }, { id: "item-2" }],
@@ -1241,6 +1321,16 @@ function testGridCardsDoNotDuplicateHiddenListBodies() {
   assert.equal(gridSections.usesSharedGridTooltip, true);
   assert.equal(listSections.includesBody, true);
   assert.equal(listSections.includesPerCardGridTooltip, false);
+}
+
+function testSummaryPanelStaysVisibleDuringFetch() {
+  assert.equal(
+    simulateSummaryPanelVisibility({
+      items: [{ id: "item-1" }],
+    }),
+    true,
+    "the total counter should stay visible while fetch-mode results are on screen",
+  );
 }
 
 function testDownloadedTabFilteringAndQueueExclusion() {
@@ -1379,12 +1469,14 @@ testDismissedRestorePromptReturnsToFetchCta();
 testResumeBootstrapKeepsPausedResultsVisible();
 testResumeBootstrapUsesMergedPausedWorkingSet();
 testResumeProgressKeepsRestoredBaseline();
+testPausedFetchCountsPreferAuthoritativeFetchedTotal();
 testRestoredMirrorItemsMergeIntoRuntimeCatalog();
 testGridCardsDoNotDuplicateHiddenListBodies();
 testDownloadedTabFilteringAndQueueExclusion();
 testPausedFetchPersistencePreservesRecoveryMetadata();
 testPausedSessionAutoRestoresWithoutPrompt();
 testRestoreGateOnlyReleasesAfterFetchActuallyStarts();
+testSummaryPanelStaysVisibleDuringFetch();
 testStartupGateLockPreventsDashboardFlash();
 
 console.log("Fetch recovery regression checks passed.");

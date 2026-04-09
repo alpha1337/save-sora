@@ -1,6 +1,7 @@
 import { dom } from "../dom.js";
 import { saveDownloadedState, saveRemovedState } from "../runtime.js";
 import { popupState } from "../state.js";
+import { buildRenderCountSnapshot } from "../utils/counts.js";
 import { getImplicitSelectedKeys, getItemKey } from "../utils/items.js";
 import { hideNotice, showNotice, updateBackToTopVisibility } from "../ui/layout.js";
 import { renderCurrentItems, renderState } from "../ui/render.js";
@@ -188,10 +189,23 @@ function applyOptimisticDownloadedState(itemKey, downloaded, scrollTop = 0) {
  * @param {string[]} selectedKeys
  */
 function commitOptimisticItemState(items, selectedKeys, scrollTop = 0) {
+  const countSnapshot = buildRenderCountSnapshot(popupState.latestRuntimeState, items);
   popupState.latestRenderState = {
     ...popupState.latestRenderState,
     items,
     selectedKeys: Array.isArray(selectedKeys) ? selectedKeys : [],
+    totalCount: countSnapshot.fetchedCount,
+    selectedCountTotal: countSnapshot.downloadableCount,
+    counts: countSnapshot,
+  };
+  popupState.latestSummaryContext = {
+    ...popupState.latestSummaryContext,
+    totalCount: countSnapshot.fetchedCount,
+    selectedCount: countSnapshot.downloadableCount,
+    fetchedCount: countSnapshot.fetchedCount,
+    downloadableCount: countSnapshot.downloadableCount,
+    downloadedCount: countSnapshot.downloadedCount,
+    archivedCount: countSnapshot.archivedCount,
   };
 
   renderCurrentItems();

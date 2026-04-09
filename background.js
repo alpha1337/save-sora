@@ -5173,12 +5173,26 @@ function estimatePopupPayloadBytes(value) {
   }
 }
 
+function resolveAuthoritativeFetchCountSnapshot(options = {}) {
+  const items = Array.isArray(options.items) ? options.items : [];
+  let fetchedCount = items.length;
+
+  for (const value of [options.fetchedCount, options.totalItems, options.loadedItems]) {
+    const numericValue = Number(value);
+    if (Number.isFinite(numericValue)) {
+      fetchedCount = Math.max(fetchedCount, Math.max(0, numericValue));
+    }
+  }
+
+  return {
+    fetchedCount,
+    backedUpItemCount: Math.max(0, fetchedCount - items.length),
+  };
+}
+
 function buildPopupStateSnapshot(state = currentState) {
   const sourceState = state && typeof state === "object" ? state : createDefaultState();
   const sourceItems = Array.isArray(sourceState.items) ? sourceState.items : [];
-  const backedUpItemCount = Number.isFinite(Number(sourceState.backedUpItemCount))
-    ? Math.max(0, Number(sourceState.backedUpItemCount))
-    : 0;
   const limitedItems = [];
   let popupItemsBytes = 0;
 
@@ -5209,8 +5223,6 @@ function buildPopupStateSnapshot(state = currentState) {
   const selectedKeysTotal = implicitSelectedKeys.length;
   const selectedKeys = implicitSelectedKeys.filter((key) => typeof key === "string" && visibleKeys.has(key));
   const titleOverrides = pruneLegacyTitleOverrides(limitedItems, sourceState.titleOverrides);
-  const totalItemCount = sourceItems.length + backedUpItemCount;
-  const hiddenItemCount = Math.max(0, totalItemCount - limitedItems.length);
   const partialWarning = joinPartialWarnings([
     sourceState.partialWarning,
   ]);
@@ -5226,10 +5238,27 @@ function buildPopupStateSnapshot(state = currentState) {
           error: fetchRecoveryInitError,
         })
       : createDefaultRestoreStatus(sourceState.restoreStatus);
+  const persistedBackedUpItemCount = Number.isFinite(Number(sourceState.backedUpItemCount))
+    ? Math.max(0, Number(sourceState.backedUpItemCount))
+    : 0;
+  const countSnapshot = resolveAuthoritativeFetchCountSnapshot({
+    items: sourceItems,
+    fetchedCount: Math.max(
+      0,
+      Number(sourceState.fetchedCount) || 0,
+      sourceItems.length + persistedBackedUpItemCount,
+    ),
+    totalItems: restoreStatus.totalItems,
+    loadedItems: restoreStatus.loadedItems,
+  });
+  const totalItemCount = countSnapshot.fetchedCount;
+  const hiddenItemCount = Math.max(0, totalItemCount - limitedItems.length);
 
   return {
     ...sourceState,
     items: limitedItems,
+    fetchedCount: countSnapshot.fetchedCount,
+    backedUpItemCount: countSnapshot.backedUpItemCount,
     selectedKeys,
     titleOverrides,
     restoreStatus,
@@ -5782,6 +5811,12 @@ async function buildPausedFetchStateFromSyncSession(sessionRecord, state = curre
 
   const restoredSourceIds = deriveSourceIdsFromItems(restoredItems);
   const restoredSelectedKeys = getImplicitSelectedKeys(restoredItems);
+  const countSnapshot = resolveAuthoritativeFetchCountSnapshot({
+    items: restoredItems,
+    fetchedCount: Math.max(0, Number(state && state.fetchedCount) || 0, restoredItems.length),
+    totalItems: state && state.restoreStatus ? state.restoreStatus.totalItems : 0,
+    loadedItems: state && state.restoreStatus ? state.restoreStatus.loadedItems : 0,
+  });
 
   return {
     ...(state && typeof state === "object" ? state : createDefaultState()),
@@ -5795,8 +5830,8 @@ async function buildPausedFetchStateFromSyncSession(sessionRecord, state = curre
     characterIds: restoredSourceIds.characterIds,
     creatorIds: restoredSourceIds.creatorIds,
     items: restoredItems,
-    fetchedCount: restoredItems.length,
-    backedUpItemCount: 0,
+    fetchedCount: countSnapshot.fetchedCount,
+    backedUpItemCount: countSnapshot.backedUpItemCount,
     selectedKeys: restoredSelectedKeys,
     queued: restoredSelectedKeys.length,
     titleOverrides: pruneLegacyTitleOverrides(restoredItems, state && state.titleOverrides),
@@ -5804,7 +5839,7 @@ async function buildPausedFetchStateFromSyncSession(sessionRecord, state = curre
       stage: "paused",
       stageLabel: "Fetch paused",
       detail: "Your saved results were restored from local storage. Resume when you're ready.",
-      itemsFound: restoredItems.length,
+      itemsFound: countSnapshot.fetchedCount,
     }),
     finishedAt: new Date().toISOString(),
     resumableFetchRequest: buildResumableFetchRequestFromSyncSession(normalizedSession),
@@ -5814,8 +5849,8 @@ async function buildPausedFetchStateFromSyncSession(sessionRecord, state = curre
       phase: "ready",
       sessionId: normalizedSession.sessionId,
       promptVisible: false,
-      totalItems: restoredItems.length,
-      loadedItems: restoredItems.length,
+      totalItems: countSnapshot.fetchedCount,
+      loadedItems: countSnapshot.fetchedCount,
       message: "Restored your saved fetch.",
       detail: "Your full saved results are ready.",
     }),
@@ -8946,7 +8981,16 @@ async function scanSources(sources, searchQuery = "") {
       const activeItems = await loadMergedFetchItemsForState(currentState);
       const activeSourceIds = deriveSourceIdsFromItems(activeItems);
       const nextSelectedKeys = normalizeSelectedKeys(activeItems, currentState.selectedKeys);
-      const backedUpCount = activeItems.length > 0 ? 0 : Number(currentState.backedUpItemCount) || 0;
+      const countSnapshot = resolveAuthoritativeFetchCountSnapshot({
+        items: activeItems,
+        fetchedCount: Math.max(
+          0,
+          Number(currentState.fetchedCount) || 0,
+          activeItems.length + (activeItems.length > 0 ? 0 : Number(currentState.backedUpItemCount) || 0),
+        ),
+        totalItems: currentState.restoreStatus && currentState.restoreStatus.totalItems,
+        loadedItems: currentState.restoreStatus && currentState.restoreStatus.loadedItems,
+      });
       const resumableFetchRequest = await getAuthoritativeResumableFetchRequest(
         currentState.resumableFetchRequest || pausedFetchRequest,
       );
@@ -8959,7 +9003,7 @@ async function scanSources(sources, searchQuery = "") {
         detail: activeItems.length
           ? "Your current preview stays available while this crawl is paused."
           : "Resume the crawl to continue loading results.",
-        itemsFound: activeItems.length + backedUpCount,
+        itemsFound: countSnapshot.fetchedCount,
       });
 
       await setState({
@@ -8974,8 +9018,8 @@ async function scanSources(sources, searchQuery = "") {
         message: fetchMessage,
         currentSource: null,
         resumableFetchRequest,
-        fetchedCount: activeItems.length + backedUpCount,
-        backedUpItemCount: backedUpCount,
+        fetchedCount: countSnapshot.fetchedCount,
+        backedUpItemCount: countSnapshot.backedUpItemCount,
         selectedKeys: nextSelectedKeys,
         queued: nextSelectedKeys.length,
         titleOverrides: pruneLegacyTitleOverrides(activeItems, currentState.titleOverrides),
@@ -8994,7 +9038,7 @@ async function scanSources(sources, searchQuery = "") {
       if (volatileBackupSessionKey) {
         void writeVolatileBackupMeta(volatileBackupSessionKey, {
           status: "paused",
-          fetchedCount: activeItems.length + backedUpCount,
+          fetchedCount: countSnapshot.fetchedCount,
           previewCount: activeItems.length,
         }).catch((metaError) => {
           console.warn("Failed to mark the volatile backup as paused.", metaError);
@@ -10464,15 +10508,35 @@ function buildPausedFetchRestorePatch(options = {}) {
     nextItems,
     Array.isArray(options.selectedKeys) ? options.selectedKeys : currentState.selectedKeys,
   );
-  const backedUpCount = Math.max(
+  const knownFetchedCount = Math.max(
     0,
     Number(
-      Object.prototype.hasOwnProperty.call(options, "backedUpItemCount")
-        ? options.backedUpItemCount
-        : currentState.backedUpItemCount,
+      Object.prototype.hasOwnProperty.call(options, "fetchedCount")
+        ? options.fetchedCount
+        : currentState.fetchedCount,
     ) || 0,
+    nextItems.length + Math.max(
+      0,
+      Number(
+        Object.prototype.hasOwnProperty.call(options, "backedUpItemCount")
+          ? options.backedUpItemCount
+          : currentState.backedUpItemCount,
+      ) || 0,
+    ),
   );
-  const itemsFound = nextItems.length + backedUpCount;
+  const countSnapshot = resolveAuthoritativeFetchCountSnapshot({
+    items: nextItems,
+    fetchedCount: knownFetchedCount,
+    totalItems:
+      options && options.restoreStatus && typeof options.restoreStatus === "object"
+        ? options.restoreStatus.totalItems
+        : currentState.restoreStatus && currentState.restoreStatus.totalItems,
+    loadedItems:
+      options && options.restoreStatus && typeof options.restoreStatus === "object"
+        ? options.restoreStatus.loadedItems
+        : currentState.restoreStatus && currentState.restoreStatus.loadedItems,
+  });
+  const itemsFound = countSnapshot.fetchedCount;
 
   return {
     phase: "fetch-paused",
@@ -10487,7 +10551,8 @@ function buildPausedFetchRestorePatch(options = {}) {
         ? options.resumableFetchRequest
         : currentState.resumableFetchRequest || pausedFetchRequest,
     ),
-    fetchedCount: itemsFound,
+    fetchedCount: countSnapshot.fetchedCount,
+    backedUpItemCount: countSnapshot.backedUpItemCount,
     selectedKeys: nextSelectedKeys,
     queued: nextSelectedKeys.length,
     completed: 0,
