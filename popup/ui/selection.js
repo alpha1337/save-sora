@@ -7,7 +7,6 @@ import { getSelectedSourceValues } from "../utils/settings.js";
 import {
   getCreatorResultsTabLabel,
   getCreatorResultsTabs,
-  getTotalBatchMetrics,
   getImplicitSelectedKeys,
   getItemKey,
   isActiveBatchItem,
@@ -233,6 +232,18 @@ export function updateSelectionSummary({
     archivedCount: Number.isFinite(Number(countSnapshot && countSnapshot.archivedCount))
       ? Math.max(0, Number(countSnapshot.archivedCount))
       : 0,
+    downloadableBytes:
+      countSnapshot && Object.prototype.hasOwnProperty.call(countSnapshot, "downloadableBytes")
+        ? countSnapshot.downloadableBytes
+        : null,
+    downloadedBytes:
+      countSnapshot && Object.prototype.hasOwnProperty.call(countSnapshot, "downloadedBytes")
+        ? countSnapshot.downloadedBytes
+        : null,
+    archivedBytes:
+      countSnapshot && Object.prototype.hasOwnProperty.call(countSnapshot, "archivedBytes")
+        ? countSnapshot.archivedBytes
+        : null,
     visibleCount,
     visibleSelectedCount,
     phase,
@@ -413,7 +424,6 @@ export function updateTotalSummary(items) {
     return;
   }
 
-  const { totalCount: visibleTotalCount, totalBytes } = getTotalBatchMetrics(items);
   const countSnapshot =
     popupState.latestRenderState.counts && typeof popupState.latestRenderState.counts === "object"
       ? popupState.latestRenderState.counts
@@ -422,7 +432,13 @@ export function updateTotalSummary(items) {
     ? Math.max(0, Number(countSnapshot.fetchedCount))
     : Number.isFinite(Number(popupState.latestRenderState.totalCount))
       ? Math.max(0, Number(popupState.latestRenderState.totalCount))
-      : visibleTotalCount;
+      : Array.isArray(items)
+        ? items.length
+        : 0;
+  const totalBytes =
+    countSnapshot && Object.prototype.hasOwnProperty.call(countSnapshot, "downloadableBytes")
+      ? countSnapshot.downloadableBytes
+      : null;
   const formattedSize = formatFileSize(totalBytes);
   dom.totalCount.textContent =
     formattedSize ? `${formatWholeNumber(totalCount)} / ${formattedSize}` : formatWholeNumber(totalCount);

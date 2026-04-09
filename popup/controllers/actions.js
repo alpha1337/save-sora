@@ -21,6 +21,7 @@ import {
 } from "../utils/export.js";
 import { hideNotice, setControlsDisabled, showNotice } from "../ui/layout.js";
 import { updateDownloadOverlay } from "../ui/overlay.js";
+import { renderState } from "../ui/render.js";
 import { syncFetchProgressPanel } from "../ui/render/fetch-progress.js";
 import {
   getSelectedKeysFromDom,
@@ -28,7 +29,7 @@ import {
   getVisibleArchivedKeysFromDom,
 } from "../ui/selection.js";
 import { getSelectedSourceValues } from "../utils/settings.js";
-import { refreshStatus } from "./polling.js";
+import { refreshStatus, syncPollingForState } from "./polling.js";
 import {
   clearVisibleSourceScopes,
   closeAllSourceMenus,
@@ -64,18 +65,20 @@ export async function handleRunFormSubmit(event) {
   setControlsDisabled(true);
   hideNotice(dom.errorBox);
 
-  if (!isResetMode && !isResumeMode) {
-    preparePendingFetchUi();
-  }
-
   try {
+    let immediateState = null;
     if (isResetMode) {
       await requestResetState();
     } else if (isResumeMode) {
-      await requestResumeScan();
+      immediateState = await requestResumeScan();
     } else {
       await persistScopedSelectionBeforeScan(sources);
-      await requestScan(sources, popupState.browseState.query);
+      immediateState = await requestScan(sources, popupState.browseState.query);
+    }
+
+    if (immediateState && typeof immediateState === "object") {
+      renderState(immediateState);
+      syncPollingForState(immediateState);
     }
   } catch (error) {
     showNotice(dom.errorBox, error instanceof Error ? error.message : String(error));
@@ -357,7 +360,11 @@ export async function handleFetchProgressPauseActionClick() {
       popupState.latestRenderState,
     );
     if (fetchUiState.isFetchPaused) {
-      await requestResumeScan();
+      const resumedState = await requestResumeScan();
+      if (resumedState && typeof resumedState === "object") {
+        renderState(resumedState);
+        syncPollingForState(resumedState);
+      }
     } else if (fetchUiState.isFetching) {
       await requestPauseScan();
     }
@@ -400,26 +407,4 @@ export async function handleClearSelectionClick() {
   }
 
   await handleBatchArchiveStateChange(activeKeys, true);
-}
-
-/**
- * Puts the popup into a temporary "fetch in progress" presentation.
- */
-function preparePendingFetchUi() {
-  dom.itemsList?.classList.add("hidden");
-  dom.characterSelectionGrid?.classList.add("hidden");
-  dom.emptyState?.classList.add("hidden");
-
-  if (dom.emptyStateText instanceof HTMLElement) {
-    dom.emptyStateText.classList.add("hidden");
-    dom.emptyStateText.textContent = "";
-  }
-
-  if (dom.emptyStateImage instanceof HTMLElement) {
-    dom.emptyStateImage.classList.remove("hidden");
-  }
-
-  if (dom.selectionSummary instanceof HTMLElement) {
-    dom.selectionSummary.textContent = popupState.activeFetchStatusMessage || "Finding videos...";
-  }
 }

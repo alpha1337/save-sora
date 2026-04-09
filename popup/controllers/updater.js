@@ -251,7 +251,12 @@ async function restorePreviousSessionFromGate() {
     }
     syncUpdateSurfaces(popupState.latestUpdateStatus);
 
-    await requestResumeScan();
+    const resumedBootstrapState = await requestResumeScan();
+    if (resumedBootstrapState && typeof resumedBootstrapState === "object") {
+      popupState.latestRuntimeState = resumedBootstrapState;
+    }
+    syncUpdateSurfaces(popupState.latestUpdateStatus);
+
     const resumedState = await waitForResumedFetchState();
 
     popupState.restoreGatePhase = "idle";

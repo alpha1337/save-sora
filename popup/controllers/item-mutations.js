@@ -206,6 +206,9 @@ function commitOptimisticItemState(items, selectedKeys, scrollTop = 0) {
     downloadableCount: countSnapshot.downloadableCount,
     downloadedCount: countSnapshot.downloadedCount,
     archivedCount: countSnapshot.archivedCount,
+    downloadableBytes: countSnapshot.downloadableBytes,
+    downloadedBytes: countSnapshot.downloadedBytes,
+    archivedBytes: countSnapshot.archivedBytes,
   };
 
   renderCurrentItems();

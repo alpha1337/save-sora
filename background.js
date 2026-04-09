@@ -392,16 +392,18 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message.type === "START_SCAN") {
-    if (activeRun) {
-      sendResponse({ ok: false, error: "A fetch or download run is already in progress." });
-      return false;
-    }
+    void (async () => {
+      if (activeRun) {
+        sendResponse({ ok: false, error: "A fetch or download run is already in progress." });
+        return;
+      }
 
-    void startScan(message.sources, message.searchQuery).catch((error) => {
-      console.error("Sora Bulk Downloader scan failed.", error);
+      const state = await startScan(message.sources, message.searchQuery);
+      sendResponse({ ok: true, state });
+    })().catch((error) => {
+      sendResponse({ ok: false, error: getErrorMessage(error) });
     });
-    sendResponse({ ok: true });
-    return false;
+    return true;
   }
 
   if (message.type === "PAUSE_SCAN") {
@@ -433,10 +435,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         return;
       }
 
-      void resumeScan().catch((error) => {
-        console.error("Failed to resume the Sora fetch.", error);
-      });
-      sendResponse({ ok: true });
+      const state = await resumeScan();
+      sendResponse({ ok: true, state });
     })().catch((error) => {
       sendResponse({ ok: false, error: getErrorMessage(error) });
     });
@@ -5190,6 +5190,61 @@ function resolveAuthoritativeFetchCountSnapshot(options = {}) {
   };
 }
 
+function buildPopupBatchMetricSnapshot(items = []) {
+  const resolvedItems = Array.isArray(items) ? items : [];
+  let downloadableCount = 0;
+  let downloadedCount = 0;
+  let archivedCount = 0;
+  let downloadableBytes = 0;
+  let downloadedBytes = 0;
+  let archivedBytes = 0;
+  let hasKnownDownloadableBytes = false;
+  let hasKnownDownloadedBytes = false;
+  let hasKnownArchivedBytes = false;
+
+  for (const item of resolvedItems) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+
+    const fileSizeBytes = Number(item.fileSizeBytes);
+    const hasKnownSize = Number.isFinite(fileSizeBytes) && fileSizeBytes > 0;
+
+    if (item.isDownloaded === true) {
+      downloadedCount += 1;
+      if (hasKnownSize) {
+        downloadedBytes += fileSizeBytes;
+        hasKnownDownloadedBytes = true;
+      }
+      continue;
+    }
+
+    if (item.isRemoved === true) {
+      archivedCount += 1;
+      if (hasKnownSize) {
+        archivedBytes += fileSizeBytes;
+        hasKnownArchivedBytes = true;
+      }
+      continue;
+    }
+
+    downloadableCount += 1;
+    if (hasKnownSize) {
+      downloadableBytes += fileSizeBytes;
+      hasKnownDownloadableBytes = true;
+    }
+  }
+
+  return {
+    downloadableCount,
+    downloadedCount,
+    archivedCount,
+    downloadableBytes: hasKnownDownloadableBytes ? downloadableBytes : null,
+    downloadedBytes: hasKnownDownloadedBytes ? downloadedBytes : null,
+    archivedBytes: hasKnownArchivedBytes ? archivedBytes : null,
+  };
+}
+
 function buildPopupStateSnapshot(state = currentState) {
   const sourceState = state && typeof state === "object" ? state : createDefaultState();
   const sourceItems = Array.isArray(sourceState.items) ? sourceState.items : [];
@@ -5251,6 +5306,7 @@ function buildPopupStateSnapshot(state = currentState) {
     totalItems: restoreStatus.totalItems,
     loadedItems: restoreStatus.loadedItems,
   });
+  const metricSnapshot = buildPopupBatchMetricSnapshot(sourceItems);
   const totalItemCount = countSnapshot.fetchedCount;
   const hiddenItemCount = Math.max(0, totalItemCount - limitedItems.length);
 
@@ -5271,6 +5327,12 @@ function buildPopupStateSnapshot(state = currentState) {
     popupHiddenItemCount: hiddenItemCount,
     popupVisibleItemCount: limitedItems.length,
     popupTotalItemCount: totalItemCount,
+    popupDownloadableCount: metricSnapshot.downloadableCount,
+    popupDownloadedCount: metricSnapshot.downloadedCount,
+    popupArchivedCount: metricSnapshot.archivedCount,
+    popupDownloadableBytes: metricSnapshot.downloadableBytes,
+    popupDownloadedBytes: metricSnapshot.downloadedBytes,
+    popupArchivedBytes: metricSnapshot.archivedBytes,
     popupSelectedCountTotal: selectedKeysTotal,
     popupPageIndex: 0,
     popupPageCount: hiddenItemCount > 0 ? Math.max(1, Math.ceil(totalItemCount / POPUP_STATE_ITEM_LIMIT)) : 1,
@@ -5449,6 +5511,7 @@ async function buildPopupStateSnapshotForView(state = currentState, options = {}
     .map((item) => compactItemForPopup(item))
     .filter(Boolean);
   const totalItemCount = fullItems.length;
+  const metricSnapshot = buildPopupBatchMetricSnapshot(fullItems);
   const visibleKeys = new Set(fullItems.map((item) => getCanonicalItemKey(item)));
   const resolvedSelectedKeys = getImplicitSelectedKeys(fullItems);
   const selectedKeysTotal = resolvedSelectedKeys.length;
@@ -5462,6 +5525,12 @@ async function buildPopupStateSnapshotForView(state = currentState, options = {}
     popupVisibleItemCount: fullItems.length,
     popupHiddenItemCount: 0,
     popupTotalItemCount: totalItemCount,
+    popupDownloadableCount: metricSnapshot.downloadableCount,
+    popupDownloadedCount: metricSnapshot.downloadedCount,
+    popupArchivedCount: metricSnapshot.archivedCount,
+    popupDownloadableBytes: metricSnapshot.downloadableBytes,
+    popupDownloadedBytes: metricSnapshot.downloadedBytes,
+    popupArchivedBytes: metricSnapshot.archivedBytes,
     popupSelectedCountTotal: selectedKeysTotal,
     popupPageIndex: 0,
     popupPageCount: 1,
@@ -8523,22 +8592,59 @@ async function startScan(requestedSources, requestedSearchQuery = "", options = 
   activeVolatileBackupResumeMeta = null;
 
   setKeepAwakeEnabled(true);
-  activeRun = scanSources(sources, searchQuery);
-  try {
-    await activeRun;
-    if (currentState.phase !== "fetch-paused") {
-      pausedFetchRequest = null;
+  let bootstrapSettled = false;
+  let resolveBootstrapState;
+  let rejectBootstrapState;
+  const bootstrapStatePromise = new Promise((resolve, reject) => {
+    resolveBootstrapState = resolve;
+    rejectBootstrapState = reject;
+  });
+  const settleBootstrapState = (state) => {
+    if (bootstrapSettled) {
+      return;
     }
-  } finally {
-    activeRun = null;
-    activeVolatileBackupSessionKey = "";
-    activeVolatileBackupResumeMeta = null;
+    bootstrapSettled = true;
+    resolveBootstrapState(state);
+  };
+  const failBootstrapState = (error) => {
+    if (bootstrapSettled) {
+      return;
+    }
+    bootstrapSettled = true;
+    rejectBootstrapState(error);
+  };
+
+  activeRun = (async () => {
     try {
-      await cleanupHiddenTab();
+      await scanSources(sources, searchQuery, {
+        onFetchStateReady: () => {
+          settleBootstrapState(buildPopupStateSnapshot(currentState));
+        },
+      });
+      if (currentState.phase !== "fetch-paused") {
+        pausedFetchRequest = null;
+      }
+      settleBootstrapState(buildPopupStateSnapshot(currentState));
+    } catch (error) {
+      failBootstrapState(error);
+      throw error;
     } finally {
-      setKeepAwakeEnabled(false);
+      activeRun = null;
+      activeVolatileBackupSessionKey = "";
+      activeVolatileBackupResumeMeta = null;
+      try {
+        await cleanupHiddenTab();
+      } finally {
+        setKeepAwakeEnabled(false);
+      }
     }
-  }
+  })();
+
+  void activeRun.catch((error) => {
+    console.error("Sora Bulk Downloader scan failed.", error);
+  });
+
+  return bootstrapStatePromise;
 }
 
 async function requestScanAbort() {
@@ -8612,7 +8718,7 @@ async function resumeScan() {
       lastRecoverableError: "",
     });
   }
-  await startScan(request.sources, request.searchQuery, {
+  return startScan(request.sources, request.searchQuery, {
     existingSessionId: sessionId,
   });
 }
@@ -8659,9 +8765,13 @@ async function abortPausedScan() {
   await clearActiveSyncSession({ finalStatus: "aborted" });
 }
 
-async function scanSources(sources, searchQuery = "") {
+async function scanSources(sources, searchQuery = "", options = {}) {
   // A scan now starts from the local catalog so previously fetched results appear
   // immediately, then reconciles against Sora and merges any new or changed items.
+  const notifyFetchStateReady =
+    options && typeof options.onFetchStateReady === "function"
+      ? options.onFetchStateReady
+      : null;
   const maxVideos = getEffectiveMaxVideosForSources(sources, currentState.settings);
   const selectedCharacterAccountIds = [...currentState.selectedCharacterAccountIds];
   const selectedCreatorProfileIds = [...currentState.selectedCreatorProfileIds];
@@ -8797,6 +8907,7 @@ async function scanSources(sources, searchQuery = "") {
       startedAt: new Date().toISOString(),
     }),
   );
+  notifyFetchStateReady?.();
 
   try {
     throwIfFetchAbortRequested();

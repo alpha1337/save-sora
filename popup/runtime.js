@@ -158,7 +158,7 @@ export async function requestCharacterAccounts(force = false) {
  * @returns {Promise<object>}
  */
 export async function requestScan(sources, searchQuery) {
-  return sendPopupMessage(
+  const response = await sendPopupMessage(
     {
       type: "START_SCAN",
       sources,
@@ -166,6 +166,7 @@ export async function requestScan(sources, searchQuery) {
     },
     "Could not fetch the video list.",
   );
+  return response.state;
 }
 
 /**
@@ -198,10 +199,11 @@ export async function requestPauseScan() {
  * @returns {Promise<object>}
  */
 export async function requestResumeScan() {
-  return sendPopupMessage(
+  const response = await sendPopupMessage(
     { type: "RESUME_SCAN" },
     "Could not resume the paused fetch.",
   );
+  return response.state;
 }
 
 export async function requestRestoreInterruptedSession() {

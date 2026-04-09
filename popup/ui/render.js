@@ -116,6 +116,9 @@ export function renderState(state) {
     downloadableCount: countSnapshot.downloadableCount,
     downloadedCount: countSnapshot.downloadedCount,
     archivedCount: countSnapshot.archivedCount,
+    downloadableBytes: countSnapshot.downloadableBytes,
+    downloadedBytes: countSnapshot.downloadedBytes,
+    archivedBytes: countSnapshot.archivedBytes,
     phase,
   };
 
