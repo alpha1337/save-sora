@@ -604,6 +604,30 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 
+  if (message.type === "REMOVE_ITEMS") {
+    if (!Array.isArray(message.itemKeys) || message.itemKeys.length === 0) {
+      sendResponse({ ok: false, error: "At least one valid item key is required." });
+      return false;
+    }
+
+    void setItemsRemovedState(message.itemKeys, message.removed !== false)
+      .then(() => {
+        return buildPopupStateSnapshotForView(currentState, {
+          sortKey: message.sortKey,
+          query: message.query,
+          creatorTab: message.creatorTab,
+        });
+      })
+      .then((state) => {
+        sendResponse({ ok: true, state });
+      })
+      .catch((error) => {
+        console.error("Failed to update the selected items in the Sora master set.", error);
+        sendResponse({ ok: false, error: getErrorMessage(error) });
+      });
+    return true;
+  }
+
   if (message.type === "SET_ITEM_DOWNLOADED") {
     if (typeof message.itemKey !== "string") {
       sendResponse({ ok: false, error: "A valid item key is required." });
@@ -6183,6 +6207,17 @@ async function restoreInterruptedFetchState(state) {
     });
   }
 
+  if (hasActiveResultsThatShouldSuppressRestorePrompt(nextState)) {
+    pendingInterruptedSyncSession = null;
+    pausedFetchRequest = null;
+    activeVolatileBackupSessionKey = "";
+    activeVolatileBackupResumeMeta = null;
+    return normalizeRestoredTransientState({
+      ...nextState,
+      restoreStatus: createDefaultRestoreStatus(),
+    });
+  }
+
   const interruptedSyncSession = await findInterruptedSyncSession();
   if (interruptedSyncSession) {
     pendingInterruptedSyncSession = interruptedSyncSession;
@@ -6417,6 +6452,27 @@ function normalizeRestoredTransientState(state) {
     finishedAt: hasRecoveredPreview ? new Date().toISOString() : null,
     resumableFetchRequest: hasRecoveredPreview ? resumableFetchRequest : null,
   };
+}
+
+function hasActiveResultsThatShouldSuppressRestorePrompt(state) {
+  const sourceState = state && typeof state === "object" ? state : createDefaultState();
+  const phase = typeof sourceState.phase === "string" ? sourceState.phase : "idle";
+  const hasVisibleItems = Array.isArray(sourceState.items) && sourceState.items.length > 0;
+  const hasPersistedItems = Array.isArray(sourceState.itemKeys) && sourceState.itemKeys.length > 0;
+  const hasPendingDownloadQueue =
+    Array.isArray(sourceState.pendingItems) && sourceState.pendingItems.length > 0;
+  const fetchedCount = Math.max(0, Number(sourceState.fetchedCount) || 0);
+
+  if (phase === "fetch-paused") {
+    return false;
+  }
+
+  return (
+    hasVisibleItems ||
+    hasPersistedItems ||
+    hasPendingDownloadQueue ||
+    (["ready", "complete", "downloading", "paused"].includes(phase) && fetchedCount > 0)
+  );
 }
 
 async function persistState(state = currentState) {
@@ -10531,21 +10587,33 @@ async function setTitleOverride(itemKey, requestedTitle) {
 }
 
 async function setItemRemovedState(itemKey, removed) {
+  return setItemsRemovedState([itemKey], removed);
+}
+
+async function setItemsRemovedState(itemKeys, removed) {
   if (currentState.phase === "fetching" || currentState.phase === "downloading" || currentState.phase === "paused") {
     throw new Error("Wait until the current fetch or download run finishes before removing videos.");
   }
 
+  const normalizedKeys = [...new Set((Array.isArray(itemKeys) ? itemKeys : []).filter(
+    (key) => typeof key === "string" && key,
+  ))];
+  if (normalizedKeys.length === 0) {
+    throw new Error("At least one valid item key is required.");
+  }
+
   const currentItems = await loadMergedFetchItemsForState(currentState);
   let nextBackedUpItemCount = 0;
-  let foundMatch = false;
+  const normalizedKeySet = new Set(normalizedKeys);
+  let matchedCount = 0;
   let didUpdate = false;
   const nextItems = currentItems.map((item) => {
     const key = getCanonicalItemKey(item);
-    if (key !== itemKey) {
+    if (!normalizedKeySet.has(key)) {
       return item;
     }
 
-    foundMatch = true;
+    matchedCount += 1;
     if (Boolean(item.isRemoved) === Boolean(removed)) {
       return item;
     }
@@ -10557,9 +10625,9 @@ async function setItemRemovedState(itemKey, removed) {
     };
   });
 
-  if (!foundMatch) {
+  if (matchedCount === 0) {
     console.warn("Ignoring archive toggle for a popup item that is no longer present in the merged working set.", {
-      itemKey,
+      itemKeys: normalizedKeys,
       removed: Boolean(removed),
     });
   }
@@ -10567,10 +10635,10 @@ async function setItemRemovedState(itemKey, removed) {
   const nextSelectedKeys = getImplicitSelectedKeys(nextItems);
 
   const nextFailedItems = (currentState.failedItems || []).filter(
-    (item) => (item.key || getItemKey(item)) !== itemKey,
+    (item) => !normalizedKeySet.has(item.key || getItemKey(item)),
   );
   const nextPendingItems = (currentState.pendingItems || []).filter(
-    (item) => (item.key || getItemKey(item)) !== itemKey,
+    (item) => !normalizedKeySet.has(item.key || getItemKey(item)),
   );
   const sourceIds = deriveSourceIdsFromItems(nextItems);
 
@@ -10599,7 +10667,7 @@ async function setItemRemovedState(itemKey, removed) {
     patch.message = buildReadyMessage(nextSelectedKeys.length);
   }
 
-  await applyCatalogItemMutation([itemKey], (item) => ({
+  await applyCatalogItemMutation(normalizedKeys, (item) => ({
     ...item,
     isRemoved: Boolean(removed),
   }));
@@ -10892,6 +10960,7 @@ async function beginSelectedDownload() {
     lastError: "",
     finishedAt: null,
     message: startingMessage,
+    restoreStatus: createDefaultRestoreStatus(),
   });
 
   setKeepAwakeEnabled(true);

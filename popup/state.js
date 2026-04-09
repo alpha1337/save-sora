@@ -66,6 +66,7 @@ export const popupState = {
   hasCustomOverviewSourceSelection: false,
   pendingDownloadStart: false,
   downloadOverlaySessionActive: false,
+  bulkArchiveSelectionKeys: [],
   appliedSettingsDefaults: {
     source: "",
     sort: "",

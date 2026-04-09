@@ -6,6 +6,7 @@ import {
   handleFetchProgressPanelMouseLeave,
   handleFetchProgressPauseActionClick,
   handleFetchProgressToggleClick,
+  handleArchiveSelectedClick,
   handleClearSelectionClick,
   handleDownloadButtonClick,
   handleDownloadOverlayCancel,
@@ -96,6 +97,7 @@ export function initializeEventHandlers() {
   dom.fetchProgressAction?.addEventListener("click", handleFetchProgressActionClick);
   dom.downloadOverlayCancel?.addEventListener("click", handleDownloadOverlayCancel);
   dom.selectAllButton?.addEventListener("click", handleSelectAllClick);
+  dom.archiveSelectedButton?.addEventListener("click", handleArchiveSelectedClick);
   dom.clearSelectionButton?.addEventListener("click", handleClearSelectionClick);
   dom.resultsViewToggle?.addEventListener("click", handleResultsViewToggleClick);
   dom.itemsList?.addEventListener("click", handleItemsListClick);

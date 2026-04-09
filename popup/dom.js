@@ -46,6 +46,7 @@ export const dom = {
   pickerPanelLabel: document.getElementById("picker-panel-label"),
   selectionSummary: document.getElementById("selection-summary"),
   creatorResultsTabs: document.getElementById("creator-results-tabs"),
+  archiveSelectedButton: document.getElementById("archive-selected-button"),
   resultsPager: document.getElementById("results-pager"),
   resultsPagePrev: document.getElementById("results-page-prev"),
   resultsPageStatus: document.getElementById("results-page-status"),

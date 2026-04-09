@@ -111,6 +111,18 @@ function requestPictureInPictureIfPossible(video) {
   }
 }
 
+function getEventElement(target) {
+  if (target instanceof Element) {
+    return target;
+  }
+
+  if (target instanceof Node && target.parentElement instanceof Element) {
+    return target.parentElement;
+  }
+
+  return null;
+}
+
 function schedulePictureInPictureRetries(video) {
   if (!(video instanceof HTMLVideoElement)) {
     return;
@@ -303,11 +315,19 @@ export function renderMediaPreview(media, item, titleOverrides = {}) {
     media.setAttribute("tabindex", "0");
     media.setAttribute("aria-label", playLabel);
     media.onclick = (event) => {
+      if (getEventElement(event.target)?.closest(".item-grid-overlay")) {
+        return;
+      }
+
       event.preventDefault();
       event.stopPropagation();
       activateInlineVideo(media, item, titleOverrides);
     };
     media.onkeydown = (event) => {
+      if (getEventElement(event.target)?.closest(".item-grid-overlay")) {
+        return;
+      }
+
       if (event.key !== "Enter" && event.key !== " ") {
         return;
       }

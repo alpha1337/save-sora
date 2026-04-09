@@ -398,6 +398,28 @@ export async function saveRemovedState(itemKey, removed, options = {}) {
 }
 
 /**
+ * Toggles whether multiple items are removed from the working set.
+ *
+ * @param {string[]} itemKeys
+ * @param {boolean} removed
+ * @param {{sortKey?: string, query?: string, creatorTab?: string}} [options]
+ * @returns {Promise<object>}
+ */
+export async function saveBulkRemovedState(itemKeys, removed, options = {}) {
+  return sendPopupMessage(
+    {
+      type: "REMOVE_ITEMS",
+      itemKeys,
+      removed,
+      sortKey: options.sortKey,
+      query: options.query,
+      creatorTab: options.creatorTab,
+    },
+    "Could not update the selected videos.",
+  );
+}
+
+/**
  * Toggles whether an item is marked downloaded.
  *
  * @param {string} itemKey
@@ -437,10 +459,11 @@ export async function saveRuntimeSettings(settings) {
  * @returns {Promise<object>}
  */
 export async function requestDownloadSelected() {
-  return sendPopupMessage(
+  const response = await sendPopupMessage(
     { type: "DOWNLOAD_SELECTED" },
     "Could not start the selected downloads.",
   );
+  return response.state;
 }
 
 /**

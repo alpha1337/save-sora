@@ -24,9 +24,10 @@ import { updateDownloadOverlay } from "../ui/overlay.js";
 import { renderState } from "../ui/render.js";
 import { syncFetchProgressPanel } from "../ui/render/fetch-progress.js";
 import {
+  applyCurrentSelectionUi,
+  getBulkArchiveCandidateKeys,
+  getBulkArchiveSelectedKeys,
   getSelectedKeysFromDom,
-  getVisibleActiveKeysFromDom,
-  getVisibleArchivedKeysFromDom,
 } from "../ui/selection.js";
 import { getSelectedSourceValues } from "../utils/settings.js";
 import { refreshStatus, syncPollingForState } from "./polling.js";
@@ -144,7 +145,11 @@ export async function handleDownloadButtonClick() {
 
   try {
     await flushPendingTitleSaves();
-    await requestDownloadSelected();
+    const immediateState = await requestDownloadSelected();
+    if (immediateState && typeof immediateState === "object") {
+      renderState(immediateState);
+      syncPollingForState(immediateState);
+    }
   } catch (error) {
     popupState.pendingDownloadStart = false;
     showNotice(dom.errorBox, error instanceof Error ? error.message : String(error));
@@ -376,7 +381,8 @@ export async function handleFetchProgressPauseActionClick() {
 }
 
 /**
- * Selects every visible, enabled item.
+ * Selects every visible source scope, or queues the entire filtered result set
+ * for a bulk archive action without visually toggling cards.
  */
 export async function handleSelectAllClick() {
   if (isSourceSelectionScreenVisible()) {
@@ -384,16 +390,12 @@ export async function handleSelectAllClick() {
     return;
   }
 
-  const archivedKeys = getVisibleArchivedKeysFromDom();
-  if (archivedKeys.length === 0) {
-    return;
-  }
-
-  await handleBatchArchiveStateChange(archivedKeys, false);
+  popupState.bulkArchiveSelectionKeys = getBulkArchiveCandidateKeys();
+  applyCurrentSelectionUi();
 }
 
 /**
- * Clears every visible selection.
+ * Clears the current source-scope selection or bulk archive target list.
  */
 export async function handleClearSelectionClick() {
   if (isSourceSelectionScreenVisible()) {
@@ -401,10 +403,29 @@ export async function handleClearSelectionClick() {
     return;
   }
 
-  const activeKeys = getVisibleActiveKeysFromDom();
-  if (activeKeys.length === 0) {
+  if (!Array.isArray(popupState.bulkArchiveSelectionKeys) || popupState.bulkArchiveSelectionKeys.length === 0) {
     return;
   }
 
-  await handleBatchArchiveStateChange(activeKeys, true);
+  popupState.bulkArchiveSelectionKeys = [];
+  applyCurrentSelectionUi();
+}
+
+/**
+ * Archives the current bulk-archive target list without altering the download
+ * selection model or visually toggling every card in the grid/list.
+ */
+export async function handleArchiveSelectedClick() {
+  const itemKeys = getBulkArchiveSelectedKeys();
+  if (itemKeys.length === 0) {
+    return;
+  }
+
+  const didArchive = await handleBatchArchiveStateChange(itemKeys, true);
+  if (!didArchive) {
+    return;
+  }
+
+  popupState.bulkArchiveSelectionKeys = [];
+  applyCurrentSelectionUi();
 }

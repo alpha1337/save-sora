@@ -299,7 +299,43 @@ function simulateInterruptedRestoreResolution(nextState, interruptedSession) {
     (!nextState.syncSessionId || nextState.syncSessionId === interruptedSession.sessionId) &&
     ["paused", "stalled", "error"].includes(interruptedSession.status);
 
-  return shouldAutoRestorePausedSession ? "paused" : "prompt";
+  return shouldAutoRestorePausedSession
+    ? "paused"
+    : shouldSuppressInterruptedRestorePrompt(nextState)
+      ? "suppressed"
+      : "prompt";
+}
+
+function shouldSuppressInterruptedRestorePrompt(state) {
+  const phase = state && typeof state.phase === "string" ? state.phase : "idle";
+  const hasVisibleItems = Array.isArray(state && state.items) && state.items.length > 0;
+  const hasPersistedItems = Array.isArray(state && state.itemKeys) && state.itemKeys.length > 0;
+  const hasPendingDownloadQueue =
+    Array.isArray(state && state.pendingItems) && state.pendingItems.length > 0;
+  const fetchedCount = Math.max(0, Number(state && state.fetchedCount) || 0);
+
+  if (phase === "fetch-paused") {
+    return false;
+  }
+
+  return (
+    hasVisibleItems ||
+    hasPersistedItems ||
+    hasPendingDownloadQueue ||
+    (["ready", "complete", "downloading", "paused"].includes(phase) && fetchedCount > 0)
+  );
+}
+
+function simulateDownloadStartRestoreGateVisibility({
+  promptVisible = false,
+  phase = "idle",
+  pendingDownloadStart = false,
+} = {}) {
+  if (!promptVisible) {
+    return false;
+  }
+
+  return !(pendingDownloadStart || phase === "downloading");
 }
 
 function simulateRestoreGateResumeSequence(runtimeStates) {
@@ -793,6 +829,7 @@ async function testStructuralInvariants() {
     path.join(projectRoot, "popup/controllers/actions.js"),
     "utf8",
   );
+  const popupDomSource = await readFile(path.join(projectRoot, "popup/dom.js"), "utf8");
   const popupEmptyStateSource = await readFile(
     path.join(projectRoot, "popup/ui/list/list-empty-state.js"),
     "utf8",
@@ -883,6 +920,7 @@ async function testStructuralInvariants() {
   assert.match(backgroundSource, /if \(message\.type === "START_SCAN"\) \{[\s\S]*?const state = await startScan\(message\.sources, message\.searchQuery\);[\s\S]*?sendResponse\(\{ ok: true, state \}\);[\s\S]*?return true;/);
   assert.match(backgroundSource, /if \(message\.type === "RESUME_SCAN"\) \{[\s\S]*?const state = await resumeScan\(\);[\s\S]*?sendResponse\(\{ ok: true, state \}\);[\s\S]*?return true;/);
   assert.match(backgroundSource, /if \(message\.type === "SET_TITLE_OVERRIDE"\)[\s\S]*?sendResponse\(\{ ok: true \}\);[\s\S]*?sendResponse\(\{ ok: false, error: getErrorMessage\(error\) \}\);[\s\S]*?return true;/);
+  assert.match(backgroundSource, /if \(message\.type === "REMOVE_ITEMS"\) \{/);
   assert.match(backgroundSource, /async function executeSourceFetchWithRecovery/);
   assert.match(backgroundSource, /function isRecoverableSoraAuthError\(error\)/);
   assert.match(backgroundSource, /async function findInterruptedSyncSession/);
@@ -892,8 +930,11 @@ async function testStructuralInvariants() {
   assert.match(backgroundSource, /let hiddenWindowId = null;/);
   assert.match(popupRuntimeSource, /requestRestoreInterruptedSession/);
   assert.match(popupRuntimeSource, /requestResumeScan/);
+  assert.match(popupRuntimeSource, /export async function saveBulkRemovedState\(itemKeys, removed, options = \{\}\) \{/);
+  assert.match(popupRuntimeSource, /type: "REMOVE_ITEMS",/);
   assert.match(popupRuntimeSource, /export async function requestScan\(sources, searchQuery\) \{[\s\S]*?return response\.state;\s+\}/);
   assert.match(popupRuntimeSource, /export async function requestResumeScan\(\) \{[\s\S]*?return response\.state;\s+\}/);
+  assert.match(popupRuntimeSource, /export async function requestDownloadSelected\(\) \{[\s\S]*?return response\.state;\s+\}/);
   assert.match(popupUpdaterSource, /restorePreviousSessionFromGate/);
   assert.match(popupUpdaterSource, /const dismissedState = await requestDismissInterruptedSession\(\);/);
   assert.match(popupUpdaterSource, /popupState\.latestRuntimeState = dismissedState;/);
@@ -903,6 +944,7 @@ async function testStructuralInvariants() {
   assert.match(popupUpdaterSource, /setStartupGateLocked\(false\);/);
   assert.match(popupUpdateGateSource, /Restore previous session\?/);
   assert.match(popupUpdateGateSource, /syncAppShellGateVisibility/);
+  assert.match(popupUpdateGateSource, /const shouldSuppressRestorePrompt =[\s\S]*popupState\.pendingDownloadStart \|\| runtimePhase === "downloading"/s);
   assert.match(popupUpdateGateSource, /const shouldKeepGateVisible = popupState\.startupGateLocked \|\| shouldShow/);
   assert.match(popupUpdateGateSource, /Link the unpacked extension folder in Settings if you want Save Sora to install future GitHub updates automatically\./);
   assert.match(popupPrimaryControlsSource, /const isResumeMode = fetchUiState\.primaryActionMode === "resume"/);
@@ -912,40 +954,50 @@ async function testStructuralInvariants() {
   assert.match(popupItemCardPartsSource, /export function createItemContentSurface/);
   assert.doesNotMatch(popupItemCardPartsSource, /export function createGridTooltip/);
   assert.doesNotMatch(popupItemCardSource, /createGridTooltip/);
-  assert.match(popupItemCardSource, /if \(context\.viewMode !== "grid"\) \{[\s\S]*?createItemContentSurface/);
+  assert.match(popupItemCardSource, /const body = createItemContentSurface\(/);
+  assert.match(popupItemCardSource, /if \(context\.viewMode !== "grid"\) \{\s+card\.append\(body\);\s+\}/s);
+  assert.match(popupItemCardSource, /const gridOverlay = document\.createElement\("div"\);[\s\S]*gridOverlay\.className = "item-grid-overlay";[\s\S]*media\.append\(gridOverlay\);/s);
   assert.match(popupListSource, /export function renderVisibleItemsWindow/);
   assert.match(popupListSource, /export function scheduleVisibleItemsWindowRender/);
   assert.match(popupListSource, /export function handleItemsListPointerOver/);
   assert.match(popupListSource, /renderVisibleItemsWindow\(false\);/);
   assert.match(popupListSource, /buildRenderSignature\(/);
   assert.match(popupListSource, /cache\.lastWindowSignature = visibleWindowSignature;/);
-  assert.match(popupListSource, /card\.append\(dom\.sharedGridTooltip\);/);
-  assert.match(popupListSource, /const nextCard = getEventCard\(event\.relatedTarget\);\s+if \(nextCard instanceof HTMLElement\) \{\s+return;\s+\}/s);
-  assert.match(popupListSource, /#shared-grid-tooltip/);
+  assert.match(popupListSource, /hideSharedGridTooltip\(\{ immediate: true \}\);/);
   assert.match(popupListSource, /createItemContentSurface\(/);
   assert.match(popupMediaSource, /image\.src = item\.thumbnailUrl;/);
   assert.match(popupMediaSource, /function resolveNoWatermarkPlaybackUrl\(item\)/);
   assert.match(popupMediaSource, /const noWatermarkUrl = resolveNoWatermarkPlaybackUrl\(item\);/);
+  assert.match(popupMediaSource, /if \(getEventElement\(event\.target\)\?\.closest\("\.item-grid-overlay"\)\) \{\s+return;\s+\}/s);
   assert.doesNotMatch(popupMediaSource, /thumbnailObserver/);
   assert.match(popupHtmlSource, /id="shared-grid-tooltip"/);
+  assert.match(popupHtmlSource, /id="archive-selected-button"/);
   assert.match(popupActionsSource, /const isResumeMode = fetchUiState\.primaryActionMode === "resume"/);
   assert.match(popupActionsSource, /if \(!isResetMode && !isResumeMode && sources\.length === 0\)/);
   assert.match(popupActionsSource, /let immediateState = null;/);
   assert.match(popupActionsSource, /else if \(isResumeMode\) \{\s*immediateState = await requestResumeScan\(\);/);
   assert.match(popupActionsSource, /immediateState = await requestScan\(sources, popupState\.browseState\.query\);/);
   assert.match(popupActionsSource, /if \(immediateState && typeof immediateState === "object"\) \{\s*renderState\(immediateState\);\s*syncPollingForState\(immediateState\);/s);
+  assert.match(popupActionsSource, /const immediateState = await requestDownloadSelected\(\);[\s\S]*renderState\(immediateState\);[\s\S]*syncPollingForState\(immediateState\);/s);
   assert.match(popupActionsSource, /const resumedState = await requestResumeScan\(\);/);
   assert.match(popupActionsSource, /renderState\(resumedState\);\s+syncPollingForState\(resumedState\);/s);
   assert.doesNotMatch(popupActionsSource, /preparePendingFetchUi/);
   assert.match(popupActionsSource, /export function handleFetchProgressPanelMouseEnter\(\)/);
   assert.match(popupActionsSource, /export function handleFetchProgressPanelMouseLeave\(\)/);
   assert.match(popupActionsSource, /const isExpanded = popupState\.fetchDrawerExpanded \|\| popupState\.fetchDrawerHoverExpanded;/);
+  assert.match(popupActionsSource, /popupState\.bulkArchiveSelectionKeys = getBulkArchiveCandidateKeys\(\);/);
+  assert.match(popupActionsSource, /popupState\.bulkArchiveSelectionKeys = \[\];/);
+  assert.match(popupActionsSource, /export async function handleArchiveSelectedClick\(\)/);
+  assert.match(popupActionsSource, /const didArchive = await handleBatchArchiveStateChange\(itemKeys, true\);/);
+  assert.match(popupDomSource, /archiveSelectedButton: document\.getElementById\("archive-selected-button"\),/);
   assert.match(popupControllersIndexSource, /dom\.fetchProgressPanel\?\.addEventListener\("mouseenter", handleFetchProgressPanelMouseEnter\);/);
   assert.match(popupControllersIndexSource, /dom\.fetchProgressPanel\?\.addEventListener\("mouseleave", handleFetchProgressPanelMouseLeave\);/);
+  assert.match(popupControllersIndexSource, /dom\.archiveSelectedButton\?\.addEventListener\("click", handleArchiveSelectedClick\);/);
   assert.match(popupEmptyStateSource, /dom\.emptyStateImage\.classList\.remove\("hidden"\);/);
   assert.match(popupEmptyStateSource, /buildFetchEmptyStateText\(popupState\.latestRuntimeState\)/);
   assert.match(popupEmptyStateSource, /dom\.emptyState\?\.classList\.remove\("hidden"\);/);
   assert.match(popupStateSource, /fetchDrawerHoverExpanded: false,/);
+  assert.match(popupStateSource, /bulkArchiveSelectionKeys: \[\],/);
   assert.match(popupUpdaterSource, /const UPDATE_GATE_STARTUP_CHECK_TIMEOUT_MS = 15000;/);
   assert.match(popupUpdaterSource, /timeoutMs: UPDATE_GATE_STARTUP_CHECK_TIMEOUT_MS,/);
   assert.match(popupUpdaterSource, /popupState\.updateGateHidden = true;\s+setStartupGateLocked\(false\);/s);
@@ -962,12 +1014,16 @@ async function testStructuralInvariants() {
   assert.match(popupRenderSource, /const selectedCountTotal = countSnapshot\.downloadableCount;/);
   assert.match(popupRenderSource, /downloadableBytes: countSnapshot\.downloadableBytes,/);
   assert.match(popupSelectionSource, /const fetchUiState = getFetchUiState\(/);
+  assert.match(popupSelectionSource, /export function getBulkArchiveCandidateKeys\(\)/);
+  assert.match(popupSelectionSource, /export function getBulkArchiveSelectedKeys\(\)/);
   assert.match(popupSelectionSource, /buildFetchSelectionSummary\(/);
   assert.match(popupSelectionSource, /Search Results \(Loading\.\.\.\)/);
   assert.match(popupSelectionSource, /popupState\.latestRenderState\.counts && typeof popupState\.latestRenderState\.counts === "object"/);
   assert.match(popupSelectionSource, /const hasAnyResults =\s+\(Array\.isArray\(popupState\.latestRenderState\.items\)/s);
   assert.match(popupSelectionSource, /phase !== "fetching" &&\s+!hasAnyResults/s);
   assert.match(popupSelectionSource, /found so far/);
+  assert.match(popupSelectionSource, /queued to archive/);
+  assert.match(popupSelectionSource, /Archive Selected \(\$\{formatWholeNumber\(bulkArchiveSelectedCount\)\}\)/);
   assert.match(popupSelectionSource, /!fetchUiState\.isBusy[\s\S]*?!fetchUiState\.isAnyPaused/);
   assert.match(popupSelectionSource, /Object\.prototype\.hasOwnProperty\.call\(countSnapshot, "downloadableBytes"\)/);
   assert.match(popupListSource, /const effectiveTotalCount = Number\.isFinite\(Number\(popupState\.latestRenderState\.totalCount\)\)/);
@@ -981,6 +1037,9 @@ async function testStructuralInvariants() {
   assert.match(popupFetchProgressSource, /dom\.fetchProgressSource\.classList\.add\("hidden"\);/);
   assert.match(popupFetchProgressSource, /dom\.fetchProgressCount\.textContent =\s*itemsFound > 0/s);
   assert.doesNotMatch(popupFetchProgressSource, /in source/);
+  assert.match(popupCssSource, /\.item-grid-overlay \{[\s\S]*?position: absolute;[\s\S]*?opacity: 0;[\s\S]*?visibility: hidden;/s);
+  assert.match(popupCssSource, /\.item-list\.is-grid-view \.item-card:hover \.item-grid-overlay,[\s\S]*?\.item-list\.is-grid-view \.item-card:focus-within \.item-grid-overlay,[\s\S]*?opacity: 1;[\s\S]*?visibility: visible;/s);
+  assert.match(popupCssSource, /\.item-grid-tooltip-surface \{[\s\S]*?width: 100%;[\s\S]*?pointer-events: auto;/s);
   assert.match(popupCssSource, /\.empty-state-image \{\s+display: block;\s+width: auto;\s+height: auto;/s);
   assert.match(popupCssSource, /\.empty-state-text \{[\s\S]*?white-space: pre-line;[\s\S]*?max-width: 44ch;/s);
   assert.match(popupCssSource, /\.empty-state\.is-fetching \.empty-state-text \{/);
@@ -989,6 +1048,9 @@ async function testStructuralInvariants() {
   assert.match(popupCharacterSelectionSource, /const fetchUiState = getFetchUiState\(/);
   assert.match(popupSourceMenusSource, /const fetchUiState = getFetchUiState\(/);
   assert.match(backgroundSource, /function createDefaultRestoreStatus/);
+  assert.match(backgroundSource, /function hasActiveResultsThatShouldSuppressRestorePrompt\(state\)/);
+  assert.match(backgroundSource, /if \(hasActiveResultsThatShouldSuppressRestorePrompt\(nextState\)\) \{/);
+  assert.match(backgroundSource, /async function setItemsRemovedState\(itemKeys, removed\)/);
   assert.match(backgroundSource, /function resolveAuthoritativeFetchCountSnapshot\(options = \{\}\)/);
   assert.match(backgroundSource, /function resolveNoWatermarkDownloadUrl\(item\)/);
   assert.match(backgroundSource, /function shouldPrepareDraftShareForDownload\(item\)/);
@@ -1034,6 +1096,7 @@ async function testStructuralInvariants() {
   assert.match(backgroundSource, /const countSnapshot = resolveAuthoritativeFetchCountSnapshot\(\{\s+items: restoredItems,/s);
   assert.match(backgroundSource, /const countSnapshot = resolveAuthoritativeFetchCountSnapshot\(\{\s+items: nextItems,/s);
   assert.match(backgroundSource, /const countSnapshot = resolveAuthoritativeFetchCountSnapshot\(\{\s+items: activeItems,/s);
+  assert.match(backgroundSource, /await setState\(\{[\s\S]*phase: "downloading",[\s\S]*restoreStatus: createDefaultRestoreStatus\(\),[\s\S]*\}\);/s);
   assert.match(backgroundSource, /if \(!updateAvailable\) \{[\s\S]*?phase: "idle"/);
   assert.match(backgroundSource, /if \(missingManifestForOlderOrCurrentRelease \|\| noPublishedReleaseYet\) \{[\s\S]*?phase: "idle"/);
   assert.match(backgroundSource, /async function resolvePausedFetchRequest/);
@@ -1072,6 +1135,8 @@ async function testStructuralInvariants() {
   assert.match(popupSelectionSource, /const showSummaryPanel = hasLoadedResults;/);
   assert.match(itemMutationsSource, /const countSnapshot = buildRenderCountSnapshot\(popupState\.latestRuntimeState, items\);/);
   assert.match(itemMutationsSource, /downloadableBytes: countSnapshot\.downloadableBytes,/);
+  assert.match(itemMutationsSource, /const response = await saveBulkRemovedState\(normalizedKeys, removed, \{/);
+  assert.match(itemMutationsSource, /return true;/);
   assert.match(popupSelectionSource, /activeCreatorResultsTab === "downloaded"/);
   assert.match(popupSelectionSource, /downloaded in view/);
   assert.match(popupItemCardPartsSource, /removeButton\.textContent = "Download Again";/);
@@ -1890,6 +1955,48 @@ function testPausedSessionAutoRestoresWithoutPrompt() {
   );
 }
 
+function testExistingResultsSuppressInterruptedRestorePrompt() {
+  const resolution = simulateInterruptedRestoreResolution(
+    {
+      phase: "ready",
+      itemKeys: ["gen_01draft"],
+      fetchedCount: 27080,
+    },
+    {
+      sessionId: "session-123",
+      status: "paused",
+    },
+  );
+
+  assert.equal(
+    resolution,
+    "suppressed",
+    "an old interrupted fetch should not interrupt a live results set that is already ready to download",
+  );
+}
+
+function testPendingDownloadStartSuppressesRestoreGatePrompt() {
+  assert.equal(
+    simulateDownloadStartRestoreGateVisibility({
+      promptVisible: true,
+      phase: "ready",
+      pendingDownloadStart: true,
+    }),
+    false,
+    "the restore gate should stay hidden while the user is actively starting a download",
+  );
+
+  assert.equal(
+    simulateDownloadStartRestoreGateVisibility({
+      promptVisible: true,
+      phase: "downloading",
+      pendingDownloadStart: false,
+    }),
+    false,
+    "the restore gate should not reappear once the runtime has entered the downloading phase",
+  );
+}
+
 function testRestoreGateOnlyReleasesAfterFetchActuallyStarts() {
   const sequence = simulateRestoreGateResumeSequence([
     { phase: "fetch-paused", syncStatus: "paused" },
@@ -2068,6 +2175,8 @@ testDraftPromptPrefersExistingSharedPostMetadata();
 testSharedDraftProxyResolvesBackToPublicReviewUrl();
 testPausedFetchPersistencePreservesRecoveryMetadata();
 testPausedSessionAutoRestoresWithoutPrompt();
+testExistingResultsSuppressInterruptedRestorePrompt();
+testPendingDownloadStartSuppressesRestoreGatePrompt();
 testRestoreGateOnlyReleasesAfterFetchActuallyStarts();
 testSummaryPanelStaysVisibleDuringFetch();
 testStartupGateLockPreventsDashboardFlash();

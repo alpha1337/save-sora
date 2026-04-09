@@ -33,14 +33,26 @@ export function createItemCard(item, context) {
   media.dataset.itemKey = key;
   renderMediaPreview(media, item, context.titleOverrides);
 
-  card.append(media);
-
-  if (context.viewMode !== "grid") {
-    const body = createItemContentSurface(item, {
+  const body = createItemContentSurface(
+    item,
+    {
       key,
       disableInputs: context.disableInputs,
       titleOverrides: context.titleOverrides,
-    }, "item-body");
+    },
+    context.viewMode === "grid" ? "item-grid-tooltip-surface" : "item-body",
+  );
+
+  if (context.viewMode === "grid") {
+    const gridOverlay = document.createElement("div");
+    gridOverlay.className = "item-grid-overlay";
+    gridOverlay.append(body);
+    media.append(gridOverlay);
+  }
+
+  card.append(media);
+
+  if (context.viewMode !== "grid") {
     card.append(body);
   }
 

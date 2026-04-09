@@ -97,8 +97,15 @@ function syncUpdateGate(updateStatus, runtimeState = null) {
   }
 
   const restoreStatus = normalizeRestoreStatus(runtimeState);
+  const runtimePhase =
+    runtimeState && typeof runtimeState.phase === "string" ? runtimeState.phase : "idle";
+  const shouldSuppressRestorePrompt =
+    restoreStatus.promptVisible &&
+    restoreStatus.phase !== "restoring" &&
+    restoreStatus.phase !== "error" &&
+    (popupState.pendingDownloadStart || runtimePhase === "downloading");
   if (
-    restoreStatus.promptVisible ||
+    (!shouldSuppressRestorePrompt && restoreStatus.promptVisible) ||
     restoreStatus.phase === "restoring" ||
     restoreStatus.phase === "error"
   ) {

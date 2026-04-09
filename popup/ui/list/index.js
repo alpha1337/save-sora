@@ -249,17 +249,9 @@ export function resetResultsPresentation() {
  * @param {MouseEvent|FocusEvent} event
  */
 export function handleItemsListPointerOver(event) {
-  if (popupState.virtualList.viewMode !== "grid") {
-    return;
+  if (popupState.virtualList.viewMode === "grid") {
+    hideSharedGridTooltip({ immediate: true });
   }
-
-  const currentCard = getEventCard(event.target);
-  const previousCard = getEventCard(event.relatedTarget);
-  if (!(currentCard instanceof HTMLElement) || currentCard === previousCard) {
-    return;
-  }
-
-  showSharedGridTooltipForCard(currentCard);
 }
 
 /**
@@ -268,70 +260,25 @@ export function handleItemsListPointerOver(event) {
  * @param {MouseEvent|FocusEvent} event
  */
 export function handleItemsListPointerOut(event) {
-  if (popupState.virtualList.viewMode !== "grid") {
-    return;
-  }
-
-  const currentCard = getEventCard(event.target);
-  if (!(currentCard instanceof HTMLElement)) {
-    return;
-  }
-
-  const relatedElement = getEventElement(event.relatedTarget);
-  if (relatedElement?.closest("#shared-grid-tooltip")) {
-    return;
-  }
-
-  const nextCard = getEventCard(event.relatedTarget);
-  if (nextCard instanceof HTMLElement) {
-    return;
-  }
-
-  scheduleHideSharedGridTooltip();
+  void event;
 }
 
 export function handleItemsListFocusIn(event) {
-  if (popupState.virtualList.viewMode !== "grid") {
-    return;
+  if (popupState.virtualList.viewMode === "grid") {
+    hideSharedGridTooltip({ immediate: true });
   }
-
-  const currentCard = getEventCard(event.target);
-  if (!(currentCard instanceof HTMLElement)) {
-    return;
-  }
-
-  showSharedGridTooltipForCard(currentCard);
 }
 
 export function handleItemsListFocusOut(event) {
-  if (popupState.virtualList.viewMode !== "grid") {
-    return;
-  }
-
-  const relatedElement = getEventElement(event.relatedTarget);
-  if (relatedElement?.closest("#shared-grid-tooltip")) {
-    return;
-  }
-
-  const nextCard = getEventCard(event.relatedTarget);
-  if (nextCard instanceof HTMLElement) {
-    return;
-  }
-
-  scheduleHideSharedGridTooltip();
+  void event;
 }
 
 export function handleSharedGridTooltipPointerEnter() {
-  clearSharedGridTooltipHideTimer();
+  // Grid cards now own their own interactive overlay within the thumbnail surface.
 }
 
 export function handleSharedGridTooltipPointerLeave(event) {
-  const relatedElement = getEventElement(event.relatedTarget);
-  if (relatedElement?.closest(".item-card[data-item-key]")) {
-    return;
-  }
-
-  scheduleHideSharedGridTooltip();
+  void event;
 }
 
 /**

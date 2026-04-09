@@ -3744,16 +3744,53 @@ body[data-theme="light"] .creator-details-switch-input:checked + .creator-detail
   display: none;
 }
 
+.item-grid-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  align-items: flex-end;
+  padding: 10px;
+  background:
+    linear-gradient(
+      180deg,
+      rgba(29, 32, 33, 0) 0%,
+      rgba(29, 32, 33, 0.08) 30%,
+      rgba(29, 32, 33, 0.74) 62%,
+      rgba(29, 32, 33, 0.96) 100%
+    );
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateY(8px);
+  transition:
+    opacity 140ms ease,
+    transform 140ms ease,
+    visibility 140ms ease;
+}
+
+.item-list.is-grid-view .item-card:hover .item-grid-overlay,
+.item-list.is-grid-view .item-card:focus-within .item-grid-overlay,
+.item-list.is-grid-view .item-card:focus-visible .item-grid-overlay {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+}
+
 .item-grid-tooltip-surface {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  width: 100%;
+  max-height: 100%;
   padding: 10px;
   border: 1px solid rgba(131, 165, 152, 0.28);
   background:
     linear-gradient(180deg, rgba(35, 38, 39, 0.96) 0%, rgba(24, 26, 27, 0.96) 100%);
   backdrop-filter: blur(16px);
   box-shadow: 0 18px 28px rgba(0, 0, 0, 0.36);
+  overflow: auto;
+  pointer-events: auto;
 }
 
 .shared-grid-tooltip {

@@ -98,6 +98,61 @@ export function getVisibleActiveKeysFromDom() {
 }
 
 /**
+ * Returns every archive-eligible key in the current filtered result set, even
+ * when virtualization means only a slice of cards is currently mounted.
+ *
+ * @returns {string[]}
+ */
+export function getBulkArchiveCandidateKeys() {
+  const sourceItems =
+    Array.isArray(popupState.virtualList.filteredItems) && popupState.virtualList.filteredItems.length > 0
+      ? popupState.virtualList.filteredItems
+      : Array.isArray(popupState.latestRenderState.items)
+        ? popupState.latestRenderState.items
+        : [];
+
+  const keys = [];
+  for (const item of sourceItems) {
+    if (!isActiveBatchItem(item)) {
+      continue;
+    }
+
+    const key = getItemKey(item);
+    if (!key || keys.includes(key)) {
+      continue;
+    }
+
+    keys.push(key);
+  }
+
+  return keys;
+}
+
+/**
+ * Returns the currently targeted keys for a bulk archive action, intersected
+ * with the live filtered result set so stale selections cannot leak across
+ * searches or tab changes.
+ *
+ * @returns {string[]}
+ */
+export function getBulkArchiveSelectedKeys() {
+  const candidateKeySet = new Set(getBulkArchiveCandidateKeys());
+  const selectedKeys = [...new Set(
+    (Array.isArray(popupState.bulkArchiveSelectionKeys) ? popupState.bulkArchiveSelectionKeys : [])
+      .filter((key) => typeof key === "string" && candidateKeySet.has(key)),
+  )];
+
+  if (
+    selectedKeys.length !==
+    (Array.isArray(popupState.bulkArchiveSelectionKeys) ? popupState.bulkArchiveSelectionKeys.length : 0)
+  ) {
+    popupState.bulkArchiveSelectionKeys = selectedKeys;
+  }
+
+  return selectedKeys;
+}
+
+/**
  * Recomputes the summary and batch controls using explicit counts.
  *
  * @param {number} totalCount
@@ -218,6 +273,7 @@ export function updateSelectionSummary({
   const creatorFilterLabel = getCreatorResultsTabLabel(activeCreatorResultsTab);
   const isDownloadedTab = activeCreatorResultsTab === "downloaded";
   const isArchivedTab = activeCreatorResultsTab === "archived";
+  const bulkArchiveSelectedCount = getBulkArchiveSelectedKeys().length;
   const hasAnyResults =
     (Array.isArray(popupState.latestRenderState.items) &&
       popupState.latestRenderState.items.length > 0) ||
@@ -296,12 +352,12 @@ export function updateSelectionSummary({
           : `No matches for “${query.trim()}”${scopeSuffix}`;
       return;
     }
-    dom.selectionSummary.textContent =
-      visibleCount > 0
-        ? `${formatWholeNumber(visibleCount)} matches${scopeSuffix} • ${formatWholeNumber(visibleSelectedCount)} selected in view • ${formatWholeNumber(selectedCount)} selected overall${downloadedCount > 0 ? ` • ${formatWholeNumber(downloadedCount)} downloaded` : ""}`
-        : `No matches for “${query.trim()}”${scopeSuffix}`;
-    return;
-  }
+      dom.selectionSummary.textContent =
+        visibleCount > 0
+          ? `${formatWholeNumber(visibleCount)} matches${scopeSuffix} • ${formatWholeNumber(visibleSelectedCount)} selected in view • ${formatWholeNumber(selectedCount)} selected overall${bulkArchiveSelectedCount > 0 ? ` • ${formatWholeNumber(bulkArchiveSelectedCount)} queued to archive` : ""}${downloadedCount > 0 ? ` • ${formatWholeNumber(downloadedCount)} downloaded` : ""}`
+          : `No matches for “${query.trim()}”${scopeSuffix}`;
+      return;
+    }
 
   if (creatorFilterActive) {
     if (isDownloadedTab) {
@@ -312,12 +368,12 @@ export function updateSelectionSummary({
 
     if (isArchivedTab) {
       dom.selectionSummary.textContent =
-        `${formatWholeNumber(visibleCount)} archived • ${formatWholeNumber(visibleSelectedCount)} selected in view • ${formatWholeNumber(selectedCount)} selected overall${downloadedCount > 0 ? ` • ${formatWholeNumber(downloadedCount)} downloaded` : ""}`;
+        `${formatWholeNumber(visibleCount)} archived • ${formatWholeNumber(visibleSelectedCount)} selected in view • ${formatWholeNumber(selectedCount)} selected overall${bulkArchiveSelectedCount > 0 ? ` • ${formatWholeNumber(bulkArchiveSelectedCount)} queued to archive` : ""}${downloadedCount > 0 ? ` • ${formatWholeNumber(downloadedCount)} downloaded` : ""}`;
       return;
     }
 
     dom.selectionSummary.textContent =
-      `${formatWholeNumber(visibleCount)} ${creatorFilterLabel.toLowerCase()} • ${formatWholeNumber(visibleSelectedCount)} selected in view • ${formatWholeNumber(selectedCount)} selected overall${downloadedCount > 0 ? ` • ${formatWholeNumber(downloadedCount)} downloaded` : ""}`;
+      `${formatWholeNumber(visibleCount)} ${creatorFilterLabel.toLowerCase()} • ${formatWholeNumber(visibleSelectedCount)} selected in view • ${formatWholeNumber(selectedCount)} selected overall${bulkArchiveSelectedCount > 0 ? ` • ${formatWholeNumber(bulkArchiveSelectedCount)} queued to archive` : ""}${downloadedCount > 0 ? ` • ${formatWholeNumber(downloadedCount)} downloaded` : ""}`;
     return;
   }
 
@@ -327,7 +383,7 @@ export function updateSelectionSummary({
     return;
   }
 
-  dom.selectionSummary.textContent = `${formatWholeNumber(selectedCount)} of ${formatWholeNumber(totalCount)} selected${downloadedCount > 0 ? ` • ${formatWholeNumber(downloadedCount)} downloaded` : ""}`;
+  dom.selectionSummary.textContent = `${formatWholeNumber(selectedCount)} of ${formatWholeNumber(totalCount)} selected${bulkArchiveSelectedCount > 0 ? ` • ${formatWholeNumber(bulkArchiveSelectedCount)} queued to archive` : ""}${downloadedCount > 0 ? ` • ${formatWholeNumber(downloadedCount)} downloaded` : ""}`;
 }
 
 /**
@@ -357,6 +413,15 @@ export function syncSelectionControls(totalCount, selectedCount, visibleCount = 
   const showBrowseTools = hasLoadedResults;
   const showSummaryPanel = hasLoadedResults;
   const normalizedSelectedCount = Math.max(0, Number(selectedCount) || 0);
+  const bulkArchiveCandidateKeys = getBulkArchiveCandidateKeys();
+  const bulkArchiveSelectedKeys = getBulkArchiveSelectedKeys();
+  const showBulkArchiveActions =
+    hasLoadedResults &&
+    !showSourceSelectionActions &&
+    bulkArchiveCandidateKeys.length > 0 &&
+    !fetchUiState.isBusy &&
+    !fetchUiState.isAnyPaused &&
+    !isFetching;
   const downloadLabel =
     normalizedSelectedCount === 1
       ? "Download 1 Video"
@@ -390,17 +455,32 @@ export function syncSelectionControls(totalCount, selectedCount, visibleCount = 
   }
   if (dom.selectAllButton) {
     dom.selectAllButton.textContent = "Select All";
-    dom.selectAllButton.classList.toggle("hidden", !showSourceSelectionActions);
+    dom.selectAllButton.classList.toggle("hidden", !(showSourceSelectionActions || showBulkArchiveActions));
     dom.selectAllButton.disabled =
-      !showSourceSelectionActions ||
-      sourceSelectionState.visibleCount === 0 ||
-      sourceSelectionState.visibleSelectedCount >= sourceSelectionState.visibleCount;
+      showSourceSelectionActions
+        ? !showSourceSelectionActions ||
+          sourceSelectionState.visibleCount === 0 ||
+          sourceSelectionState.visibleSelectedCount >= sourceSelectionState.visibleCount
+        : !showBulkArchiveActions ||
+          bulkArchiveCandidateKeys.length === 0 ||
+          bulkArchiveSelectedKeys.length >= bulkArchiveCandidateKeys.length;
+  }
+  if (dom.archiveSelectedButton instanceof HTMLButtonElement) {
+    const bulkArchiveSelectedCount = bulkArchiveSelectedKeys.length;
+    dom.archiveSelectedButton.classList.toggle("hidden", !showBulkArchiveActions);
+    dom.archiveSelectedButton.disabled = !showBulkArchiveActions || bulkArchiveSelectedCount === 0;
+    dom.archiveSelectedButton.textContent =
+      bulkArchiveSelectedCount > 0
+        ? `Archive Selected (${formatWholeNumber(bulkArchiveSelectedCount)})`
+        : "Archive Selected";
   }
   if (dom.clearSelectionButton) {
-    dom.clearSelectionButton.textContent = showSourceSelectionActions ? "Select None" : "Clear";
-    dom.clearSelectionButton.classList.toggle("hidden", !showSourceSelectionActions);
+    dom.clearSelectionButton.textContent = "Select None";
+    dom.clearSelectionButton.classList.toggle("hidden", !(showSourceSelectionActions || showBulkArchiveActions));
     dom.clearSelectionButton.disabled =
-      !showSourceSelectionActions || sourceSelectionState.visibleSelectedCount === 0;
+      showSourceSelectionActions
+        ? !showSourceSelectionActions || sourceSelectionState.visibleSelectedCount === 0
+        : !showBulkArchiveActions || bulkArchiveSelectedKeys.length === 0;
   }
   if (dom.resultsViewToggle instanceof HTMLElement) {
     dom.resultsViewToggle.classList.toggle("hidden", !showBrowseTools);

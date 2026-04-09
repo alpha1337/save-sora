@@ -1,5 +1,5 @@
 import { dom } from "../dom.js";
-import { saveDownloadedState, saveRemovedState } from "../runtime.js";
+import { saveBulkRemovedState, saveDownloadedState, saveRemovedState } from "../runtime.js";
 import { popupState } from "../state.js";
 import { buildRenderCountSnapshot } from "../utils/counts.js";
 import { getImplicitSelectedKeys, getItemKey } from "../utils/items.js";
@@ -76,12 +76,12 @@ export async function handleRemoveButtonClick(event, removeButton) {
  *
  * @param {string[]} itemKeys
  * @param {boolean} removed
- * @returns {Promise<void>}
+ * @returns {Promise<boolean>}
  */
 export async function handleBatchArchiveStateChange(itemKeys, removed) {
   const normalizedKeys = [...new Set((Array.isArray(itemKeys) ? itemKeys : []).filter(Boolean))];
   if (normalizedKeys.length === 0) {
-    return;
+    return false;
   }
 
   hideNotice(dom.errorBox);
@@ -97,9 +97,26 @@ export async function handleBatchArchiveStateChange(itemKeys, removed) {
 
   try {
     await flushPendingTitleSaves();
-    await Promise.all(normalizedKeys.map((itemKey) => saveRemovedState(itemKey, removed)));
-    await refreshStatus();
+    const response = await saveBulkRemovedState(normalizedKeys, removed, {
+      sortKey: popupState.browseState.sort,
+      query: popupState.browseState.query,
+      creatorTab: popupState.activeCreatorResultsTab,
+    });
+
+    if (response && response.state) {
+      renderState({
+        ...response.state,
+        items: popupState.latestRenderState.items,
+        selectedKeys: popupState.latestRenderState.selectedKeys,
+        titleOverrides: popupState.latestRenderState.titleOverrides,
+      });
+      syncPollingForState(response.state);
+    } else {
+      await refreshStatus();
+    }
+
     restorePickerScroll(previousScrollTop);
+    return true;
   } catch (error) {
     if (didOptimisticallyUpdate) {
       await refreshStatus();
@@ -107,6 +124,7 @@ export async function handleBatchArchiveStateChange(itemKeys, removed) {
 
     restorePickerScroll(previousScrollTop);
     showNotice(dom.errorBox, error instanceof Error ? error.message : String(error));
+    return false;
   }
 }
 
