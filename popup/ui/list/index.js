@@ -281,7 +281,7 @@ export function handleItemsListPointerOut(event) {
   }
 
   const nextCard = getEventCard(event.relatedTarget);
-  if (nextCard instanceof HTMLElement && nextCard !== currentCard) {
+  if (nextCard instanceof HTMLElement) {
     return;
   }
 

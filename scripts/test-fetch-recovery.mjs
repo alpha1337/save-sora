@@ -535,6 +535,7 @@ async function testStructuralInvariants() {
   assert.match(popupListSource, /buildRenderSignature\(/);
   assert.match(popupListSource, /cache\.lastWindowSignature = visibleWindowSignature;/);
   assert.match(popupListSource, /card\.append\(dom\.sharedGridTooltip\);/);
+  assert.match(popupListSource, /const nextCard = getEventCard\(event\.relatedTarget\);\s+if \(nextCard instanceof HTMLElement\) \{\s+return;\s+\}/s);
   assert.match(popupListSource, /#shared-grid-tooltip/);
   assert.match(popupListSource, /createItemContentSurface\(/);
   assert.match(popupMediaSource, /image\.src = item\.thumbnailUrl;/);
@@ -556,6 +557,7 @@ async function testStructuralInvariants() {
   assert.match(backgroundSource, /if \(currentState\.phase !== "fetch-paused"\) \{\s*pausedFetchRequest = null;/);
   assert.match(backgroundSource, /fetchRecoveryInitError/);
   assert.match(backgroundSource, /const statuses = \["running", "paused", "error", "completed", "aborted"\];/);
+  assert.match(backgroundSource, /function getMirrorMergeSourcesForState\(state = currentState\)/);
   assert.match(backgroundSource, /async function loadProgressPreviewItems\(/);
   assert.match(backgroundSource, /const mirrorItems = await loadSourceMirrorItems\(/);
   assert.match(backgroundSource, /if \(mirrorItems\[0\] \|\| options\.allowLegacyFallback !== true\) \{/);

@@ -5361,6 +5361,44 @@ async function buildPopupStateSnapshotForView(state = currentState, options = {}
   };
 }
 
+function getMirrorMergeSourcesForState(state = currentState) {
+  const sourceState = state && typeof state === "object" ? state : createDefaultState();
+  const sources = new Set();
+  const resumableFetchRequest = normalizeResumableFetchRequest(sourceState.resumableFetchRequest);
+
+  for (const source of resumableFetchRequest ? resumableFetchRequest.sources : []) {
+    sources.add(source);
+  }
+
+  for (const item of Array.isArray(sourceState.items) ? sourceState.items : []) {
+    const source = getCatalogSourceForItem(item);
+    if (source) {
+      sources.add(source);
+    }
+  }
+
+  if (Array.isArray(sourceState.profileIds) && sourceState.profileIds.length > 0) {
+    sources.add("profile");
+  }
+  if (Array.isArray(sourceState.draftIds) && sourceState.draftIds.length > 0) {
+    sources.add("drafts");
+  }
+  if (Array.isArray(sourceState.likesIds) && sourceState.likesIds.length > 0) {
+    sources.add("likes");
+  }
+  if (Array.isArray(sourceState.cameoIds) && sourceState.cameoIds.length > 0) {
+    sources.add("characters");
+  }
+  if (Array.isArray(sourceState.characterIds) && sourceState.characterIds.length > 0) {
+    sources.add("characterAccounts");
+  }
+  if (Array.isArray(sourceState.creatorIds) && sourceState.creatorIds.length > 0) {
+    sources.add("creators");
+  }
+
+  return [...sources];
+}
+
 async function loadMergedFetchItemsForState(state = currentState) {
   const sourceState = state && typeof state === "object" ? state : createDefaultState();
   const mergedItems = new Map();
@@ -5373,11 +5411,17 @@ async function loadMergedFetchItemsForState(state = currentState) {
     mergedItems.set(getCanonicalItemKey(item), item);
   }
 
+  const mirrorMergeSources = getMirrorMergeSourcesForState(sourceState);
   const shouldMergeBackupItems =
+    mirrorMergeSources.length > 0 &&
+    (
     Number(sourceState.backedUpItemCount) > 0 ||
     sourceState.phase === "fetching" ||
     sourceState.phase === "fetch-paused" ||
-    Boolean(normalizeResumableFetchRequest(sourceState.resumableFetchRequest));
+    sourceState.phase === "ready" ||
+    sourceState.phase === "complete" ||
+    Boolean(normalizeResumableFetchRequest(sourceState.resumableFetchRequest))
+    );
   if (!shouldMergeBackupItems) {
     return sortItemsByNewest([...mergedItems.values()]);
   }
@@ -5391,8 +5435,7 @@ async function loadMergedFetchItemsForState(state = currentState) {
         mergedMirrorItems.set(getCanonicalItemKey(item), item);
       }
     } else {
-      const resumableFetchRequest = normalizeResumableFetchRequest(sourceState.resumableFetchRequest);
-      for (const source of resumableFetchRequest ? resumableFetchRequest.sources : []) {
+      for (const source of mirrorMergeSources) {
         const mirroredItems = await loadMirroredItemsForSourceSelection(source, {
           characterAccounts: sourceState.characterAccounts,
           selectedCharacterAccountIds: sourceState.selectedCharacterAccountIds,
