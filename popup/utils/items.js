@@ -130,6 +130,19 @@ export function getItemReviewUrl(item) {
   const itemId = item && typeof item.id === "string" ? item.id.trim() : "";
   const generationId =
     item && typeof item.generationId === "string" ? item.generationId.trim() : "";
+  const noWatermarkUrl =
+    (item &&
+      item.download_urls &&
+      typeof item.download_urls === "object" &&
+      typeof item.download_urls.no_watermark === "string" &&
+      item.download_urls.no_watermark.trim()) ||
+    (item && typeof item.no_watermark === "string" ? item.no_watermark.trim() : "") ||
+    "";
+  const sharedPostMatch = noWatermarkUrl.match(/\/(?:api\/proxy\/)?video\/(s_[A-Za-z0-9_-]+)/i);
+
+  if (sharedPostMatch && typeof sharedPostMatch[1] === "string" && sharedPostMatch[1]) {
+    return `https://sora.chatgpt.com/p/${sharedPostMatch[1]}`;
+  }
 
   const shouldUseDraftFallback =
     item &&

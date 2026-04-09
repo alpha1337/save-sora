@@ -14,38 +14,40 @@ function buildNoWatermarkProxyUrl(itemId) {
   return `https://soravdl.com/api/proxy/video/${encodeURIComponent(itemId)}`;
 }
 
-function getItemPlaybackUrl(item) {
+function resolveNoWatermarkPlaybackUrl(item) {
   if (!item || typeof item !== "object") {
     return "";
   }
 
   const itemId = typeof item.id === "string" ? item.id : "";
-  const isDraftId = /^gen_[A-Za-z0-9_-]+$/.test(itemId);
+  const generationId = typeof item.generationId === "string" ? item.generationId : "";
+
+  return (
+    (item.download_urls &&
+    typeof item.download_urls === "object" &&
+    typeof item.download_urls.no_watermark === "string" &&
+    item.download_urls.no_watermark) ||
+    (typeof item.no_watermark === "string" && item.no_watermark) ||
+    buildNoWatermarkProxyUrl(itemId) ||
+    buildNoWatermarkProxyUrl(generationId) ||
+    ""
+  );
+}
+
+function getItemPlaybackUrl(item) {
+  if (!item || typeof item !== "object") {
+    return "";
+  }
+
   const watermarkUrl =
     (item.download_urls &&
     typeof item.download_urls === "object" &&
     typeof item.download_urls.watermark === "string" &&
     item.download_urls.watermark) ||
     "";
-  const noWatermarkUrl =
-    (item.download_urls &&
-    typeof item.download_urls === "object" &&
-    typeof item.download_urls.no_watermark === "string" &&
-    item.download_urls.no_watermark) ||
-    (typeof item.no_watermark === "string" && item.no_watermark) ||
-    "";
-
-  if (isDraftId) {
-    return (
-      watermarkUrl ||
-      (typeof item.downloadUrl === "string" && item.downloadUrl) ||
-      noWatermarkUrl ||
-      ""
-    );
-  }
+  const noWatermarkUrl = resolveNoWatermarkPlaybackUrl(item);
 
   return (
-    buildNoWatermarkProxyUrl(itemId) ||
     noWatermarkUrl ||
     watermarkUrl ||
     (typeof item.downloadUrl === "string" && item.downloadUrl) ||

@@ -201,6 +201,73 @@ function simulatePausedRequestLifecycle() {
   return pausedFetchRequest;
 }
 
+function selectNewestInstallableUpdateCandidate(candidates, currentVersion = "0.0.0") {
+  const normalizedCandidates = Array.isArray(candidates) ? candidates : [];
+  let selectedCandidate = null;
+
+  for (const candidate of normalizedCandidates) {
+    if (!candidate || typeof candidate !== "object" || typeof candidate.version !== "string") {
+      continue;
+    }
+
+    if (compareVersions(candidate.version, currentVersion) <= 0) {
+      continue;
+    }
+
+    if (
+      !selectedCandidate ||
+      compareVersions(candidate.version, selectedCandidate.version) > 0
+    ) {
+      selectedCandidate = candidate;
+    }
+  }
+
+  return selectedCandidate;
+}
+
+function compareVersions(leftVersion, rightVersion) {
+  const leftParts = String(leftVersion || "")
+    .split(".")
+    .map((value) => Number.parseInt(value, 10) || 0);
+  const rightParts = String(rightVersion || "")
+    .split(".")
+    .map((value) => Number.parseInt(value, 10) || 0);
+  const maxLength = Math.max(leftParts.length, rightParts.length);
+
+  for (let index = 0; index < maxLength; index += 1) {
+    const leftValue = leftParts[index] || 0;
+    const rightValue = rightParts[index] || 0;
+    if (leftValue !== rightValue) {
+      return leftValue > rightValue ? 1 : -1;
+    }
+  }
+
+  return 0;
+}
+
+function isCachedInterfaceStateErrorMessage(message) {
+  const normalized = String(message || "").toLowerCase();
+  return (
+    normalized.includes("state cached in an interface object") ||
+    normalized.includes("cached in an interface object")
+  );
+}
+
+function isRecoverableSoraAuthErrorMessage(message) {
+  const normalized = String(message || "").toLowerCase();
+  return (
+    normalized.includes("could not derive a sora bearer token") ||
+    normalized.includes("could not derive your sora user id") ||
+    normalized.includes("sora request failed with status 401") ||
+    normalized.includes("sora request failed with status 403") ||
+    normalized.includes("session expired") ||
+    normalized.includes("expired token") ||
+    normalized.includes("unauthorized") ||
+    normalized.includes("forbidden") ||
+    normalized.includes("make sure you're signed in")
+  );
+}
+
 function simulateSerializedFetchState(state) {
   const phase = state && typeof state.phase === "string" ? state.phase : "idle";
   const isActiveFetchState = phase === "fetching";
@@ -500,6 +567,70 @@ function simulateTotalBatchMetrics(items) {
   };
 }
 
+function simulateResolvedNoWatermarkUrl(item) {
+  if (!item || typeof item !== "object") {
+    return "";
+  }
+
+  const itemId = typeof item.id === "string" ? item.id : "";
+  const generationId = typeof item.generationId === "string" ? item.generationId : "";
+  const proxiedId = /^s_[A-Za-z0-9_-]+$/.test(itemId)
+    ? itemId
+    : /^s_[A-Za-z0-9_-]+$/.test(generationId)
+      ? generationId
+      : "";
+
+  return (
+    (item.download_urls &&
+    typeof item.download_urls === "object" &&
+    typeof item.download_urls.no_watermark === "string" &&
+    item.download_urls.no_watermark) ||
+    (typeof item.no_watermark === "string" && item.no_watermark) ||
+    (proxiedId ? `https://soravdl.com/api/proxy/video/${proxiedId}` : "")
+  );
+}
+
+function simulatePreferredDownloadUrl(item) {
+  if (!item || typeof item !== "object") {
+    return "";
+  }
+
+  const noWatermarkUrl = simulateResolvedNoWatermarkUrl(item);
+  const watermarkUrl =
+    (item.download_urls &&
+    typeof item.download_urls === "object" &&
+    typeof item.download_urls.watermark === "string" &&
+    item.download_urls.watermark) ||
+    "";
+
+  return noWatermarkUrl || watermarkUrl || (typeof item.downloadUrl === "string" ? item.downloadUrl : "") || "";
+}
+
+function simulateReviewUrlFromSharedDraft(item) {
+  const detailUrl =
+    item && typeof item.detailUrl === "string" && item.detailUrl.trim() ? item.detailUrl.trim() : "";
+  if (detailUrl) {
+    return detailUrl.startsWith("http") ? detailUrl : `https://sora.chatgpt.com${detailUrl}`;
+  }
+
+  const noWatermarkUrl = simulateResolvedNoWatermarkUrl(item);
+  const sharedMatch = noWatermarkUrl.match(/\/(?:api\/proxy\/)?video\/(s_[A-Za-z0-9_-]+)/i);
+  if (sharedMatch && typeof sharedMatch[1] === "string" && sharedMatch[1]) {
+    return `https://sora.chatgpt.com/p/${sharedMatch[1]}`;
+  }
+
+  const generationId =
+    item && typeof item.generationId === "string" ? item.generationId.trim() : "";
+  const itemId = item && typeof item.id === "string" ? item.id.trim() : "";
+  if (generationId.startsWith("gen_")) {
+    return `https://sora.chatgpt.com/d/${generationId}`;
+  }
+  if (itemId.startsWith("gen_")) {
+    return `https://sora.chatgpt.com/d/${itemId}`;
+  }
+  return null;
+}
+
 function simulateAuthoritativePopupTotals({ runtimeState = {}, renderState = {} } = {}) {
   const countSnapshot =
     renderState && renderState.counts && typeof renderState.counts === "object"
@@ -628,6 +759,7 @@ async function testStructuralInvariants() {
   assert.match(backgroundSource, /if \(message\.type === "RESUME_SCAN"\) \{[\s\S]*?const state = await resumeScan\(\);[\s\S]*?sendResponse\(\{ ok: true, state \}\);[\s\S]*?return true;/);
   assert.match(backgroundSource, /if \(message\.type === "SET_TITLE_OVERRIDE"\)[\s\S]*?sendResponse\(\{ ok: true \}\);[\s\S]*?sendResponse\(\{ ok: false, error: getErrorMessage\(error\) \}\);[\s\S]*?return true;/);
   assert.match(backgroundSource, /async function executeSourceFetchWithRecovery/);
+  assert.match(backgroundSource, /function isRecoverableSoraAuthError\(error\)/);
   assert.match(backgroundSource, /async function findInterruptedSyncSession/);
   assert.match(backgroundSource, /async function getRecoverablePausedSyncSession/);
   assert.match(backgroundSource, /async function loadVolatileBackupItemsForSyncSession\(sessionRecord, state = currentState\)/);
@@ -667,6 +799,8 @@ async function testStructuralInvariants() {
   assert.match(popupListSource, /#shared-grid-tooltip/);
   assert.match(popupListSource, /createItemContentSurface\(/);
   assert.match(popupMediaSource, /image\.src = item\.thumbnailUrl;/);
+  assert.match(popupMediaSource, /function resolveNoWatermarkPlaybackUrl\(item\)/);
+  assert.match(popupMediaSource, /const noWatermarkUrl = resolveNoWatermarkPlaybackUrl\(item\);/);
   assert.doesNotMatch(popupMediaSource, /thumbnailObserver/);
   assert.match(popupHtmlSource, /id="shared-grid-tooltip"/);
   assert.match(popupActionsSource, /const isResumeMode = fetchUiState\.primaryActionMode === "resume"/);
@@ -721,6 +855,23 @@ async function testStructuralInvariants() {
   assert.match(popupSourceMenusSource, /const fetchUiState = getFetchUiState\(/);
   assert.match(backgroundSource, /function createDefaultRestoreStatus/);
   assert.match(backgroundSource, /function resolveAuthoritativeFetchCountSnapshot\(options = \{\}\)/);
+  assert.match(backgroundSource, /function resolveNoWatermarkDownloadUrl\(item\)/);
+  assert.match(backgroundSource, /async function postJson\(relativeUrl, jsonBody, requestOptions = \{\}\)/);
+  assert.match(backgroundSource, /async function buildDraftSharedReferenceMap\(rows, config = \{\}\)/);
+  assert.match(backgroundSource, /type:\s*"shared_link_unlisted"/);
+  assert.match(backgroundSource, /attachments_to_create:\s*\[/);
+  assert.match(backgroundSource, /const sharedReferenceMap = await buildDraftSharedReferenceMap\(rows,/);
+  assert.match(backgroundSource, /const isRecoverableAuthError = isRecoverableSoraAuthError\(error\);/);
+  assert.match(backgroundSource, /lastAuthRefreshAt: now,/);
+  assert.match(backgroundSource, /Save Sora refreshed its hidden Sora worker after your session expired/);
+  assert.match(backgroundSource, /function selectNewestInstallableUpdateCandidate\(candidates, currentVersion = CURRENT_EXTENSION_VERSION\)/);
+  assert.match(backgroundSource, /function isCachedInterfaceStateError\(error\)/);
+  assert.match(backgroundSource, /async function resolvePendingUpdateForInstall\(options = \{\}\)/);
+  assert.match(backgroundSource, /async function applyPendingUpdateToInstallFolder\(pendingUpdate, extractedFiles, onProgress\)/);
+  assert.match(backgroundSource, /const \{\s+pendingUpdate,\s+latestRelease,\s+\} = await resolvePendingUpdateForInstall\(options\);/s);
+  assert.match(backgroundSource, /const installRecord = await getLinkedInstallFolderRecord\(\{ bypassCache: true \}\);/);
+  assert.match(backgroundSource, /if \(!isCachedInterfaceStateError\(error\)\) \{\s+throw error;\s+\}/s);
+  assert.match(backgroundSource, /return installPendingUpdate\(\{ pendingUpdate, refreshLatest: false \}\);/);
   assert.match(backgroundSource, /function buildPopupBatchMetricSnapshot\(items = \[\]\)/);
   assert.match(backgroundSource, /const countSnapshot = resolveAuthoritativeFetchCountSnapshot\(\{\s+items: sourceItems,/s);
   assert.match(backgroundSource, /popupDownloadableBytes: metricSnapshot\.downloadableBytes,/);
@@ -768,6 +919,8 @@ async function testStructuralInvariants() {
   assert.match(popupItemCardPartsSource, /if \(!item\.isDownloaded\) \{/);
   assert.match(popupItemCardPartsSource, /Archive video/);
   assert.match(popupItemsUtilsSource, /case "downloaded":\s+return "Downloaded";/);
+  assert.match(popupItemsUtilsSource, /const sharedPostMatch = noWatermarkUrl\.match\(/);
+  assert.match(popupItemsUtilsSource, /return `https:\/\/sora\.chatgpt\.com\/p\/\$\{sharedPostMatch\[1\]\}`;/);
   assert.match(popupStateSource, /downloadableBytes: null,/);
   assert.match(popupStateSource, /downloadedBytes: null,/);
   assert.match(popupStateSource, /archivedBytes: null,/);
@@ -1164,6 +1317,56 @@ function testRuntimePhaseWinsOverStaleRenderPhase() {
   );
 }
 
+function testInstallPrefersNewestAvailableRelease() {
+  const selectedUpdate = selectNewestInstallableUpdateCandidate(
+    [
+      { version: "1.23.4" },
+      { version: "1.23.9" },
+      { version: "1.23.7" },
+    ],
+    "1.23.3",
+  );
+
+  assert.deepEqual(selectedUpdate, { version: "1.23.9" });
+}
+
+function testCachedInterfaceStateErrorIsRetryable() {
+  assert.equal(
+    isCachedInterfaceStateErrorMessage(
+      "An operation that depends on state cached in an interface object was made but the state had changed since it was read from disk.",
+    ),
+    true,
+  );
+
+  assert.equal(
+    isCachedInterfaceStateErrorMessage("Permission denied while opening the selected folder."),
+    false,
+  );
+}
+
+function testExpiredSoraSessionErrorIsRetryable() {
+  assert.equal(
+    isRecoverableSoraAuthErrorMessage(
+      "Failed to fetch drafts data: Sora request failed with status 401. Session expired.",
+    ),
+    true,
+  );
+
+  assert.equal(
+    isRecoverableSoraAuthErrorMessage(
+      "Could not derive a Sora bearer token from the signed-in browser session.",
+    ),
+    true,
+  );
+
+  assert.equal(
+    isRecoverableSoraAuthErrorMessage(
+      "Failed to fetch drafts data: Timed out while waiting for Sora to respond.",
+    ),
+    false,
+  );
+}
+
 function testPausedResultsPreferResetCta() {
   const uiState = simulateFetchUiState(
     {
@@ -1389,6 +1592,38 @@ function testDownloadedTabFilteringAndQueueExclusion() {
   );
 }
 
+function testDraftsPreferSharedNoWatermarkDownloadsWhenAvailable() {
+  const preferredUrl = simulatePreferredDownloadUrl({
+    id: "gen_01draft",
+    generationId: "gen_01draft",
+    download_urls: {
+      no_watermark: "https://soravdl.com/api/proxy/video/s_01shared",
+      watermark: "https://videos.openai.com/watermarked.mp4",
+    },
+    downloadUrl: "https://videos.openai.com/watermarked.mp4",
+  });
+
+  assert.equal(
+    preferredUrl,
+    "https://soravdl.com/api/proxy/video/s_01shared",
+    "draft downloads should prefer the derived shared-link no-watermark URL once it exists",
+  );
+}
+
+function testSharedDraftProxyResolvesBackToPublicReviewUrl() {
+  const reviewUrl = simulateReviewUrlFromSharedDraft({
+    id: "gen_01draft",
+    generationId: "gen_01draft",
+    no_watermark: "https://soravdl.com/api/proxy/video/s_01shared",
+  });
+
+  assert.equal(
+    reviewUrl,
+    "https://sora.chatgpt.com/p/s_01shared",
+    "shared draft proxy URLs should map back to the public shared review page",
+  );
+}
+
 function testPausedFetchPersistencePreservesRecoveryMetadata() {
   const persisted = simulateSerializedFetchState({
     phase: "fetch-paused",
@@ -1486,6 +1721,9 @@ testResetPreservesSavedSourcesAndSelections();
 testPausedRequestPersistsAfterPause();
 testResumeFallsBackToPersistedSessionRequest();
 testRuntimePhaseWinsOverStaleRenderPhase();
+testInstallPrefersNewestAvailableRelease();
+testCachedInterfaceStateErrorIsRetryable();
+testExpiredSoraSessionErrorIsRetryable();
 testPausedResultsPreferResetCta();
 testPausedCountsPreferResetCtaBeforeItemsHydrate();
 testDismissedRestorePromptReturnsToFetchCta();
@@ -1496,6 +1734,8 @@ testPausedFetchCountsPreferAuthoritativeFetchedTotal();
 testRestoredMirrorItemsMergeIntoRuntimeCatalog();
 testGridCardsDoNotDuplicateHiddenListBodies();
 testDownloadedTabFilteringAndQueueExclusion();
+testDraftsPreferSharedNoWatermarkDownloadsWhenAvailable();
+testSharedDraftProxyResolvesBackToPublicReviewUrl();
 testPausedFetchPersistencePreservesRecoveryMetadata();
 testPausedSessionAutoRestoresWithoutPrompt();
 testRestoreGateOnlyReleasesAfterFetchActuallyStarts();

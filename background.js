@@ -3036,6 +3036,42 @@ function compareSemver(leftVersion, rightVersion) {
   return 0;
 }
 
+function selectNewestInstallableUpdateCandidate(candidates, currentVersion = CURRENT_EXTENSION_VERSION) {
+  const normalizedCurrentVersion =
+    typeof currentVersion === "string" && currentVersion ? currentVersion : CURRENT_EXTENSION_VERSION;
+  const normalizedCandidates = Array.isArray(candidates) ? candidates : [];
+  let selectedCandidate = null;
+
+  for (const candidate of normalizedCandidates) {
+    if (!candidate || typeof candidate !== "object") {
+      continue;
+    }
+
+    const candidateVersion =
+      typeof candidate.version === "string" && candidate.version ? candidate.version : "";
+    if (!candidateVersion || compareSemver(candidateVersion, normalizedCurrentVersion) <= 0) {
+      continue;
+    }
+
+    if (
+      !selectedCandidate ||
+      compareSemver(candidateVersion, selectedCandidate.version) > 0
+    ) {
+      selectedCandidate = candidate;
+    }
+  }
+
+  return selectedCandidate;
+}
+
+function isCachedInterfaceStateError(error) {
+  const message = getErrorMessage(error).toLowerCase();
+  return (
+    message.includes("state cached in an interface object") ||
+    message.includes("cached in an interface object")
+  );
+}
+
 async function hasStoredInstallFolderAccess(record) {
   const handle = record && record.handle ? record.handle : null;
   if (!handle || typeof handle.queryPermission !== "function") {
@@ -3049,8 +3085,11 @@ async function hasStoredInstallFolderAccess(record) {
   }
 }
 
-async function getLinkedInstallFolderRecord() {
+async function getLinkedInstallFolderRecord(options = {}) {
+  const bypassCache = options && options.bypassCache === true;
+
   if (
+    !bypassCache &&
     linkedInstallFolderRecordCache &&
     typeof linkedInstallFolderRecordCache === "object" &&
     (await hasStoredInstallFolderAccess(linkedInstallFolderRecordCache))
@@ -3600,16 +3639,96 @@ async function storePendingUpdate(updateInfo) {
   });
 }
 
+async function resolvePendingUpdateForInstall(options = {}) {
+  const refreshLatest = options.refreshLatest !== false;
+  const suppliedPendingUpdate =
+    options.pendingUpdate && typeof options.pendingUpdate === "object" ? options.pendingUpdate : null;
+  const storedPendingUpdate = await readUpdaterRecord(UPDATE_PENDING_RECORD_KEY);
+  let latestRelease = null;
+  let latestReleaseError = null;
+
+  if (refreshLatest) {
+    try {
+      latestRelease = await fetchLatestReleaseManifest();
+    } catch (error) {
+      latestReleaseError = error;
+    }
+  }
+
+  const pendingUpdate = selectNewestInstallableUpdateCandidate(
+    [suppliedPendingUpdate, storedPendingUpdate, latestRelease],
+    CURRENT_EXTENSION_VERSION,
+  );
+
+  if (pendingUpdate) {
+    await storePendingUpdate({
+      ...pendingUpdate,
+      pendingDeferred: false,
+    });
+    return {
+      pendingUpdate,
+      latestRelease,
+    };
+  }
+
+  if (latestReleaseError) {
+    throw latestReleaseError;
+  }
+
+  return {
+    pendingUpdate: null,
+    latestRelease,
+  };
+}
+
+async function applyPendingUpdateToInstallFolder(pendingUpdate, extractedFiles, onProgress) {
+  const attemptApply = async (options = {}) => {
+    const installRecord = await getLinkedInstallFolderRecord({
+      bypassCache: options.bypassCache === true,
+    });
+    if (!installRecord || !installRecord.handle) {
+      throw new Error("Chrome lost access to the linked unpacked extension folder. Confirm the folder link and try again.");
+    }
+
+    await validateInstallFolderHandle(installRecord.handle);
+    await applyExtractedManagedFiles(installRecord.handle, extractedFiles, onProgress);
+  };
+
+  try {
+    await attemptApply({ bypassCache: true });
+  } catch (error) {
+    if (!isCachedInterfaceStateError(error)) {
+      throw error;
+    }
+
+    linkedInstallFolderRecordCache = null;
+    await setUpdateState(
+      {
+        phase: "applying",
+        message: `Installing Save Sora ${pendingUpdate.version}…`,
+        detail: "The linked install folder changed on disk. Refreshing folder access and retrying once.",
+      },
+      { persist: false },
+    );
+    await attemptApply({ bypassCache: true });
+  }
+}
+
 async function installPendingUpdate(options = {}) {
   await restoreUpdaterState();
-  const pendingUpdate =
-    options.pendingUpdate && typeof options.pendingUpdate === "object"
-      ? options.pendingUpdate
-      : await readUpdaterRecord(UPDATE_PENDING_RECORD_KEY);
+  const {
+    pendingUpdate,
+    latestRelease,
+  } = await resolvePendingUpdateForInstall(options);
   if (!pendingUpdate || !pendingUpdate.version || compareSemver(pendingUpdate.version, CURRENT_EXTENSION_VERSION) <= 0) {
     await setUpdateState({
       phase: "idle",
       latestVersion: CURRENT_EXTENSION_VERSION,
+      latestGitHubVersion:
+        latestRelease && typeof latestRelease.version === "string" ? latestRelease.version : "",
+      latestManifestDetected: latestRelease ? latestRelease.manifestDetected === true : false,
+      latestZipDetected: latestRelease ? latestRelease.zipDetected === true : false,
+      lastCheckedAt: latestRelease ? new Date().toISOString() : currentUpdateState.lastCheckedAt,
       pendingUpdateVersion: "",
       updateAvailable: false,
       pendingDeferred: false,
@@ -3623,7 +3742,7 @@ async function installPendingUpdate(options = {}) {
 
   const storedInstallRecord = await getStoredInstallFolderRecord();
   const installFolderLinked = hasStoredInstallFolderHandle(storedInstallRecord);
-  const installRecord = await getLinkedInstallFolderRecord();
+  const installRecord = await getLinkedInstallFolderRecord({ bypassCache: true });
   if (!installRecord || !installRecord.handle) {
     await setUpdateState({
       phase: "awaiting-folder",
@@ -3772,7 +3891,7 @@ async function installPendingUpdate(options = {}) {
       { persist: true },
     );
 
-    await applyExtractedManagedFiles(installRecord.handle, extractedFiles, async (progressRatio) => {
+    await applyPendingUpdateToInstallFolder(pendingUpdate, extractedFiles, async (progressRatio) => {
       await setUpdateState(
         {
           phase: "applying",
@@ -3962,7 +4081,7 @@ async function runUpdateCheck(options = {}) {
       return buildUpdateStatusSnapshot();
     }
 
-    return installPendingUpdate({ pendingUpdate });
+    return installPendingUpdate({ pendingUpdate, refreshLatest: false });
   } catch (error) {
     const releaseVersion =
       error && typeof error.releaseVersion === "string" ? error.releaseVersion : "";
@@ -6487,39 +6606,40 @@ function buildNoWatermarkProxyUrl(postId) {
   return `https://soravdl.com/api/proxy/video/${encodeURIComponent(postId)}`;
 }
 
-function getPreferredDownloadUrl(item) {
+function resolveNoWatermarkDownloadUrl(item) {
   if (!item || typeof item !== "object") {
     return "";
   }
 
   const itemId = typeof item.id === "string" ? item.id : "";
-  const isDraftId = /^gen_[A-Za-z0-9_-]+$/.test(itemId);
-  const proxyUrl = buildNoWatermarkProxyUrl(itemId);
+  const generationId = typeof item.generationId === "string" ? item.generationId : "";
+
+  return (
+    (item.download_urls &&
+    typeof item.download_urls === "object" &&
+    typeof item.download_urls.no_watermark === "string" &&
+    item.download_urls.no_watermark) ||
+    (typeof item.no_watermark === "string" && item.no_watermark) ||
+    buildNoWatermarkProxyUrl(itemId) ||
+    buildNoWatermarkProxyUrl(generationId) ||
+    ""
+  );
+}
+
+function getPreferredDownloadUrl(item) {
+  if (!item || typeof item !== "object") {
+    return "";
+  }
+
   const watermarkUrl =
     (item.download_urls &&
     typeof item.download_urls === "object" &&
     typeof item.download_urls.watermark === "string" &&
     item.download_urls.watermark) ||
     "";
-  const noWatermarkUrl =
-    (item.download_urls &&
-    typeof item.download_urls === "object" &&
-    typeof item.download_urls.no_watermark === "string" &&
-    item.download_urls.no_watermark) ||
-    (typeof item.no_watermark === "string" && item.no_watermark) ||
-    "";
-
-  if (isDraftId) {
-    return (
-      watermarkUrl ||
-      (typeof item.downloadUrl === "string" && item.downloadUrl) ||
-      noWatermarkUrl ||
-      ""
-    );
-  }
+  const noWatermarkUrl = resolveNoWatermarkDownloadUrl(item);
 
   return (
-    proxyUrl ||
     noWatermarkUrl ||
     watermarkUrl ||
     (typeof item.downloadUrl === "string" && item.downloadUrl) ||
@@ -6536,8 +6656,12 @@ function mergeRefreshedDownloadFields(item, refreshedItem) {
       : typeof baseItem.id === "string"
         ? baseItem.id
         : "";
-  const isDraftId = /^gen_[A-Za-z0-9_-]+$/.test(resolvedItemId);
-  const noWatermarkUrl = buildNoWatermarkProxyUrl(resolvedItemId);
+  const resolvedGenerationId =
+    typeof nextItem.generationId === "string" && nextItem.generationId
+      ? nextItem.generationId
+      : typeof baseItem.generationId === "string"
+        ? baseItem.generationId
+        : "";
   const watermarkUrl =
     (nextItem.download_urls &&
     typeof nextItem.download_urls === "object" &&
@@ -6548,12 +6672,19 @@ function mergeRefreshedDownloadFields(item, refreshedItem) {
     typeof baseItem.download_urls.watermark === "string" &&
     baseItem.download_urls.watermark) ||
     "";
+  const noWatermarkUrl =
+    resolveNoWatermarkDownloadUrl(nextItem) ||
+    resolveNoWatermarkDownloadUrl(baseItem) ||
+    buildNoWatermarkProxyUrl(resolvedItemId) ||
+    buildNoWatermarkProxyUrl(resolvedGenerationId) ||
+    "";
 
   return {
     ...baseItem,
     ...nextItem,
     downloadUrl:
-      (isDraftId ? watermarkUrl : noWatermarkUrl || watermarkUrl) ||
+      noWatermarkUrl ||
+      watermarkUrl ||
       (typeof nextItem.downloadUrl === "string" && nextItem.downloadUrl) ||
       (typeof baseItem.downloadUrl === "string" && baseItem.downloadUrl) ||
       "",
@@ -7154,6 +7285,19 @@ function getArchiveReviewUrl(item) {
   const itemId = item && typeof item.id === "string" ? item.id.trim() : "";
   const generationId =
     item && typeof item.generationId === "string" ? item.generationId.trim() : "";
+  const noWatermarkUrl =
+    (item &&
+      item.download_urls &&
+      typeof item.download_urls === "object" &&
+      typeof item.download_urls.no_watermark === "string" &&
+      item.download_urls.no_watermark.trim()) ||
+    (item && typeof item.no_watermark === "string" ? item.no_watermark.trim() : "") ||
+    "";
+  const sharedPostMatch = noWatermarkUrl.match(/\/(?:api\/proxy\/)?video\/(s_[A-Za-z0-9_-]+)/i);
+
+  if (sharedPostMatch && typeof sharedPostMatch[1] === "string" && sharedPostMatch[1]) {
+    return `https://sora.chatgpt.com/p/${sharedPostMatch[1]}`;
+  }
 
   const shouldUseDraftFallback =
     item &&
@@ -15441,6 +15585,24 @@ function isHiddenTabFrameResetError(error) {
   return /Frame with ID \d+ was removed/i.test(message) || /No frame with id \d+/i.test(message);
 }
 
+function isRecoverableSoraAuthError(error) {
+  const message = getErrorMessage(error);
+  if (!message) {
+    return false;
+  }
+
+  return (
+    /Could not derive a Sora bearer token/i.test(message) ||
+    /Could not derive your Sora user id/i.test(message) ||
+    /Sora request failed with status (401|403)/i.test(message) ||
+    /session(?: token)? expired/i.test(message) ||
+    /expired .*token/i.test(message) ||
+    /unauthorized/i.test(message) ||
+    /forbidden/i.test(message) ||
+    /Open Sora in this Chrome profile and make sure you're signed in/i.test(message)
+  );
+}
+
 async function listActiveSourceScopeHashesForFetchSource(source) {
   const activeSession = await getActiveSyncSession();
   if (!activeSession || !Array.isArray(activeSession.sourceScopes)) {
@@ -15577,11 +15739,12 @@ async function executeSourceFetchWithRecovery(source, routeUrl, options) {
         throw error;
       }
 
+      const isRecoverableAuthError = isRecoverableSoraAuthError(error);
       const isRecoverableHiddenTabError =
         isHiddenTabFrameResetError(error) ||
         /Timed out while waiting for Sora to respond/i.test(getErrorMessage(error));
 
-      if (!isRecoverableHiddenTabError) {
+      if (!isRecoverableHiddenTabError && !isRecoverableAuthError) {
         throw error;
       }
 
@@ -15593,7 +15756,13 @@ async function executeSourceFetchWithRecovery(source, routeUrl, options) {
           const nextRetryCount = (existingRetryState && existingRetryState.retryCount) || 0;
           await writeSourceRetryState(sourceScopeHash, {
             retryCount: nextRetryCount + 1,
-            lastTimeoutAt: now,
+            ...(isRecoverableAuthError
+              ? {
+                  lastAuthRefreshAt: now,
+                }
+              : {
+                  lastTimeoutAt: now,
+                }),
           });
         }),
       ).catch(() => null);
@@ -15602,7 +15771,9 @@ async function executeSourceFetchWithRecovery(source, routeUrl, options) {
       if (recoveryAttempts >= FETCH_SOURCE_MAX_RECOVERY_ATTEMPTS) {
         throw createControlError(
           "pause",
-          "Save Sora lost contact with Sora while fetching. The crawl was paused so you can resume without losing progress.",
+          isRecoverableAuthError
+            ? "Save Sora refreshed its hidden Sora worker after your session expired, but Sora still needs you to sign in again. Open Sora in this Chrome profile, confirm you're signed in, then resume without losing progress."
+            : "Save Sora lost contact with Sora while fetching. The crawl was paused so you can resume without losing progress.",
         );
       }
 
@@ -17077,9 +17248,9 @@ function injectedFetchSource(config) {
       throw new Error("Could not determine the creator profile id from the current Sora page.");
     }
 
-    async function fetchJson(relativeUrl) {
-      // All Sora API reads happen from inside the Sora tab so requests inherit the user's
-      // current browser session and remain scoped to the declared host permissions.
+    async function sendJsonRequest(relativeUrl, requestOptions = {}) {
+      // All Sora API reads and writes happen from inside the Sora tab so requests inherit
+      // the user's current browser session and remain scoped to the declared host permissions.
       const authContext = await deriveAuthContext();
       const headers = {
         accept: "application/json, text/plain, */*",
@@ -17091,30 +17262,69 @@ function injectedFetchSource(config) {
         headers["oai-device-id"] = authContext.deviceId;
       }
 
+      if (Object.prototype.hasOwnProperty.call(requestOptions, "jsonBody")) {
+        headers["content-type"] = "application/json";
+      }
+
+      if (requestOptions && requestOptions.cacheBypass === true) {
+        headers["cache-control"] = "no-cache";
+        headers.pragma = "no-cache";
+      }
+
+      if (requestOptions && requestOptions.headers && typeof requestOptions.headers === "object") {
+        Object.assign(headers, requestOptions.headers);
+      }
+
       const response = await fetch(relativeUrl, {
+        method:
+          typeof requestOptions.method === "string" && requestOptions.method
+            ? requestOptions.method.toUpperCase()
+            : "GET",
         credentials: "include",
         headers,
+        redirect: requestOptions && requestOptions.redirect === "manual" ? "manual" : "follow",
+        body: Object.prototype.hasOwnProperty.call(requestOptions, "jsonBody")
+          ? JSON.stringify(requestOptions.jsonBody)
+          : requestOptions && typeof requestOptions.body === "string"
+            ? requestOptions.body
+            : undefined,
       });
 
       const raw = await response.text();
       let data = null;
 
-      try {
-        data = JSON.parse(raw);
-      } catch (_error) {
-        throw new Error(
-          "Sora returned a non-JSON response. Open Sora in this Chrome profile and make sure you're signed in.",
-        );
+      if (raw) {
+        try {
+          data = JSON.parse(raw);
+        } catch (_error) {
+          throw new Error(
+            "Sora returned a non-JSON response. Open Sora in this Chrome profile and make sure you're signed in.",
+          );
+        }
       }
 
       if (!response.ok) {
+        const statusMessage = `Sora request failed with status ${response.status}.`;
         const message =
           (data && (data.message || (data.error && data.error.message))) ||
-          `Sora request failed with status ${response.status}.`;
-        throw new Error(message);
+          (typeof raw === "string" && raw.trim()) ||
+          statusMessage;
+        throw new Error(message.includes(statusMessage) ? message : `${statusMessage} ${message}`.trim());
       }
 
       return data;
+    }
+
+    async function fetchJson(relativeUrl) {
+      return sendJsonRequest(relativeUrl);
+    }
+
+    async function postJson(relativeUrl, jsonBody, requestOptions = {}) {
+      return sendJsonRequest(relativeUrl, {
+        ...requestOptions,
+        method: "POST",
+        jsonBody,
+      });
     }
 
     function pickFirstString(candidates) {
@@ -17133,6 +17343,421 @@ function injectedFetchSource(config) {
       }
 
       return `https://soravdl.com/api/proxy/video/${encodeURIComponent(postId)}`;
+    }
+
+    const draftSharedReferenceCache = new Map();
+
+    function extractSharedPostIdFromUrl(value) {
+      if (typeof value !== "string" || !value) {
+        return "";
+      }
+
+      const trimmed = value.trim();
+      if (!trimmed) {
+        return "";
+      }
+
+      if (/^s_[A-Za-z0-9_-]+$/.test(trimmed)) {
+        return trimmed;
+      }
+
+      const patterns = [
+        /\/p\/(s_[A-Za-z0-9_-]+)/i,
+        /\/(?:api\/proxy\/)?video\/(s_[A-Za-z0-9_-]+)/i,
+      ];
+
+      for (const pattern of patterns) {
+        const match = trimmed.match(pattern);
+        if (match && typeof match[1] === "string" && match[1]) {
+          return match[1];
+        }
+      }
+
+      return "";
+    }
+
+    function buildSharedPostUrl(sharedPostId) {
+      return typeof sharedPostId === "string" && sharedPostId
+        ? `${window.location.origin}/p/${encodeURIComponent(sharedPostId)}`
+        : "";
+    }
+
+    function buildSharedPostReference(sharedPostId, shareUrl = "") {
+      if (typeof sharedPostId !== "string" || !sharedPostId) {
+        return null;
+      }
+
+      const normalizedShareUrl = normalizeAbsoluteUrl(shareUrl) || buildSharedPostUrl(sharedPostId);
+      return {
+        sharedPostId,
+        shareUrl: normalizedShareUrl || buildSharedPostUrl(sharedPostId),
+        noWatermarkUrl: buildNoWatermarkProxyUrl(sharedPostId),
+      };
+    }
+
+    function resolveSharedPostReferenceFromValue(value, depth = 0, keyName = "") {
+      if (depth > 6 || value == null) {
+        return null;
+      }
+
+      if (typeof value === "string") {
+        const sharedPostId = extractSharedPostIdFromUrl(value);
+        if (!sharedPostId) {
+          return null;
+        }
+
+        const preferredShareUrl =
+          /\/p\/(s_[A-Za-z0-9_-]+)/i.test(value) || /^s_[A-Za-z0-9_-]+$/.test(value.trim())
+            ? value
+            : "";
+        return buildSharedPostReference(sharedPostId, preferredShareUrl);
+      }
+
+      if (Array.isArray(value)) {
+        for (const entry of value) {
+          const match = resolveSharedPostReferenceFromValue(entry, depth + 1, keyName);
+          if (match) {
+            return match;
+          }
+        }
+        return null;
+      }
+
+      if (typeof value !== "object") {
+        return null;
+      }
+
+      const candidatePostId = getPostId(value);
+      if (typeof candidatePostId === "string" && candidatePostId.startsWith("s_")) {
+        const shareUrlCandidate = pickFirstString([
+          value.permalink,
+          value.share_url,
+          value.shareUrl,
+          value.public_url,
+          value.publicUrl,
+          value.detail_url,
+          value.detailUrl,
+          value.url,
+          buildSharedPostUrl(candidatePostId),
+        ]);
+        return buildSharedPostReference(candidatePostId, shareUrlCandidate);
+      }
+
+      const priorityKeys = [
+        "post_id",
+        "postId",
+        "public_id",
+        "publicId",
+        "share_id",
+        "shareId",
+        "share_url",
+        "shareUrl",
+        "public_url",
+        "publicUrl",
+        "permalink",
+        "detail_url",
+        "detailUrl",
+        "downloadable_url",
+        "downloadUrl",
+        "no_watermark",
+        "url",
+        "id",
+        "generation_id",
+        "generationId",
+      ];
+
+      for (const candidateKey of priorityKeys) {
+        if (!(candidateKey in value)) {
+          continue;
+        }
+
+        const match = resolveSharedPostReferenceFromValue(value[candidateKey], depth + 1, candidateKey);
+        if (match) {
+          return match;
+        }
+      }
+
+      for (const [entryKey, entryValue] of Object.entries(value)) {
+        if (priorityKeys.includes(entryKey) || (!/share|public|permalink|detail|download|post|id|generation|watermark/i.test(entryKey) && depth > 2)) {
+          continue;
+        }
+
+        const match = resolveSharedPostReferenceFromValue(entryValue, depth + 1, entryKey);
+        if (match) {
+          return match;
+        }
+      }
+
+      return null;
+    }
+
+    function extractSharedPostReferenceFromHtml(html) {
+      if (typeof html !== "string" || !html) {
+        return null;
+      }
+
+      const decodedHtml = decodeEmbeddedText(html);
+      if (!decodedHtml) {
+        return null;
+      }
+
+      const patterns = [
+        /https:\/\/sora\.chatgpt\.com\/p\/(s_[A-Za-z0-9_-]+)/i,
+        /"\/p\/(s_[A-Za-z0-9_-]+)/i,
+        /\/p\/(s_[A-Za-z0-9_-]+)/i,
+      ];
+
+      for (const pattern of patterns) {
+        const match = decodedHtml.match(pattern);
+        if (match && typeof match[1] === "string" && match[1]) {
+          return buildSharedPostReference(match[1], buildSharedPostUrl(match[1]));
+        }
+      }
+
+      return null;
+    }
+
+    function getDraftShareGenerationId(row) {
+      const generationId = pickFirstString([
+        row && row.generation_id,
+        row && row.generationId,
+        row && row.output && row.output.generation_id,
+        row && row.output && row.output.generationId,
+        row && row.draft && row.draft.generation_id,
+        row && row.draft && row.draft.generationId,
+        row && row.item && row.item.generation_id,
+        row && row.item && row.item.generationId,
+        row && row.data && row.data.generation_id,
+        row && row.data && row.data.generationId,
+        row && row.id,
+      ]);
+
+      return typeof generationId === "string" && generationId.startsWith("gen_") ? generationId : "";
+    }
+
+    function getDraftShareText(row) {
+      return (
+        pickFirstString([
+          getDraftDiscoveryPhrase(row),
+          row && row.prompt,
+          row && row.draft && row.draft.prompt,
+          row && row.item && row.item.prompt,
+          row && row.data && row.data.prompt,
+          row && row.output && row.output.prompt,
+          row && row.creation_config && row.creation_config.prompt,
+        ]) || ""
+      );
+    }
+
+    function doesValueMatchDraftGenerationId(value, generationId) {
+      if (!value || typeof value !== "object" || typeof generationId !== "string" || !generationId) {
+        return false;
+      }
+
+      const candidateGenerationId = pickFirstString([
+        value.generation_id,
+        value.generationId,
+        typeof value.id === "string" && value.id.startsWith("gen_") ? value.id : "",
+      ]);
+
+      return candidateGenerationId === generationId;
+    }
+
+    function findSharedDraftReferenceInPayload(payload, generationId) {
+      const rows = getPostListingRows(payload);
+
+      for (const row of rows) {
+        const rowCandidates = [
+          row,
+          ...getPostCandidates(row),
+          ...getPostAttachments(row),
+        ];
+        const matchesGenerationId = rowCandidates.some((candidate) =>
+          doesValueMatchDraftGenerationId(candidate, generationId),
+        );
+
+        if (!matchesGenerationId) {
+          continue;
+        }
+
+        const sharedReference =
+          resolveSharedPostReferenceFromValue(row) ||
+          rowCandidates
+            .map((candidate) => resolveSharedPostReferenceFromValue(candidate))
+            .find(Boolean) ||
+          null;
+        if (sharedReference) {
+          return sharedReference;
+        }
+      }
+
+      return null;
+    }
+
+    async function findRecentSharedDraftReference(generationId) {
+      if (typeof generationId !== "string" || !generationId) {
+        return null;
+      }
+
+      const authContext = await deriveAuthContext();
+      const viewerUserId = deriveViewerUserId(authContext);
+      const candidateUrls = [];
+      const feedUrl = new URL("/backend/project_y/profile_feed/me", window.location.origin);
+      feedUrl.searchParams.set("limit", "24");
+      feedUrl.searchParams.set("cut", "nf2");
+      candidateUrls.push(feedUrl.toString());
+
+      const postsUrl = new URL(
+        `/backend/project_y/profile/${encodeURIComponent(viewerUserId)}/post_listing/posts`,
+        window.location.origin,
+      );
+      postsUrl.searchParams.set("limit", "24");
+      candidateUrls.push(postsUrl.toString());
+
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        for (const candidateUrl of candidateUrls) {
+          try {
+            const payload = await fetchJson(candidateUrl);
+            const match = findSharedDraftReferenceInPayload(payload, generationId);
+            if (match) {
+              return match;
+            }
+          } catch (_error) {
+            // Ignore transient lookup failures and keep searching.
+          }
+        }
+
+        if (attempt < 2) {
+          await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
+        }
+      }
+
+      return null;
+    }
+
+    async function resolveSharedDraftReferenceFromDetailPage(row, generationId) {
+      const detailUrl = getDraftDetailUrl(row, generationId, generationId);
+      if (!detailUrl) {
+        return null;
+      }
+
+      try {
+        const html = await fetchPostDetailHtml(detailUrl);
+        return extractSharedPostReferenceFromHtml(html);
+      } catch (_error) {
+        return null;
+      }
+    }
+
+    async function createSharedDraftReference(row) {
+      const generationId = getDraftShareGenerationId(row);
+      if (!generationId) {
+        return null;
+      }
+
+      const existingReference = resolveSharedPostReferenceFromValue(row);
+      if (existingReference) {
+        return existingReference;
+      }
+
+      try {
+        const response = await postJson("/backend/project_y/post", {
+          attachments_to_create: [
+            {
+              generation_id: generationId,
+              kind: "sora",
+            },
+          ],
+          post_text: getDraftShareText(row),
+          destinations: [
+            {
+              type: "shared_link_unlisted",
+            },
+          ],
+        }, {
+          cacheBypass: true,
+        });
+        const createdReference = resolveSharedPostReferenceFromValue(response);
+        if (createdReference) {
+          return createdReference;
+        }
+      } catch (_error) {
+        // Fall through to follow-up lookups below. If the share request partially succeeded,
+        // the follow-up probes can still recover the new s_ id.
+      }
+
+      try {
+        return (
+          (await resolveSharedDraftReferenceFromDetailPage(row, generationId)) ||
+          (await findRecentSharedDraftReference(generationId)) ||
+          null
+        );
+      } catch (_error) {
+        return null;
+      }
+    }
+
+    async function resolveDraftSharedPostReference(row, config = {}) {
+      const existingReference = resolveSharedPostReferenceFromValue(row);
+      if (existingReference) {
+        return existingReference;
+      }
+
+      const generationId = getDraftShareGenerationId(row);
+      if (!generationId) {
+        return null;
+      }
+
+      if (!draftSharedReferenceCache.has(generationId)) {
+        draftSharedReferenceCache.set(
+          generationId,
+          (async () => {
+            if (config && config.attemptCreate === false) {
+              return null;
+            }
+
+            return createSharedDraftReference(row);
+          })(),
+        );
+      }
+
+      return draftSharedReferenceCache.get(generationId);
+    }
+
+    async function buildDraftSharedReferenceMap(rows, config = {}) {
+      const sourceRows = Array.isArray(rows) ? rows : [];
+      const referenceMap = new Map();
+      if (!sourceRows.length) {
+        return referenceMap;
+      }
+
+      let currentIndex = 0;
+      const concurrency = Math.min(6, sourceRows.length);
+
+      async function worker() {
+        while (currentIndex < sourceRows.length) {
+          const row = sourceRows[currentIndex];
+          currentIndex += 1;
+
+          const shareKey = getDraftShareGenerationId(row) || getDraftId(row);
+          if (!shareKey) {
+            continue;
+          }
+
+          let sharedReference = null;
+          try {
+            sharedReference = await resolveDraftSharedPostReference(row, config);
+          } catch (_error) {
+            sharedReference = null;
+          }
+          if (sharedReference) {
+            referenceMap.set(shareKey, sharedReference);
+          }
+        }
+      }
+
+      await Promise.all(Array.from({ length: concurrency }, () => worker()));
+      return referenceMap;
     }
 
     let sessionUserProfilePromise = null;
@@ -18806,7 +19431,7 @@ function injectedFetchSource(config) {
       throw lastError || new Error("Sora did not return a valid response.");
     }
 
-    function normalizeDraftResponse(payload, config = {}) {
+    async function normalizeDraftResponse(payload, config = {}) {
       const rows = getDraftRows(payload);
       const ids = [];
       const items = [];
@@ -18819,11 +19444,14 @@ function injectedFetchSource(config) {
           config && config.sourceLabel,
         ]) || (sourcePage === "cameos" ? "Cameo" : sourcePage === "characters" ? "Character" : "Draft");
       const allowMediaUrlFallback = Boolean(config && config.allowMediaUrlFallback);
+      const sharedReferenceMap = await buildDraftSharedReferenceMap(rows, {
+        attemptCreate: config && config.attemptCreateSharedLinks !== false,
+      });
 
       for (const row of rows) {
         const kind = getDraftKind(row);
         const id = getDraftId(row);
-        const downloadUrl = getDownloadUrl(row) || (allowMediaUrlFallback ? getDirectMediaUrl(row) : null);
+        const watermarkUrl = getDownloadUrl(row) || (allowMediaUrlFallback ? getDirectMediaUrl(row) : null);
         const durationSeconds =
           getDurationSeconds(row) ||
           (row.draft && getDurationSeconds(row.draft)) ||
@@ -18906,7 +19534,7 @@ function injectedFetchSource(config) {
           row && row.output_blocked,
           row && row.output && row.output.output_blocked,
         ]);
-        const detailUrl = getDraftDetailUrl(row, id, generationId);
+        const draftDetailUrl = getDraftDetailUrl(row, id, generationId);
         const discoveryPhrase = getDraftDiscoveryPhrase(row);
         const preferredTitle = pickFirstString([
           discoveryPhrase,
@@ -18917,13 +19545,33 @@ function injectedFetchSource(config) {
           row && row.creation_config && row.creation_config.prompt,
           id,
         ]);
-        const noWatermarkUrl = buildNoWatermarkProxyUrl(id || generationId);
+        const shareLookupKey = getDraftShareGenerationId(row) || id;
+        const sharedReference =
+          (shareLookupKey && sharedReferenceMap.get(shareLookupKey)) ||
+          resolveSharedPostReferenceFromValue(row);
+        const detailUrl =
+          (sharedReference && sharedReference.shareUrl) ||
+          draftDetailUrl;
+        const noWatermarkUrl =
+          (sharedReference && sharedReference.noWatermarkUrl) ||
+          buildNoWatermarkProxyUrl(id || generationId);
+        const prompt =
+          (typeof row.prompt === "string" && row.prompt) ||
+          (row.draft && typeof row.draft.prompt === "string" ? row.draft.prompt : null) ||
+          (row.item && typeof row.item.prompt === "string" ? row.item.prompt : null) ||
+          (row.data && typeof row.data.prompt === "string" ? row.data.prompt : null) ||
+          (row.creation_config && typeof row.creation_config.prompt === "string"
+            ? row.creation_config.prompt
+            : null);
+        const creatorDisplayName = getCreatorDisplayName(row) || null;
+        const creatorUsername = getCreatorUsername(row) || null;
+        const creatorProfilePictureUrl = getCreatorProfilePictureUrl(row) || null;
 
         if (
           !row ||
           kind === "sora_error" ||
           (typeof kind === "string" && kind !== "sora_draft" && kind !== "draft") ||
-          !downloadUrl ||
+          !watermarkUrl ||
           typeof id !== "string"
         ) {
           continue;
@@ -18936,26 +19584,19 @@ function injectedFetchSource(config) {
           sourceLabel,
           sourceType: "draft",
           detailUrl,
-          downloadUrl: noWatermarkUrl || downloadUrl,
+          downloadUrl: noWatermarkUrl || watermarkUrl,
           no_watermark: noWatermarkUrl,
           download_urls: {
             no_watermark: noWatermarkUrl,
-            watermark: downloadUrl,
+            watermark: watermarkUrl,
             endcard_watermark: "",
           },
           filename: buildFilename(preferredTitle, 0, 1),
           thumbnailUrl,
-          creatorDisplayName: getCreatorDisplayName(row) || null,
-          creatorUsername: getCreatorUsername(row) || null,
-          creatorProfilePictureUrl: getCreatorProfilePictureUrl(row) || null,
-          prompt:
-            (typeof row.prompt === "string" && row.prompt) ||
-            (row.draft && typeof row.draft.prompt === "string" ? row.draft.prompt : null) ||
-            (row.item && typeof row.item.prompt === "string" ? row.item.prompt : null) ||
-            (row.data && typeof row.data.prompt === "string" ? row.data.prompt : null) ||
-            (row.creation_config && typeof row.creation_config.prompt === "string"
-              ? row.creation_config.prompt
-              : null),
+          creatorDisplayName,
+          creatorUsername,
+          creatorProfilePictureUrl,
+          prompt,
           discoveryPhrase,
           createdAt,
           postedAt: createdAt,
@@ -18989,20 +19630,31 @@ function injectedFetchSource(config) {
             { label: "Discovery Phrase", value: discoveryPhrase },
             { label: "Has Captions", value: hasCaptions },
             { label: "Output Blocked", value: outputBlocked },
-            { label: "Creator", value: getCreatorDisplayName(row) },
-            { label: "Creator Username", value: getCreatorUsername(row) },
+            { label: "Creator", value: creatorDisplayName },
+            { label: "Creator Username", value: creatorUsername },
+            { label: "Shared Post ID", value: sharedReference && sharedReference.sharedPostId },
+            { label: "Shared URL", value: sharedReference && sharedReference.shareUrl, type: "link" },
+            {
+              label: "Draft Detail URL",
+              value:
+                draftDetailUrl && (!sharedReference || sharedReference.shareUrl !== draftDetailUrl)
+                  ? draftDetailUrl
+                  : null,
+              type: "link",
+            },
             { label: "Detail URL", value: detailUrl, type: "link" },
-            { label: "Download URL", value: noWatermarkUrl || downloadUrl, type: "link" },
-            { label: "Watermark Fallback URL", value: downloadUrl, type: "link" },
+            { label: "Download URL", value: noWatermarkUrl || watermarkUrl, type: "link" },
+            { label: "No Watermark URL", value: noWatermarkUrl, type: "link" },
+            { label: "Watermark Fallback URL", value: watermarkUrl, type: "link" },
             { label: "Thumbnail URL", value: thumbnailUrl, type: "link" },
             {
               label: "Creator Profile Image",
-              value: getCreatorProfilePictureUrl(row),
+              value: creatorProfilePictureUrl,
               type: "link",
             },
           ]),
         });
-    }
+      }
 
       return {
         ids: [...new Set(ids)],
@@ -19089,7 +19741,7 @@ function injectedFetchSource(config) {
         }
         const payload = await fetchJson(url);
         return applySessionProfileFallback(
-          normalizeDraftResponse(payload, {
+          await normalizeDraftResponse(payload, {
             sourcePage: "drafts",
             sourceLabel: "Draft",
           }),
@@ -19292,7 +19944,7 @@ function injectedFetchSource(config) {
           url.searchParams.set("cursor", options.cursor);
         }
         const payload = await fetchJson(url.toString());
-        return normalizeDraftResponse(payload, {
+        return await normalizeDraftResponse(payload, {
           sourcePage: "cameos",
           sourceLabel: "Cameo",
           allowMediaUrlFallback: true,
@@ -19453,7 +20105,7 @@ function injectedFetchSource(config) {
           url.searchParams.set("cursor", options.cursor);
         }
         const payload = await fetchJson(url.toString());
-        return normalizeDraftResponse(payload, {
+        return await normalizeDraftResponse(payload, {
           sourcePage: "characters",
           sourceLabel: "Character",
           allowMediaUrlFallback: true,
