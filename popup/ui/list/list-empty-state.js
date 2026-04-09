@@ -33,7 +33,7 @@ export function renderEmptySearchResult(query) {
   dom.emptyState?.classList.remove("hidden");
 
   if (dom.emptyStateImage instanceof HTMLElement) {
-    dom.emptyStateImage.classList.add("hidden");
+    dom.emptyStateImage.classList.remove("hidden");
   }
   if (dom.emptyStateText instanceof HTMLElement) {
     dom.emptyStateText.classList.remove("hidden");

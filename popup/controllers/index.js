@@ -2,6 +2,8 @@ import { dom } from "../dom.js";
 import { setActiveTab } from "../ui/layout.js";
 import {
   handleFetchProgressActionClick,
+  handleFetchProgressPanelMouseEnter,
+  handleFetchProgressPanelMouseLeave,
   handleFetchProgressPauseActionClick,
   handleFetchProgressToggleClick,
   handleClearSelectionClick,
@@ -87,6 +89,8 @@ export function initializeEventHandlers() {
   dom.exportButton?.addEventListener("click", handleExportButtonClick);
   dom.exportMenuButton?.addEventListener("click", handleExportMenuButtonClick);
   dom.exportMenu?.addEventListener("click", handleExportMenuClick);
+  dom.fetchProgressPanel?.addEventListener("mouseenter", handleFetchProgressPanelMouseEnter);
+  dom.fetchProgressPanel?.addEventListener("mouseleave", handleFetchProgressPanelMouseLeave);
   dom.fetchProgressToggle?.addEventListener("click", handleFetchProgressToggleClick);
   dom.fetchProgressPauseAction?.addEventListener("click", handleFetchProgressPauseActionClick);
   dom.fetchProgressAction?.addEventListener("click", handleFetchProgressActionClick);

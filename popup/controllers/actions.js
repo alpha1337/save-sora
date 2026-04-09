@@ -283,15 +283,58 @@ export async function handleFetchProgressActionClick() {
  * Expands or collapses the fixed fetch-status drawer without interrupting the run.
  */
 export function handleFetchProgressToggleClick() {
-  popupState.fetchDrawerExpanded = !popupState.fetchDrawerExpanded;
+  const isExpanded = popupState.fetchDrawerExpanded || popupState.fetchDrawerHoverExpanded;
+  if (isExpanded) {
+    popupState.fetchDrawerExpanded = false;
+    popupState.fetchDrawerHoverExpanded = false;
+  } else {
+    popupState.fetchDrawerExpanded = true;
+  }
   popupState.fetchDrawerUserToggled = true;
+  syncFetchProgressDrawer();
+}
+
+/**
+ * Expands the fixed fetch-status drawer whenever the pointer moves over the
+ * visible drawer surface.
+ */
+export function handleFetchProgressPanelMouseEnter() {
   const fetchUiState = getFetchUiState(
     popupState.latestRuntimeState,
     popupState.latestRenderState,
   );
   const isVisible = fetchUiState.isFetching || fetchUiState.isFetchPaused;
+  if (!isVisible || popupState.fetchDrawerHoverExpanded) {
+    return;
+  }
+
+  popupState.fetchDrawerHoverExpanded = true;
+  syncFetchProgressDrawer(fetchUiState);
+}
+
+/**
+ * Collapses the auto-expanded fetch drawer once the pointer leaves the drawer.
+ */
+export function handleFetchProgressPanelMouseLeave() {
+  if (!popupState.fetchDrawerHoverExpanded) {
+    return;
+  }
+
+  popupState.fetchDrawerHoverExpanded = false;
+  syncFetchProgressDrawer();
+}
+
+function syncFetchProgressDrawer(existingFetchUiState = null) {
+  const fetchUiState =
+    existingFetchUiState ||
+    getFetchUiState(
+      popupState.latestRuntimeState,
+      popupState.latestRenderState,
+    );
+  const isVisible = fetchUiState.isFetching || fetchUiState.isFetchPaused;
   if (!isVisible) {
     popupState.fetchDrawerExpanded = false;
+    popupState.fetchDrawerHoverExpanded = false;
   }
   syncFetchProgressPanel(
     popupState.latestRuntimeState || { phase: fetchUiState.phase || "idle" },

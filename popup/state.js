@@ -9,6 +9,7 @@ export const popupState = {
   settingsSaveTimer: null,
   fetchStatusTimer: null,
   fetchDrawerExpanded: false,
+  fetchDrawerHoverExpanded: false,
   fetchDrawerUserToggled: false,
   isFullscreenView: false,
   activeTab: "overview",

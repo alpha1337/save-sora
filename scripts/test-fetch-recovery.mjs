@@ -455,10 +455,20 @@ async function testStructuralInvariants() {
     path.join(projectRoot, "popup/controllers/actions.js"),
     "utf8",
   );
+  const popupEmptyStateSource = await readFile(
+    path.join(projectRoot, "popup/ui/list/list-empty-state.js"),
+    "utf8",
+  );
+  const popupControllersIndexSource = await readFile(
+    path.join(projectRoot, "popup/controllers/index.js"),
+    "utf8",
+  );
+  const popupCssSource = await readFile(path.join(projectRoot, "popup.css"), "utf8");
   const popupSelectionSource = await readFile(
     path.join(projectRoot, "popup/ui/selection.js"),
     "utf8",
   );
+  const popupStateSource = await readFile(path.join(projectRoot, "popup/state.js"), "utf8");
   const popupRenderSource = await readFile(
     path.join(projectRoot, "popup/ui/render.js"),
     "utf8",
@@ -549,6 +559,13 @@ async function testStructuralInvariants() {
   assert.match(popupActionsSource, /const isResumeMode = fetchUiState\.primaryActionMode === "resume"/);
   assert.match(popupActionsSource, /if \(!isResetMode && !isResumeMode && sources\.length === 0\)/);
   assert.match(popupActionsSource, /else if \(isResumeMode\) \{\s*await requestResumeScan\(\);/);
+  assert.match(popupActionsSource, /export function handleFetchProgressPanelMouseEnter\(\)/);
+  assert.match(popupActionsSource, /export function handleFetchProgressPanelMouseLeave\(\)/);
+  assert.match(popupActionsSource, /const isExpanded = popupState\.fetchDrawerExpanded \|\| popupState\.fetchDrawerHoverExpanded;/);
+  assert.match(popupControllersIndexSource, /dom\.fetchProgressPanel\?\.addEventListener\("mouseenter", handleFetchProgressPanelMouseEnter\);/);
+  assert.match(popupControllersIndexSource, /dom\.fetchProgressPanel\?\.addEventListener\("mouseleave", handleFetchProgressPanelMouseLeave\);/);
+  assert.match(popupEmptyStateSource, /dom\.emptyStateImage\.classList\.remove\("hidden"\);/);
+  assert.match(popupStateSource, /fetchDrawerHoverExpanded: false,/);
   assert.match(popupUpdaterSource, /const UPDATE_GATE_STARTUP_CHECK_TIMEOUT_MS = 15000;/);
   assert.match(popupUpdaterSource, /timeoutMs: UPDATE_GATE_STARTUP_CHECK_TIMEOUT_MS,/);
   assert.match(popupUpdaterSource, /popupState\.updateGateHidden = true;\s+setStartupGateLocked\(false\);/s);
@@ -563,7 +580,10 @@ async function testStructuralInvariants() {
   assert.match(popupSelectionSource, /!fetchUiState\.isBusy[\s\S]*?!fetchUiState\.isAnyPaused/);
   assert.match(popupListSource, /const effectiveTotalCount = Number\.isFinite\(Number\(popupState\.latestRenderState\.totalCount\)\)/);
   assert.match(popupFetchProgressSource, /const sourceStatusLabel = getSourceStatusLabel\(/);
+  assert.match(popupFetchProgressSource, /const isExpanded =\s+isVisible && \(popupState\.fetchDrawerExpanded \|\| popupState\.fetchDrawerHoverExpanded\);/s);
   assert.match(popupFetchProgressSource, /dom\.fetchProgressCount\.textContent =\s*itemsFound > 0/s);
+  assert.match(popupCssSource, /\.empty-state-image \{\s+display: block;\s+width: auto;\s+height: auto;/s);
+  assert.doesNotMatch(popupCssSource, /body\.is-fullscreen-view \.empty-state-image \{\s+display: none;/s);
   assert.match(popupCharacterSelectionSource, /const fetchUiState = getFetchUiState\(/);
   assert.match(popupSourceMenusSource, /const fetchUiState = getFetchUiState\(/);
   assert.match(backgroundSource, /function createDefaultRestoreStatus/);

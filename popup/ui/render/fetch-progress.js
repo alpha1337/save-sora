@@ -38,23 +38,22 @@ export function syncFetchProgressPanel(state) {
       : null;
   const isPaused = fetchUiState.isFetchPaused;
   const isVisible = fetchUiState.isFetching || isPaused;
+  const isExpanded =
+    isVisible && (popupState.fetchDrawerExpanded || popupState.fetchDrawerHoverExpanded);
 
   dom.fetchProgressPanel.classList.toggle("hidden", !isVisible);
-  dom.fetchProgressPanel.classList.toggle("is-expanded", isVisible && popupState.fetchDrawerExpanded);
-  dom.fetchProgressBody.classList.toggle("hidden", !isVisible || !popupState.fetchDrawerExpanded);
-  dom.fetchProgressActions.classList.toggle("hidden", !isVisible || !popupState.fetchDrawerExpanded);
+  dom.fetchProgressPanel.classList.toggle("is-expanded", isExpanded);
+  dom.fetchProgressBody.classList.toggle("hidden", !isExpanded);
+  dom.fetchProgressActions.classList.toggle("hidden", !isExpanded);
   dom.fetchProgressToggle.setAttribute(
     "aria-expanded",
-    isVisible && popupState.fetchDrawerExpanded ? "true" : "false",
+    isExpanded ? "true" : "false",
   );
   dom.fetchProgressToggle.setAttribute(
     "aria-label",
-    isVisible && popupState.fetchDrawerExpanded
-      ? "Collapse background fetch queue"
-      : "Expand background fetch queue",
+    isExpanded ? "Collapse background fetch queue" : "Expand background fetch queue",
   );
-  dom.fetchProgressToggle.title =
-    isVisible && popupState.fetchDrawerExpanded ? "Collapse queue" : "Expand queue";
+  dom.fetchProgressToggle.title = isExpanded ? "Collapse queue" : "Expand queue";
   syncFetchProgressToggleIcon();
 
   if (!isVisible) {

@@ -169,9 +169,11 @@ export function renderState(state) {
     popupState.fetchDrawerExpanded = false;
   } else if (phase === "fetching" && previousPhase !== "fetching") {
     popupState.fetchDrawerExpanded = false;
+    popupState.fetchDrawerHoverExpanded = false;
     popupState.fetchDrawerUserToggled = false;
   } else if (phase !== "fetching" && phase !== "fetch-paused") {
     popupState.fetchDrawerExpanded = false;
+    popupState.fetchDrawerHoverExpanded = false;
     popupState.fetchDrawerUserToggled = false;
   }
 
