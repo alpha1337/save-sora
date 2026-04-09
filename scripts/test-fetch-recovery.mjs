@@ -495,6 +495,10 @@ async function testStructuralInvariants() {
     path.join(projectRoot, "popup/ui/list/index.js"),
     "utf8",
   );
+  const popupFetchProgressSource = await readFile(
+    path.join(projectRoot, "popup/ui/render/fetch-progress.js"),
+    "utf8",
+  );
   const popupHtmlSource = await readFile(path.join(projectRoot, "popup.html"), "utf8");
   const popupUpdateGateSource = await readFile(
     path.join(projectRoot, "popup/ui/render/update-gate.js"),
@@ -520,6 +524,7 @@ async function testStructuralInvariants() {
   assert.match(popupUpdateGateSource, /Restore previous session\?/);
   assert.match(popupUpdateGateSource, /syncAppShellGateVisibility/);
   assert.match(popupUpdateGateSource, /const shouldKeepGateVisible = popupState\.startupGateLocked \|\| shouldShow/);
+  assert.match(popupUpdateGateSource, /Link the unpacked extension folder in Settings if you want Save Sora to install future GitHub updates automatically\./);
   assert.match(popupPrimaryControlsSource, /const isResumeMode = fetchUiState\.primaryActionMode === "resume"/);
   assert.match(popupPrimaryControlsSource, /export function syncPrimaryControls\(\)/);
   assert.match(popupPrimaryControlsSource, /dom\.fetchButtonLabel\.textContent = isFetching[\s\S]*?"Resume Fetch"/);
@@ -544,15 +549,26 @@ async function testStructuralInvariants() {
   assert.match(popupActionsSource, /const isResumeMode = fetchUiState\.primaryActionMode === "resume"/);
   assert.match(popupActionsSource, /if \(!isResetMode && !isResumeMode && sources\.length === 0\)/);
   assert.match(popupActionsSource, /else if \(isResumeMode\) \{\s*await requestResumeScan\(\);/);
-  assert.match(popupRenderSource, /const totalVideos = Number\.isFinite\(Number\(state && state\.popupTotalItemCount\)\)/);
+  assert.match(popupUpdaterSource, /const UPDATE_GATE_STARTUP_CHECK_TIMEOUT_MS = 15000;/);
+  assert.match(popupUpdaterSource, /timeoutMs: UPDATE_GATE_STARTUP_CHECK_TIMEOUT_MS,/);
+  assert.match(popupUpdaterSource, /popupState\.updateGateHidden = true;\s+setStartupGateLocked\(false\);/s);
+  assert.match(popupUpdaterSource, /if \(!settled && timeoutMs > 0 && Date\.now\(\) - startedAt >= timeoutMs\) \{\s+throw new Error\("Save Sora timed out while checking GitHub for updates\."\);\s+\}/s);
+  assert.match(popupRenderSource, /const popupTotalItemCount = Number\.isFinite\(Number\(state && state\.popupTotalItemCount\)\)/);
+  assert.match(popupRenderSource, /const fetchedCount = Number\.isFinite\(Number\(state && state\.fetchedCount\)\)/);
+  assert.match(popupRenderSource, /const totalVideos = Math\.max\(popupTotalItemCount, fetchedCount\);/);
   assert.match(popupRenderSource, /const selectedCountTotal = Number\.isFinite\(Number\(state && state\.popupSelectedCountTotal\)\)/);
   assert.match(popupSelectionSource, /const fetchUiState = getFetchUiState\(/);
   assert.match(popupSelectionSource, /Number\.isFinite\(Number\(popupState\.latestRenderState\.totalCount\)\)/);
   assert.match(popupSelectionSource, /Number\.isFinite\(Number\(popupState\.latestRenderState\.selectedCountTotal\)\)/);
   assert.match(popupSelectionSource, /!fetchUiState\.isBusy[\s\S]*?!fetchUiState\.isAnyPaused/);
+  assert.match(popupListSource, /const effectiveTotalCount = Number\.isFinite\(Number\(popupState\.latestRenderState\.totalCount\)\)/);
+  assert.match(popupFetchProgressSource, /const sourceStatusLabel = getSourceStatusLabel\(/);
+  assert.match(popupFetchProgressSource, /dom\.fetchProgressCount\.textContent =\s*itemsFound > 0/s);
   assert.match(popupCharacterSelectionSource, /const fetchUiState = getFetchUiState\(/);
   assert.match(popupSourceMenusSource, /const fetchUiState = getFetchUiState\(/);
   assert.match(backgroundSource, /function createDefaultRestoreStatus/);
+  assert.match(backgroundSource, /if \(!updateAvailable\) \{[\s\S]*?phase: "idle"/);
+  assert.match(backgroundSource, /if \(missingManifestForOlderOrCurrentRelease \|\| noPublishedReleaseYet\) \{[\s\S]*?phase: "idle"/);
   assert.match(backgroundSource, /async function resolvePausedFetchRequest/);
   assert.match(backgroundSource, /if \(currentState\.phase !== "fetch-paused"\) \{\s*pausedFetchRequest = null;/);
   assert.match(backgroundSource, /fetchRecoveryInitError/);

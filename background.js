@@ -3803,8 +3803,7 @@ async function runUpdateCheck(options = {}) {
     if (!updateAvailable) {
       await storePendingUpdate(null);
       await setUpdateState({
-        phase:
-          automaticUpdatesEnabled && !installFolderLinked ? "awaiting-folder" : "idle",
+        phase: "idle",
         latestVersion: CURRENT_EXTENSION_VERSION,
         latestGitHubVersion: latestRelease.version || latestRelease.releaseVersion || "",
         latestManifestDetected: latestRelease.manifestDetected === true,
@@ -3817,14 +3816,8 @@ async function runUpdateCheck(options = {}) {
         changelogMarkdown: "",
         pendingDeferred: false,
         pendingUpdateReady: false,
-        message:
-          automaticUpdatesEnabled && !installFolderLinked
-            ? "Finish one-time update setup."
-            : "",
-        detail:
-          automaticUpdatesEnabled && !installFolderLinked
-            ? "Chrome requires one-time access to the unpacked Save Sora folder so future GitHub releases can install automatically."
-            : "",
+        message: "",
+        detail: "",
         progress: 1,
         error: "",
       });
@@ -3893,8 +3886,7 @@ async function runUpdateCheck(options = {}) {
       const installFolderLinked = currentUpdateState.installFolderLinked === true;
       await storePendingUpdate(null);
       await setUpdateState({
-        phase:
-          automaticUpdatesEnabled && !installFolderLinked ? "awaiting-folder" : "idle",
+        phase: "idle",
         latestVersion: CURRENT_EXTENSION_VERSION,
         latestGitHubVersion: releaseVersion || "",
         latestManifestDetected:
@@ -3913,14 +3905,8 @@ async function runUpdateCheck(options = {}) {
         changelogMarkdown: "",
         pendingDeferred: false,
         pendingUpdateReady: false,
-        message:
-          automaticUpdatesEnabled && !installFolderLinked
-            ? "Finish one-time update setup."
-            : "",
-        detail:
-          automaticUpdatesEnabled && !installFolderLinked
-            ? "Chrome requires one-time access to the unpacked Save Sora folder so future GitHub releases can install automatically."
-            : "",
+        message: "",
+        detail: "",
         progress: 1,
         error: "",
       });

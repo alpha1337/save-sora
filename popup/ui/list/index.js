@@ -51,7 +51,9 @@ export function renderItemsList(items, selectedKeys, titleOverrides, disableInpu
   const creatorResultTabs = getCreatorResultsTabs(items);
   syncCreatorResultsTabs(creatorResultTabs);
 
-  const effectiveTotalCount = items.length;
+  const effectiveTotalCount = Number.isFinite(Number(popupState.latestRenderState.totalCount))
+    ? Math.max(0, Number(popupState.latestRenderState.totalCount))
+    : items.length;
   const selectedCountTotal = Number(popupState.latestRenderState.selectedCountTotal);
   const effectiveSelectedCount =
     Number.isFinite(selectedCountTotal) && selectedCountTotal >= 0

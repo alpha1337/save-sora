@@ -100,7 +100,15 @@ export function syncFetchProgressPanel(state) {
       ? progress.currentSourceLabel
       : "videos";
   const queueLabels = getQueueLabels(progress, currentSourceLabel);
-  const shouldShowSourceStatus = totalSources > 1;
+  const sourceStatusLabel = getSourceStatusLabel({
+    totalSources,
+    currentSourceIndex,
+    currentSourceLabel,
+    hasConcreteSourceEstimate,
+    sourceItemsFound,
+    estimatedTotalCount,
+  });
+  const shouldShowSourceStatus = Boolean(sourceStatusLabel);
   const shouldShowQueue = queueLabels.length > 1;
   const tooltipText = getProgressTooltipLabel({
     hasConcreteSourceEstimate,
@@ -127,15 +135,10 @@ export function syncFetchProgressPanel(state) {
     "--fetch-progress-tooltip-position",
     tooltipPosition,
   );
-  dom.fetchProgressSource.textContent = shouldShowSourceStatus
-    ? `${currentSourceIndex} of ${totalSources} sources · ${toTitleCase(currentSourceLabel)}`
-    : "";
+  dom.fetchProgressSource.textContent = sourceStatusLabel;
   dom.fetchProgressSource.classList.toggle("hidden", !shouldShowSourceStatus);
-  dom.fetchProgressCount.textContent = hasConcreteSourceEstimate
-    ? `${formatCompactCount(sourceItemsFound)} found of ${formatCompactCount(estimatedTotalCount)}`
-    : itemsFound > 0
-      ? `${formatCompactCount(itemsFound)} found`
-      : "Searching...";
+  dom.fetchProgressCount.textContent =
+    itemsFound > 0 ? `${formatCompactCount(itemsFound)} found` : "Searching...";
   dom.fetchProgressEta.textContent = getElapsedLabel(state, isPaused);
   dom.fetchProgressPauseAction.disabled =
     Boolean(progress && (progress.stage === "aborting" || progress.stage === "pausing"));
@@ -212,6 +215,30 @@ function getQueueLabels(progress, currentSourceLabel) {
   }
 
   return ["videos"];
+}
+
+function getSourceStatusLabel({
+  totalSources,
+  currentSourceIndex,
+  currentSourceLabel,
+  hasConcreteSourceEstimate,
+  sourceItemsFound,
+  estimatedTotalCount,
+}) {
+  const sourceLabel = toTitleCase(currentSourceLabel || "videos");
+  const sourceEstimateLabel =
+    hasConcreteSourceEstimate && estimatedTotalCount > 0
+      ? `${formatCompactCount(sourceItemsFound)} of ${formatCompactCount(estimatedTotalCount)} in source`
+      : "";
+
+  if (totalSources > 1) {
+    const sourceStepLabel = `${currentSourceIndex} of ${totalSources} sources`;
+    return sourceEstimateLabel
+      ? `${sourceStepLabel} · ${sourceLabel} · ${sourceEstimateLabel}`
+      : `${sourceStepLabel} · ${sourceLabel}`;
+  }
+
+  return sourceEstimateLabel ? `${sourceLabel} · ${sourceEstimateLabel}` : "";
 }
 
 function setFooterHeight(height) {

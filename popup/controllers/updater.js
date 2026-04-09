@@ -19,6 +19,7 @@ const UPDATE_GATE_MIN_STARTUP_DWELL_MS = 900;
 const UPDATE_GATE_AUTO_INSTALL_DWELL_MS = 3200;
 const UPDATE_GATE_POLL_INTERVAL_MS = 220;
 const UPDATE_GATE_RELOAD_FALLBACK_MS = 1200;
+const UPDATE_GATE_STARTUP_CHECK_TIMEOUT_MS = 15000;
 const RESTORE_RESUME_SETTLE_TIMEOUT_MS = 12000;
 const VOLATILE_BACKUP_DB_NAME = "saveSoraVolatileBackup";
 const VOLATILE_BACKUP_DB_VERSION = 4;
@@ -105,6 +106,7 @@ export async function bootstrapUpdaterGate() {
 
     let updateStatus = await awaitUpdateOperation(updateCheckPromise, {
       minimumMs: UPDATE_GATE_MIN_STARTUP_DWELL_MS,
+      timeoutMs: UPDATE_GATE_STARTUP_CHECK_TIMEOUT_MS,
     });
 
     updateStatus = await maybeAutoInstallAfterReview(updateStatus);
@@ -130,6 +132,8 @@ export async function bootstrapUpdaterGate() {
       );
     }
   } catch (error) {
+    popupState.updateGateHidden = true;
+    setStartupGateLocked(false);
     showNotice(dom.errorBox, error instanceof Error ? error.message : String(error));
     await refreshStatus();
   }
@@ -629,6 +633,7 @@ function shouldBypassAutomaticUpdateStartup() {
 
 async function awaitUpdateOperation(operationPromise, options = {}) {
   const minimumMs = Math.max(0, Number(options.minimumMs) || 0);
+  const timeoutMs = Math.max(0, Number(options.timeoutMs) || 0);
   const startedAt = Date.now();
   let settled = false;
   let resolvedValue;
@@ -645,6 +650,10 @@ async function awaitUpdateOperation(operationPromise, options = {}) {
     });
 
   while (!settled || Date.now() - startedAt < minimumMs) {
+    if (!settled && timeoutMs > 0 && Date.now() - startedAt >= timeoutMs) {
+      throw new Error("Save Sora timed out while checking GitHub for updates.");
+    }
+
     try {
       const liveStatus = await fetchUpdateStatus();
       syncUpdateSurfaces(liveStatus);

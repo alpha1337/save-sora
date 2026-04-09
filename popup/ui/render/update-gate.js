@@ -396,6 +396,10 @@ function getUpdaterStatusDetail(updateStatus) {
     return getDirectoryPickerUnavailableMessage();
   }
 
+  if (!updateStatus.installFolderLinked && updateStatus.automaticUpdatesEnabled) {
+    return "Link the unpacked extension folder in Settings if you want Save Sora to install future GitHub updates automatically.";
+  }
+
   if (updateStatus.phase === "update-available" || updateStatus.phase === "deferred") {
     return `Update ${updateStatus.pendingUpdateVersion || updateStatus.latestVersion} is available from GitHub.`;
   }
