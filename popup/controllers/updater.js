@@ -318,7 +318,10 @@ async function dismissPreviousSessionFromGate() {
     popupState.restoreGateVisible = false;
     popupState.restoreGatePhase = "idle";
     setStartupGateLocked(false);
-    await requestDismissInterruptedSession();
+    const dismissedState = await requestDismissInterruptedSession();
+    if (dismissedState && typeof dismissedState === "object") {
+      popupState.latestRuntimeState = dismissedState;
+    }
   } catch (error) {
     showNotice(dom.errorBox, error instanceof Error ? error.message : String(error));
   } finally {

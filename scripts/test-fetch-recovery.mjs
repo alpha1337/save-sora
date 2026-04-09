@@ -344,6 +344,62 @@ function simulateResumedScanBootstrap({
   };
 }
 
+function simulateResumeBootstrapSeed({
+  currentState,
+  sources,
+  searchQuery = "",
+  mergedPausedItems = [],
+}) {
+  const persistedResumeRequest =
+    currentState &&
+    currentState.resumableFetchRequest &&
+    typeof currentState.resumableFetchRequest === "object"
+      ? currentState.resumableFetchRequest
+      : null;
+  const isResumingCurrentPausedSession =
+    currentState &&
+    currentState.phase === "fetch-paused" &&
+    persistedResumeRequest &&
+    persistedResumeRequest.searchQuery === searchQuery &&
+    persistedResumeRequest.sources.length === sources.length &&
+    persistedResumeRequest.sources.every((source, index) => source === sources[index]);
+  const cachedWorkingItems = isResumingCurrentPausedSession
+    ? [...mergedPausedItems]
+    : [];
+  const cachedBackedUpItemCount = isResumingCurrentPausedSession
+    ? Math.max(
+        0,
+        Math.max(0, Number(currentState.fetchedCount) || 0) - cachedWorkingItems.length,
+        Number(currentState.backedUpItemCount) || 0,
+      )
+    : 0;
+
+  return {
+    cachedWorkingItems,
+    cachedBackedUpItemCount,
+    resumeBaselineCount: isResumingCurrentPausedSession
+      ? cachedWorkingItems.length + cachedBackedUpItemCount
+      : 0,
+  };
+}
+
+function simulateDismissedInterruptedSessionState(currentState) {
+  const safeState = currentState && typeof currentState === "object" ? currentState : {};
+  const items = Array.isArray(safeState.items) ? safeState.items : [];
+  const nextBackedUpItemCount =
+    items.length > 0 ? Math.max(0, Number(safeState.backedUpItemCount) || 0) : 0;
+
+  return {
+    ...safeState,
+    phase: safeState.phase === "fetch-paused" ? "idle" : safeState.phase || "idle",
+    currentSource: safeState.phase === "fetch-paused" ? null : safeState.currentSource || null,
+    fetchedCount: items.length + nextBackedUpItemCount,
+    backedUpItemCount: nextBackedUpItemCount,
+    syncStatus: "idle",
+    resumableFetchRequest: null,
+  };
+}
+
 function simulateResumeVisibleFetchedCount({
   resumeBaselineCount = 0,
   newlyCollectedCount = 0,
@@ -526,9 +582,12 @@ async function testStructuralInvariants() {
   assert.match(backgroundSource, /async function getRecoverablePausedSyncSession/);
   assert.match(backgroundSource, /async function loadVolatileBackupItemsForSyncSession\(sessionRecord, state = currentState\)/);
   assert.match(backgroundSource, /async function loadHydratedItemsForSyncSession\(sessionRecord, state = currentState\)/);
+  assert.match(backgroundSource, /let hiddenWindowId = null;/);
   assert.match(popupRuntimeSource, /requestRestoreInterruptedSession/);
   assert.match(popupRuntimeSource, /requestResumeScan/);
   assert.match(popupUpdaterSource, /restorePreviousSessionFromGate/);
+  assert.match(popupUpdaterSource, /const dismissedState = await requestDismissInterruptedSession\(\);/);
+  assert.match(popupUpdaterSource, /popupState\.latestRuntimeState = dismissedState;/);
   assert.match(popupUpdaterSource, /await requestResumeScan\(\);/);
   assert.match(popupUpdaterSource, /waitForResumedFetchState/);
   assert.match(popupUpdaterSource, /setStartupGateLocked\(true\);/);
@@ -581,11 +640,14 @@ async function testStructuralInvariants() {
   assert.match(popupSelectionSource, /Number\.isFinite\(Number\(popupState\.latestRenderState\.selectedCountTotal\)\)/);
   assert.match(popupSelectionSource, /!fetchUiState\.isBusy[\s\S]*?!fetchUiState\.isAnyPaused/);
   assert.match(popupListSource, /const effectiveTotalCount = Number\.isFinite\(Number\(popupState\.latestRenderState\.totalCount\)\)/);
-  assert.match(popupFetchProgressSource, /const sourceStatusLabel = getSourceStatusLabel\(/);
   assert.match(popupFetchProgressSource, /const isExpanded =\s+isVisible && \(popupState\.fetchDrawerExpanded \|\| popupState\.fetchDrawerHoverExpanded\);/s);
+  assert.match(popupFetchProgressSource, /dom\.fetchProgressSource\.textContent = "";/);
+  assert.match(popupFetchProgressSource, /dom\.fetchProgressSource\.classList\.add\("hidden"\);/);
   assert.match(popupFetchProgressSource, /dom\.fetchProgressCount\.textContent =\s*itemsFound > 0/s);
+  assert.doesNotMatch(popupFetchProgressSource, /in source/);
   assert.match(popupCssSource, /\.empty-state-image \{\s+display: block;\s+width: auto;\s+height: auto;/s);
   assert.doesNotMatch(popupCssSource, /body\.is-fullscreen-view \.empty-state-image \{\s+display: none;/s);
+  assert.match(popupCssSource, /\.item-list\.is-grid-view \.item-card \{[\s\S]*?content-visibility: visible;[\s\S]*?contain: layout style;[\s\S]*?overflow: visible;/s);
   assert.match(popupCharacterSelectionSource, /const fetchUiState = getFetchUiState\(/);
   assert.match(popupSourceMenusSource, /const fetchUiState = getFetchUiState\(/);
   assert.match(backgroundSource, /function createDefaultRestoreStatus/);
@@ -603,6 +665,13 @@ async function testStructuralInvariants() {
   assert.match(backgroundSource, /const restoredItems = await loadHydratedItemsForSyncSession\(normalizedSession, state\);/);
   assert.match(backgroundSource, /const mirroredItems = await loadHydratedItemsForSyncSession\(interruptedSyncSession, nextState\);/);
   assert.match(backgroundSource, /const backupItems = await loadVolatileBackupItemsForSyncSession\(syncSession, sourceState\);/);
+  assert.match(backgroundSource, /const nextBackedUpItemCount =\s+currentItems\.length > 0/s);
+  assert.match(backgroundSource, /fetchedCount: nextFetchedCount,/);
+  assert.match(backgroundSource, /const resumedMergedItems = buildWorkingItemsFromCatalog\(\s+await loadMergedFetchItemsForState\(currentState\),/s);
+  assert.match(backgroundSource, /cachedBackedUpItemCount = Math\.max\(\s+0,\s+resumedFetchedCount - resumedMergedItems\.length,/s);
+  assert.match(backgroundSource, /workerWindow = await chrome\.windows\.create\(\{\s*url,\s*focused: false,\s*state: "minimized",/s);
+  assert.match(backgroundSource, /await ensureHiddenWorkerWindowMinimized\(hiddenWindowId\);/);
+  assert.match(backgroundSource, /await chrome\.windows\.remove\(windowId\);/);
   assert.doesNotMatch(backgroundSource, /await clearVolatileBackupProgress\(sessionKey, progressKey\);/);
   assert.match(backgroundSource, /VOLATILE_BACKUP_UPDATER_STORE/);
   assert.doesNotMatch(backgroundSource, /transaction\.objectStore\(SOURCE_MIRROR_ITEM_STORE\)\.clear\(\);/);
@@ -1056,6 +1125,34 @@ function testPausedCountsPreferResetCtaBeforeItemsHydrate() {
   );
 }
 
+function testDismissedRestorePromptReturnsToFetchCta() {
+  const dismissedState = simulateDismissedInterruptedSessionState({
+    phase: "fetch-paused",
+    syncStatus: "paused",
+    fetchedCount: 7016,
+    backedUpItemCount: 0,
+    items: [],
+    resumableFetchRequest: {
+      sources: ["characterAccounts"],
+      searchQuery: "",
+    },
+  });
+  const uiState = simulateFetchUiState(dismissedState, {
+    items: [],
+  });
+
+  assert.equal(
+    uiState.phase,
+    "idle",
+    "dismissing a paused restore prompt should return the popup to the idle fetch state",
+  );
+  assert.equal(
+    uiState.primaryActionMode,
+    "scan",
+    "dismissing a paused restore prompt without hydrated items should restore the primary CTA to Fetch Videos",
+  );
+}
+
 function testResumeBootstrapKeepsPausedResultsVisible() {
   const resumed = simulateResumedScanBootstrap({
     currentState: {
@@ -1076,6 +1173,35 @@ function testResumeBootstrapKeepsPausedResultsVisible() {
     resumed.backedUpItemCount,
     17,
     "resuming a paused session should bootstrap from the already restored paused results instead of blanking the list",
+  );
+}
+
+function testResumeBootstrapUsesMergedPausedWorkingSet() {
+  const resumedSeed = simulateResumeBootstrapSeed({
+    currentState: {
+      phase: "fetch-paused",
+      fetchedCount: 13500,
+      backedUpItemCount: 0,
+      items: Array.from({ length: 13500 }, (_, index) => ({ id: `preview-${index}` })),
+      resumableFetchRequest: {
+        sources: ["creators"],
+        searchQuery: "",
+      },
+    },
+    sources: ["creators"],
+    searchQuery: "",
+    mergedPausedItems: Array.from({ length: 27080 }, (_, index) => ({ id: `full-${index}` })),
+  });
+
+  assert.equal(
+    resumedSeed.cachedWorkingItems.length,
+    27080,
+    "resume should seed from the merged paused working set instead of the smaller preview slice",
+  );
+  assert.equal(
+    resumedSeed.resumeBaselineCount,
+    27080,
+    "resume progress should start from the full restored paused count the UI is already showing",
   );
 }
 
@@ -1249,7 +1375,9 @@ testResumeFallsBackToPersistedSessionRequest();
 testRuntimePhaseWinsOverStaleRenderPhase();
 testPausedResultsPreferResetCta();
 testPausedCountsPreferResetCtaBeforeItemsHydrate();
+testDismissedRestorePromptReturnsToFetchCta();
 testResumeBootstrapKeepsPausedResultsVisible();
+testResumeBootstrapUsesMergedPausedWorkingSet();
 testResumeProgressKeepsRestoredBaseline();
 testRestoredMirrorItemsMergeIntoRuntimeCatalog();
 testGridCardsDoNotDuplicateHiddenListBodies();

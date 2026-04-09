@@ -2841,6 +2841,8 @@ body[data-theme="light"] .creator-add-hint {
   box-shadow: none;
   background: transparent;
   contain-intrinsic-size: 188px 334px;
+  content-visibility: visible;
+  contain: layout style;
   overflow: visible;
 }
 

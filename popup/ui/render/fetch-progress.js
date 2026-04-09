@@ -99,15 +99,6 @@ export function syncFetchProgressPanel(state) {
       ? progress.currentSourceLabel
       : "videos";
   const queueLabels = getQueueLabels(progress, currentSourceLabel);
-  const sourceStatusLabel = getSourceStatusLabel({
-    totalSources,
-    currentSourceIndex,
-    currentSourceLabel,
-    hasConcreteSourceEstimate,
-    sourceItemsFound,
-    estimatedTotalCount,
-  });
-  const shouldShowSourceStatus = Boolean(sourceStatusLabel);
   const shouldShowQueue = queueLabels.length > 1;
   const tooltipText = getProgressTooltipLabel({
     hasConcreteSourceEstimate,
@@ -134,8 +125,8 @@ export function syncFetchProgressPanel(state) {
     "--fetch-progress-tooltip-position",
     tooltipPosition,
   );
-  dom.fetchProgressSource.textContent = sourceStatusLabel;
-  dom.fetchProgressSource.classList.toggle("hidden", !shouldShowSourceStatus);
+  dom.fetchProgressSource.textContent = "";
+  dom.fetchProgressSource.classList.add("hidden");
   dom.fetchProgressCount.textContent =
     itemsFound > 0 ? `${formatCompactCount(itemsFound)} found` : "Searching...";
   dom.fetchProgressEta.textContent = getElapsedLabel(state, isPaused);
@@ -214,30 +205,6 @@ function getQueueLabels(progress, currentSourceLabel) {
   }
 
   return ["videos"];
-}
-
-function getSourceStatusLabel({
-  totalSources,
-  currentSourceIndex,
-  currentSourceLabel,
-  hasConcreteSourceEstimate,
-  sourceItemsFound,
-  estimatedTotalCount,
-}) {
-  const sourceLabel = toTitleCase(currentSourceLabel || "videos");
-  const sourceEstimateLabel =
-    hasConcreteSourceEstimate && estimatedTotalCount > 0
-      ? `${formatCompactCount(sourceItemsFound)} of ${formatCompactCount(estimatedTotalCount)} in source`
-      : "";
-
-  if (totalSources > 1) {
-    const sourceStepLabel = `${currentSourceIndex} of ${totalSources} sources`;
-    return sourceEstimateLabel
-      ? `${sourceStepLabel} · ${sourceLabel} · ${sourceEstimateLabel}`
-      : `${sourceStepLabel} · ${sourceLabel}`;
-  }
-
-  return sourceEstimateLabel ? `${sourceLabel} · ${sourceEstimateLabel}` : "";
 }
 
 function setFooterHeight(height) {

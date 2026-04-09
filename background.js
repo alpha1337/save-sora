@@ -1,8 +1,8 @@
 // Save Sora background service worker.
 // This is the privileged side of the extension: it owns persistent state, opens the
-// hidden Sora tab used for collection, injects packaged code into that tab, assembles
-// the final ZIP archive through an offscreen document, and saves the completed archive
-// through chrome.downloads.
+// dedicated minimized Sora worker window used for collection, injects packaged code
+// into that worker tab, assembles the final ZIP archive through an offscreen
+// document, and saves the completed archive through chrome.downloads.
 const STATE_KEY = "soraBulkDownloaderState";
 const CATALOG_STORAGE_KEY = "soraBulkDownloaderCatalog";
 const OFFSCREEN_DOCUMENT_PATH = "offscreen.html";
@@ -114,6 +114,7 @@ const SOURCE_ROUTES = {
 let currentState = createDefaultState();
 let currentCatalog = createDefaultCatalogState();
 let hiddenTabId = null;
+let hiddenWindowId = null;
 let activeRun = null;
 let activeDownloadId = null;
 let activeArchiveJob = null;
@@ -5876,7 +5877,28 @@ async function restoreInterruptedSyncSessionForUi() {
 async function dismissInterruptedSyncSessionForUi() {
   pendingInterruptedSyncSession = null;
   pausedFetchRequest = null;
+  const currentItems = normalizeCatalogItems(currentState.items);
+  const nextBackedUpItemCount =
+    currentItems.length > 0
+      ? Math.max(0, Number(currentState.backedUpItemCount) || 0)
+      : 0;
+  const nextFetchedCount = currentItems.length + nextBackedUpItemCount;
+  const nextSelectedKeys = getImplicitSelectedKeys(currentItems);
+
   await setState({
+    phase: currentState.phase === "fetch-paused" ? "idle" : currentState.phase,
+    currentSource: currentState.phase === "fetch-paused" ? null : currentState.currentSource,
+    message:
+      currentItems.length > 0
+        ? buildReadyMessage(nextSelectedKeys.length)
+        : createDefaultState().message,
+    fetchProgress: createDefaultFetchProgress(),
+    fetchedCount: nextFetchedCount,
+    backedUpItemCount: nextBackedUpItemCount,
+    selectedKeys: nextSelectedKeys,
+    queued: nextSelectedKeys.length,
+    startedAt: null,
+    finishedAt: currentItems.length > 0 ? new Date().toISOString() : null,
     restoreStatus: createDefaultRestoreStatus(),
     syncSessionId: "",
     syncStatus: "idle",
@@ -8615,18 +8637,32 @@ async function scanSources(sources, searchQuery = "") {
     persistedResumeRequest.searchQuery === searchQuery &&
     persistedResumeRequest.sources.length === sources.length &&
     persistedResumeRequest.sources.every((source, index) => source === sources[index]);
-  let cachedWorkingItems = isResumingCurrentPausedSession
-    ? normalizeCatalogItems(currentState.items)
-    : buildWorkingItemsFromCatalog(
-      currentCatalog.items,
+  let cachedWorkingItems = buildWorkingItemsFromCatalog(
+    currentCatalog.items,
+    sources,
+    maxVideos,
+    selectedCharacterAccountIds,
+    selectedCreatorProfileIds,
+  );
+  let cachedBackedUpItemCount = 0;
+
+  if (isResumingCurrentPausedSession) {
+    const resumedMergedItems = buildWorkingItemsFromCatalog(
+      await loadMergedFetchItemsForState(currentState),
       sources,
       maxVideos,
       selectedCharacterAccountIds,
       selectedCreatorProfileIds,
     );
-  let cachedBackedUpItemCount = isResumingCurrentPausedSession
-    ? Math.max(0, Number(currentState.backedUpItemCount) || 0)
-    : 0;
+    const resumedFetchedCount = Math.max(0, Number(currentState.fetchedCount) || 0);
+
+    cachedWorkingItems = resumedMergedItems;
+    cachedBackedUpItemCount = Math.max(
+      0,
+      resumedFetchedCount - resumedMergedItems.length,
+      Number(currentState.backedUpItemCount) || 0,
+    );
+  }
 
   if (!searchQuery) {
     try {
@@ -15449,50 +15485,141 @@ async function fetchSourceDataFromTab(source, options) {
 }
 
 async function ensureHiddenTab(url) {
-  // The extension reuses one inactive Sora tab across requests. That keeps tab creation
-  // predictable and lets chrome.scripting run packaged code inside the user's existing
-  // logged-in Sora session without requiring a visible browsing interruption.
+  // The extension reuses one dedicated minimized Sora worker window across requests.
+  // That keeps the fetch worker out of the user's main tab strip while still letting
+  // chrome.scripting run packaged code inside a real signed-in Sora page.
   if (hiddenTabId !== null) {
     try {
       const existingTab = await chrome.tabs.get(hiddenTabId);
+      hiddenWindowId =
+        typeof existingTab.windowId === "number" ? existingTab.windowId : hiddenWindowId;
+      await ensureHiddenWorkerWindowMinimized(hiddenWindowId);
       if (existingTab.url !== url) {
         await chrome.tabs.update(hiddenTabId, { url, active: false });
         await waitForTabComplete(hiddenTabId);
       } else if (existingTab.status !== "complete") {
         await waitForTabComplete(hiddenTabId);
       }
+      await ensureHiddenWorkerWindowMinimized(hiddenWindowId);
       return hiddenTabId;
     } catch (_error) {
       hiddenTabId = null;
+      hiddenWindowId = null;
     }
   }
 
+  const tab = await createHiddenWorkerTab(url);
+  return tab;
+}
+
+async function createHiddenWorkerTab(url) {
+  let workerWindow = null;
+  try {
+    workerWindow = await chrome.windows.create({
+      url,
+      focused: false,
+      state: "minimized",
+    });
+  } catch (error) {
+    console.warn(
+      "Could not create a minimized Sora worker window. Falling back to an inactive tab.",
+      error,
+    );
+    return createFallbackHiddenTab(url);
+  }
+
+  if (!workerWindow || typeof workerWindow.id !== "number") {
+    return createFallbackHiddenTab(url);
+  }
+
+  hiddenWindowId = workerWindow.id;
+
+  let workerTabs = [];
+  try {
+    workerTabs = await chrome.tabs.query({ windowId: hiddenWindowId });
+  } catch (_error) {
+    workerTabs = [];
+  }
+
+  const workerTab = workerTabs.find((entry) => entry && typeof entry.id === "number") || null;
+  if (!workerTab || typeof workerTab.id !== "number") {
+    const staleWindowId = hiddenWindowId;
+    hiddenWindowId = null;
+    try {
+      await chrome.windows.remove(staleWindowId);
+    } catch (_error) {
+      // Ignore cleanup failures if Chrome already discarded the worker window.
+    }
+    return createFallbackHiddenTab(url);
+  }
+
+  hiddenTabId = workerTab.id;
+  await ensureHiddenWorkerWindowMinimized(hiddenWindowId);
+  await waitForTabComplete(hiddenTabId);
+  return hiddenTabId;
+}
+
+async function createFallbackHiddenTab(url) {
   const tab = await chrome.tabs.create({
     url,
     active: false,
   });
 
   if (typeof tab.id !== "number") {
-    throw new Error("Chrome did not create the hidden Sora tab.");
+    throw new Error("Chrome did not create the hidden Sora worker tab.");
   }
 
   hiddenTabId = tab.id;
+  hiddenWindowId = typeof tab.windowId === "number" ? tab.windowId : null;
   await waitForTabComplete(hiddenTabId);
   return hiddenTabId;
 }
 
+async function ensureHiddenWorkerWindowMinimized(windowId) {
+  if (typeof windowId !== "number") {
+    return;
+  }
+
+  try {
+    const workerWindow = await chrome.windows.get(windowId);
+    if (workerWindow.state !== "minimized") {
+      await chrome.windows.update(windowId, {
+        focused: false,
+        state: "minimized",
+      });
+    }
+  } catch (_error) {
+    if (hiddenWindowId === windowId) {
+      hiddenWindowId = null;
+    }
+  }
+}
+
 async function cleanupHiddenTab() {
-  if (hiddenTabId === null) {
+  if (hiddenTabId === null && hiddenWindowId === null) {
     return;
   }
 
   const tabId = hiddenTabId;
+  const windowId = hiddenWindowId;
   hiddenTabId = null;
+  hiddenWindowId = null;
 
-  try {
-    await chrome.tabs.remove(tabId);
-  } catch (_error) {
-    // Ignore cleanup failures if the tab was already closed.
+  if (typeof windowId === "number") {
+    try {
+      await chrome.windows.remove(windowId);
+      return;
+    } catch (_error) {
+      // Fall back to removing the worker tab if the window is already gone.
+    }
+  }
+
+  if (typeof tabId === "number") {
+    try {
+      await chrome.tabs.remove(tabId);
+    } catch (_error) {
+      // Ignore cleanup failures if the tab was already closed.
+    }
   }
 }
 
