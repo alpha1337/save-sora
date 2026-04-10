@@ -102,8 +102,6 @@ export function renderState(state) {
     popupState.pendingDownloadStart &&
     (phase === "downloading" ||
       phase === "complete" ||
-      phase === "ready" ||
-      phase === "paused" ||
       Boolean(state && state.lastError))
   ) {
     popupState.pendingDownloadStart = false;

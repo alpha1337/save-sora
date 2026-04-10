@@ -9,6 +9,7 @@ const OFFSCREEN_DOCUMENT_PATH = "offscreen.html";
 const OFFSCREEN_TARGET = "offscreen";
 const START_ARCHIVE_BUILD = "START_ARCHIVE_BUILD";
 const ABORT_ARCHIVE_BUILD = "ABORT_ARCHIVE_BUILD";
+const OFFSCREEN_ARCHIVE_ITEM_PROGRESS = "OFFSCREEN_ARCHIVE_ITEM_PROGRESS";
 const PREPARE_ARCHIVE_ITEM_URL = "PREPARE_ARCHIVE_ITEM_URL";
 const RELEASE_ARCHIVE_OBJECT_URL = "RELEASE_ARCHIVE_OBJECT_URL";
 const PROFILE_LIMIT = 100;
@@ -299,6 +300,17 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   if (message.type === "OFFSCREEN_ARCHIVE_STAGE") {
     void handleOffscreenArchiveStage(message)
+      .then(() => {
+        sendResponse({ ok: true });
+      })
+      .catch((error) => {
+        sendResponse({ ok: false, error: getErrorMessage(error) });
+      });
+    return true;
+  }
+
+  if (message.type === OFFSCREEN_ARCHIVE_ITEM_PROGRESS) {
+    void handleOffscreenArchiveItemProgress(message)
       .then(() => {
         sendResponse({ ok: true });
       })
@@ -945,6 +957,9 @@ function createDefaultState(overrides = {}) {
     partialWarning: "",
     lastError: "",
     currentSource: null,
+    currentSourceLabel: "",
+    currentItemTitle: "",
+    currentProcessLabel: "",
     profileIds: [],
     draftIds: [],
     likesIds: [],
@@ -5481,9 +5496,14 @@ function buildPopupStateSnapshot(state = currentState) {
   const metricSnapshot = buildPopupBatchMetricSnapshot(sourceItems);
   const totalItemCount = countSnapshot.fetchedCount;
   const hiddenItemCount = Math.max(0, totalItemCount - limitedItems.length);
+  const currentSourceLabel =
+    typeof sourceState.currentSourceLabel === "string" && sourceState.currentSourceLabel.trim()
+      ? sourceState.currentSourceLabel.trim()
+      : getDownloadSourceLabelForSourcePage(sourceState.currentSource);
 
   return {
     ...sourceState,
+    currentSourceLabel,
     items: limitedItems,
     fetchedCount: countSnapshot.fetchedCount,
     backedUpItemCount: countSnapshot.backedUpItemCount,
@@ -7018,6 +7038,66 @@ function getDefaultItemTitle(item) {
   }
 
   return item && typeof item.id === "string" ? item.id : "video";
+}
+
+function getQueueItemProgressTitle(item) {
+  const explicitTitle =
+    item && typeof item.title === "string" ? item.title.trim() : "";
+  if (explicitTitle) {
+    return explicitTitle;
+  }
+
+  const defaultTitle = sanitizeFilenamePart(getDefaultItemTitle(item));
+  if (defaultTitle) {
+    return defaultTitle;
+  }
+
+  if (item && typeof item.filename === "string" && item.filename) {
+    return item.filename.replace(/\.mp4$/i, "");
+  }
+
+  return item && typeof item.id === "string" ? item.id : "Working on video";
+}
+
+function getDownloadSourceLabelForSourcePage(source) {
+  switch (source) {
+    case "profile":
+      return "Published";
+    case "drafts":
+      return "Draft";
+    case "likes":
+      return "Liked";
+    case "cameos":
+    case "characters":
+      return "Cameo";
+    case "characterAccounts":
+    case "characterPosts":
+      return "Character";
+    case "creatorPublished":
+      return "Creator Post";
+    case "creatorCameos":
+      return "Creator Cast In";
+    case "creatorCharacters":
+      return "Character";
+    case "creatorCharacterCameos":
+      return "Side Character";
+    default: {
+      const fallback = getFetchSourceLabel(source).replace(/\svideos$/i, "").trim();
+      return fallback ? fallback.replace(/\b([a-z])/g, (_match, char) => char.toUpperCase()) : "";
+    }
+  }
+}
+
+function getQueueItemSourceLabel(item) {
+  const explicitLabel =
+    item && typeof item.sourceLabel === "string" ? item.sourceLabel.trim() : "";
+  if (explicitLabel) {
+    return explicitLabel;
+  }
+
+  return getDownloadSourceLabelForSourcePage(
+    item && typeof item.sourcePage === "string" ? item.sourcePage : "",
+  );
 }
 
 function pruneLegacyTitleOverrides(items, titleOverrides) {
@@ -8673,10 +8753,43 @@ async function handleOffscreenArchiveStage(message) {
   });
 
   await setState({
+    currentItemTitle: message.stage === "archiving" ? currentState.currentItemTitle : "",
+    currentSourceLabel: message.stage === "archiving" ? currentState.currentSourceLabel : "",
+    currentProcessLabel:
+      typeof message.message === "string" && message.message
+        ? message.message
+        : currentState.currentProcessLabel,
     message:
       typeof message.message === "string" && message.message
         ? message.message
         : currentState.message,
+  }, { persist: false });
+}
+
+async function handleOffscreenArchiveItemProgress(message) {
+  if (!activeArchiveJob || activeArchiveJob.jobId !== message.jobId) {
+    return;
+  }
+
+  await setState({
+    currentSource:
+      typeof message.sourcePage === "string" && message.sourcePage
+        ? message.sourcePage
+        : currentState.currentSource,
+    currentSourceLabel:
+      typeof message.sourceLabel === "string" && message.sourceLabel
+        ? message.sourceLabel
+        : typeof message.sourcePage === "string" && message.sourcePage
+          ? getDownloadSourceLabelForSourcePage(message.sourcePage)
+          : currentState.currentSourceLabel,
+    currentItemTitle:
+      typeof message.title === "string" && message.title
+        ? message.title
+        : currentState.currentItemTitle,
+    currentProcessLabel:
+      typeof message.processLabel === "string" && message.processLabel
+        ? message.processLabel
+        : currentState.currentProcessLabel,
   }, { persist: false });
 }
 
@@ -8767,6 +8880,13 @@ async function handleOffscreenArchiveItemResult(message) {
     queued: pendingCount,
     pendingItems: createQueueSnapshots(activeArchiveJob.pendingItems),
     currentSource: item.sourcePage,
+    currentSourceLabel: getQueueItemSourceLabel(item),
+    currentItemTitle: getQueueItemProgressTitle(item),
+    currentProcessLabel: message.success
+      ? pendingCount > 0
+        ? "Starting the next video..."
+        : "Preparing the final ZIP file..."
+      : "Skipping this video and continuing...",
     lastError:
       message.success || !(typeof message.error === "string")
         ? ""
@@ -10950,6 +11070,11 @@ async function beginSelectedDownload() {
   await setState({
     phase: "downloading",
     currentSource: null,
+    currentSourceLabel: "",
+    currentItemTitle: "",
+    currentProcessLabel: isArchiveDownloadMode
+      ? "Preparing ZIP archive..."
+      : "Preparing downloads...",
     queued: selectedItems.length,
     completed: 0,
     failed: 0,
@@ -11143,6 +11268,13 @@ async function requestRunControl(action) {
         : typeof currentState.runMode === "string" && currentState.runMode.startsWith("archive")
           ? "Stopping the active archive download..."
           : "Aborting the active download...",
+    currentItemTitle: "",
+    currentProcessLabel:
+      action === "pause"
+        ? "Stopping after the current step..."
+        : typeof currentState.runMode === "string" && currentState.runMode.startsWith("archive")
+          ? "Canceling the ZIP build..."
+          : "Canceling active downloads...",
   }, { persist: false });
 
   if (action === "abort" && activeArchiveJob && typeof activeArchiveJob.jobId === "string") {
@@ -11202,6 +11334,7 @@ function buildPausedFetchRestorePatch(options = {}) {
         ? "Fetch paused. Resume when you're ready."
         : "Fetch paused before any results were loaded. Resume when you're ready.",
     currentSource: null,
+    currentSourceLabel: "",
     resumableFetchRequest: normalizeResumableFetchRequest(
       Object.prototype.hasOwnProperty.call(options, "resumableFetchRequest")
         ? options.resumableFetchRequest
@@ -11250,6 +11383,7 @@ async function abortPausedDownloads() {
     phase: currentState.items.length ? "ready" : "complete",
     message: "The paused download queue was cleared.",
     currentSource: null,
+    currentSourceLabel: "",
     queued: selectedCount,
     pendingItems: [],
     runMode: null,
@@ -11269,6 +11403,9 @@ async function performArchiveDownloadRun(downloadItems, options) {
     await setState({
       phase: "downloading",
       currentSource: null,
+      currentSourceLabel: "",
+      currentItemTitle: "",
+      currentProcessLabel: "Preparing ZIP archive...",
       queued: archiveJob.pendingItems.length,
       completed: 0,
       failed: 0,
@@ -11293,6 +11430,9 @@ async function performArchiveDownloadRun(downloadItems, options) {
 
     await setState({
       currentSource: null,
+      currentSourceLabel: "",
+      currentItemTitle: "",
+      currentProcessLabel: "Saving ZIP archive...",
       queued: 0,
       pendingItems: [],
       message: `Saving ${archiveJob.archiveFilename}...`,
@@ -11354,8 +11494,11 @@ async function performArchiveDownloadRun(downloadItems, options) {
       phase: "complete",
       items: nextItems,
       selectedKeys: nextSelectedKeys,
+      currentItemTitle: "",
+      currentProcessLabel: summary,
       message: summary,
       currentSource: null,
+      currentSourceLabel: "",
       queued: 0,
       completed,
       failed: failureCount,
@@ -11378,7 +11521,10 @@ async function performArchiveDownloadRun(downloadItems, options) {
       const selectedCount = normalizeSelectedKeys(currentState.items, currentState.selectedKeys).length;
       await setState({
         phase: currentState.items.length ? "ready" : "complete",
+        currentItemTitle: "",
+        currentProcessLabel: "ZIP archive canceled.",
         currentSource: null,
+        currentSourceLabel: "",
         queued: selectedCount,
         completed: 0,
         failed: archiveJob.failedItems.length,
@@ -11404,7 +11550,10 @@ async function performArchiveDownloadRun(downloadItems, options) {
 
     await setState({
       phase: currentState.items.length ? "ready" : "error",
+      currentItemTitle: "",
+      currentProcessLabel: message,
       currentSource: null,
+      currentSourceLabel: "",
       queued: selectedCount,
       completed: 0,
       failed: archiveJob.failedItems.length,
@@ -11442,6 +11591,9 @@ async function performDownloadRun(downloadItems, options) {
     await setState({
       phase: "downloading",
       currentSource: null,
+      currentSourceLabel: "",
+      currentItemTitle: "",
+      currentProcessLabel: "Preparing downloads...",
       queued: pendingItems.length,
       completed,
       failed: failedItems.length,
@@ -11462,6 +11614,7 @@ async function performDownloadRun(downloadItems, options) {
       await setState({
         phase: "paused",
         currentSource: null,
+        currentSourceLabel: "",
         queued: pendingItems.length,
         completed,
         failed: failedItems.length,
@@ -11488,6 +11641,7 @@ async function performDownloadRun(downloadItems, options) {
       await setState({
         phase: currentState.items.length ? "ready" : "complete",
         currentSource: null,
+        currentSourceLabel: "",
         queued: selectedCount,
         completed,
         failed: failedItems.length,
@@ -11502,9 +11656,14 @@ async function performDownloadRun(downloadItems, options) {
     }
 
     const item = pendingItems[0];
+    const currentItemTitle = getQueueItemProgressTitle(item);
+    const currentSourceLabel = getQueueItemSourceLabel(item);
     await setState({
       message: `Downloading ${item.filename}`,
       currentSource: item.sourcePage,
+      currentSourceLabel,
+      currentItemTitle,
+      currentProcessLabel: "Downloading video...",
     }, { persist: false });
 
     try {
@@ -11536,6 +11695,10 @@ async function performDownloadRun(downloadItems, options) {
         completed,
         queued: pendingItems.length,
         pendingItems: createQueueSnapshots(pendingItems),
+        currentSourceLabel,
+        currentItemTitle,
+        currentProcessLabel:
+          pendingItems.length > 0 ? "Preparing the next video..." : "Wrapping up downloads...",
         message:
           (options && typeof options.progressMessage === "function"
             ? options.progressMessage(completed, total, item)
@@ -11549,6 +11712,7 @@ async function performDownloadRun(downloadItems, options) {
         await setState({
           phase: "paused",
           currentSource: null,
+          currentSourceLabel: "",
           queued: pendingItems.length,
           completed,
           failed: failedItems.length,
@@ -11575,6 +11739,7 @@ async function performDownloadRun(downloadItems, options) {
         await setState({
           phase: currentState.items.length ? "ready" : "complete",
           currentSource: null,
+          currentSourceLabel: "",
           queued: selectedCount,
           completed,
           failed: failedItems.length,
@@ -11596,6 +11761,9 @@ async function performDownloadRun(downloadItems, options) {
         failedItems: [...failedItems],
         queued: pendingItems.length,
         pendingItems: createQueueSnapshots(pendingItems),
+        currentSourceLabel,
+        currentItemTitle,
+        currentProcessLabel: "Download failed. Continuing...",
         lastError: message,
         message:
           (options && typeof options.failureMessage === "function"
@@ -11625,8 +11793,11 @@ async function performDownloadRun(downloadItems, options) {
 
   await setState({
     phase: "complete",
+    currentItemTitle: "",
+    currentProcessLabel: summary,
     message: summary,
     currentSource: null,
+    currentSourceLabel: "",
     queued: 0,
     completed,
     failed: failureCount,
@@ -16422,6 +16593,16 @@ async function waitForTabComplete(tabId, timeoutMs = 20000) {
 
 async function downloadItemWithRetry(item) {
   let lastError = null;
+  const currentItemTitle = getQueueItemProgressTitle(item);
+  const currentSourceLabel = getQueueItemSourceLabel(item);
+  if (shouldPrepareDraftShareForDownload(item)) {
+    await setState({
+      currentSource: item.sourcePage,
+      currentSourceLabel,
+      currentItemTitle,
+      currentProcessLabel: "Removing watermark...",
+    }, { persist: false });
+  }
   let candidate = await prepareDraftItemForDownload(item);
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -16430,10 +16611,19 @@ async function downloadItemWithRetry(item) {
         await setState({
           message: `Refreshing ${item.id} after a failed download...`,
           currentSource: item.sourcePage,
+          currentSourceLabel,
+          currentItemTitle,
+          currentProcessLabel: "Refreshing download link...",
         }, { persist: false });
         candidate = await refreshDownloadUrl(item);
       }
 
+      await setState({
+        currentSource: item.sourcePage,
+        currentSourceLabel,
+        currentItemTitle,
+        currentProcessLabel: "Downloading video...",
+      }, { persist: false });
       await startDownloadAndWait(candidate);
       return;
     } catch (error) {

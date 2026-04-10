@@ -100,6 +100,7 @@ export const dom = {
   backToTopButton: document.getElementById("back-to-top-button"),
   downloadOverlay: document.getElementById("download-overlay"),
   downloadOverlayTitle: document.getElementById("download-overlay-title"),
+  downloadOverlaySource: document.getElementById("download-overlay-source"),
   downloadOverlayStatus: document.getElementById("download-overlay-status"),
   downloadOverlayCount: document.getElementById("download-overlay-count"),
   downloadOverlayPercent: document.getElementById("download-overlay-percent"),

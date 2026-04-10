@@ -3,6 +3,7 @@ const RELEASE_ARCHIVE_URL = "RELEASE_ARCHIVE_OBJECT_URL";
 const START_ARCHIVE_BUILD = "START_ARCHIVE_BUILD";
 const ABORT_ARCHIVE_BUILD = "ABORT_ARCHIVE_BUILD";
 const PREPARE_ARCHIVE_ITEM_URL = "PREPARE_ARCHIVE_ITEM_URL";
+const ITEM_PROGRESS_MESSAGE = "OFFSCREEN_ARCHIVE_ITEM_PROGRESS";
 const ITEM_RESULT_MESSAGE = "OFFSCREEN_ARCHIVE_ITEM_RESULT";
 const STAGE_MESSAGE = "OFFSCREEN_ARCHIVE_STAGE";
 const COMPLETE_MESSAGE = "OFFSCREEN_ARCHIVE_COMPLETE";
@@ -259,7 +260,7 @@ async function runArchiveItemsWithConcurrency(zipWriter, archiveItems, signal, j
       }
 
       const item = items[currentIndex];
-      const result = await addArchiveItem(zipWriter, item, signal);
+      const result = await addArchiveItem(zipWriter, item, signal, jobId);
       await chrome.runtime.sendMessage({
         type: ITEM_RESULT_MESSAGE,
         jobId,
@@ -295,7 +296,7 @@ async function addSupplementalArchiveEntries(zipWriter, supplementalEntries, sig
   }
 }
 
-async function addArchiveItem(zipWriter, item, signal) {
+async function addArchiveItem(zipWriter, item, signal, jobId) {
   let lastError = null;
   let candidate = item;
   const debug = {
@@ -325,6 +326,7 @@ async function addArchiveItem(zipWriter, item, signal) {
 
     try {
       if (attempt === 0 && candidate && candidate.requiresSharedDraftPreparation === true) {
+        await sendArchiveItemProgress(jobId, candidate, "Removing watermark...");
         const preparedItem = await prepareArchiveItem(candidate);
         if (preparedItem && typeof preparedItem.downloadUrl === "string" && preparedItem.downloadUrl) {
           attemptDebug.preparedDownloadUrl = preparedItem.downloadUrl;
@@ -336,6 +338,7 @@ async function addArchiveItem(zipWriter, item, signal) {
         }
       }
 
+      await sendArchiveItemProgress(jobId, candidate, "Downloading video...");
       const response = await fetchArchiveResponse(candidate.downloadUrl, signal);
       attemptDebug.status = response.status;
       attemptDebug.statusText = response.statusText;
@@ -344,6 +347,7 @@ async function addArchiveItem(zipWriter, item, signal) {
         response.headers && typeof response.headers.get === "function"
           ? response.headers.get("content-type") || ""
           : "";
+      await sendArchiveItemProgress(jobId, candidate, "Packaging into ZIP...");
       await zipWriter.add(candidate.archivePath, response.body, {
         level: 0,
         keepOrder: false,
@@ -376,6 +380,7 @@ async function addArchiveItem(zipWriter, item, signal) {
         typeof error?.url === "string" && error.url ? error.url : attemptDebug.finalUrl;
 
       if (attempt === 0) {
+        await sendArchiveItemProgress(jobId, candidate, "Refreshing download link...");
         const refreshedItem = await refreshArchiveItem(candidate);
         if (refreshedItem && typeof refreshedItem.downloadUrl === "string" && refreshedItem.downloadUrl) {
           attemptDebug.refreshedDownloadUrl = refreshedItem.downloadUrl;
@@ -394,6 +399,32 @@ async function addArchiveItem(zipWriter, item, signal) {
     error: getErrorMessage(lastError),
     debug,
   };
+}
+
+function getArchiveItemProgressTitle(item) {
+  const explicitTitle =
+    item && typeof item.title === "string" ? item.title.trim() : "";
+  if (explicitTitle) {
+    return explicitTitle;
+  }
+
+  if (item && typeof item.filename === "string" && item.filename) {
+    return item.filename.replace(/\.mp4$/i, "");
+  }
+
+  return item && typeof item.id === "string" ? item.id : "Working on video";
+}
+
+async function sendArchiveItemProgress(jobId, item, processLabel) {
+  await chrome.runtime.sendMessage({
+    type: ITEM_PROGRESS_MESSAGE,
+    jobId,
+    itemKey: item && typeof item.key === "string" ? item.key : "",
+    title: getArchiveItemProgressTitle(item),
+    processLabel: typeof processLabel === "string" ? processLabel : "",
+    sourcePage: item && typeof item.sourcePage === "string" ? item.sourcePage : "",
+    sourceLabel: item && typeof item.sourceLabel === "string" ? item.sourceLabel : "",
+  });
 }
 
 async function refreshArchiveItem(item) {

@@ -838,9 +838,20 @@
       </dialog>
 
       <div id="download-overlay" class="download-overlay hidden" aria-hidden="true">
+        <video
+          class="download-overlay-video"
+          src="assets/update-takeover-bg.mp4"
+          autoplay
+          loop
+          muted
+          playsinline
+          preload="auto"
+        ></video>
+        <div class="download-overlay-backdrop" aria-hidden="true"></div>
         <div class="download-overlay-panel">
           <span class="label">Download Progress</span>
           <h2 id="download-overlay-title">Preparing downloads...</h2>
+          <p id="download-overlay-source" class="download-overlay-source hidden"></p>
           <p id="download-overlay-status" class="download-overlay-status">
             Getting everything ready.
           </p>
