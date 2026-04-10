@@ -690,6 +690,33 @@ function simulateTotalBatchMetrics(items) {
   };
 }
 
+function simulateBulkArchiveToolbarState({
+  hasLoadedResults = false,
+  candidateCount = 0,
+  selectedCount = 0,
+  isBusy = false,
+  isAnyPaused = false,
+  isFetching = false,
+} = {}) {
+  const showBulkArchiveActions =
+    hasLoadedResults &&
+    candidateCount > 0 &&
+    !isBusy &&
+    !isAnyPaused &&
+    !isFetching;
+  const hasBulkArchiveSelection = showBulkArchiveActions && selectedCount > 0;
+
+  return {
+    selectAllHidden: !showBulkArchiveActions,
+    selectAllDisabled:
+      !showBulkArchiveActions || candidateCount === 0 || selectedCount >= candidateCount,
+    archiveSelectedHidden: !hasBulkArchiveSelection,
+    archiveSelectedDisabled: !hasBulkArchiveSelection || selectedCount === 0,
+    clearSelectionHidden: !hasBulkArchiveSelection,
+    clearSelectionDisabled: !hasBulkArchiveSelection || selectedCount === 0,
+  };
+}
+
 function simulateResolvedNoWatermarkUrl(item) {
   if (!item || typeof item !== "object") {
     return "";
@@ -727,6 +754,62 @@ function simulatePreferredDownloadUrl(item) {
     "";
 
   return noWatermarkUrl || watermarkUrl || (typeof item.downloadUrl === "string" ? item.downloadUrl : "") || "";
+}
+
+function simulateDownloadedVideoIdentitiesForItem(item) {
+  if (!item || typeof item !== "object") {
+    return [];
+  }
+
+  const identities = new Set();
+  const attachmentIndex = Number.isInteger(item.attachmentIndex) ? item.attachmentIndex : 0;
+  const generationId =
+    typeof item.generationId === "string" && /^gen_[A-Za-z0-9_-]+$/.test(item.generationId)
+      ? item.generationId
+      : typeof item.id === "string" && /^gen_[A-Za-z0-9_-]+$/.test(item.id)
+        ? item.id
+        : "";
+  const sharedPostId =
+    typeof item.sharedPostId === "string" && /^s_[A-Za-z0-9_-]+$/.test(item.sharedPostId)
+      ? item.sharedPostId
+      : typeof item.id === "string" && /^s_[A-Za-z0-9_-]+$/.test(item.id)
+        ? item.id
+        : "";
+
+  if (generationId) {
+    identities.add(`generation:${generationId}`);
+  }
+
+  if (sharedPostId) {
+    identities.add(`post:${sharedPostId}:${attachmentIndex}`);
+  }
+
+  return [...identities];
+}
+
+function simulateNormalizeDownloadedState(items, downloadedIdentities) {
+  const identitySet =
+    downloadedIdentities instanceof Set ? downloadedIdentities : new Set(downloadedIdentities || []);
+
+  return (Array.isArray(items) ? items : []).map((item) => ({
+    ...item,
+    isDownloaded:
+      Boolean(item && item.isDownloaded) ||
+      simulateDownloadedVideoIdentitiesForItem(item).some((identity) => identitySet.has(identity)),
+  }));
+}
+
+function simulateApplyDownloadedIdentityMutation(items, targetItem, downloaded) {
+  const identitySet = new Set(simulateDownloadedVideoIdentitiesForItem(targetItem));
+
+  return (Array.isArray(items) ? items : []).map((item) => ({
+    ...item,
+    isDownloaded:
+      identitySet.size > 0 &&
+      simulateDownloadedVideoIdentitiesForItem(item).some((identity) => identitySet.has(identity))
+        ? Boolean(downloaded)
+        : Boolean(item && item.isDownloaded),
+  }));
 }
 
 function simulateShouldSkipDraftRow(row) {
@@ -915,6 +998,7 @@ async function testStructuralInvariants() {
   assert.match(backgroundSource, /const SOURCE_CHECKPOINT_STORE = "source_checkpoints"/);
   assert.match(backgroundSource, /const SYNC_SESSION_STORE = "sync_sessions"/);
   assert.match(backgroundSource, /const SOURCE_RETRY_STATE_STORE = "source_retry_state"/);
+  assert.match(backgroundSource, /const DOWNLOADED_VIDEO_IDENTITY_STORE = "downloaded_video_identities"/);
   assert.match(backgroundSource, /const PREPARE_ARCHIVE_ITEM_URL = "PREPARE_ARCHIVE_ITEM_URL"/);
   assert.match(backgroundSource, /const OFFSCREEN_ARCHIVE_ITEM_PROGRESS = "OFFSCREEN_ARCHIVE_ITEM_PROGRESS"/);
   assert.match(backgroundSource, /if \(message\.type === "RESTORE_INTERRUPTED_SESSION"\)/);
@@ -929,7 +1013,10 @@ async function testStructuralInvariants() {
   assert.match(backgroundSource, /async function getRecoverablePausedSyncSession/);
   assert.match(backgroundSource, /async function loadVolatileBackupItemsForSyncSession\(sessionRecord, state = currentState\)/);
   assert.match(backgroundSource, /async function loadHydratedItemsForSyncSession\(sessionRecord, state = currentState\)/);
-  assert.match(backgroundSource, /let hiddenWindowId = null;/);
+  assert.match(backgroundSource, /const defaultFetchWorkerContext = createFetchWorkerContext\("default"\);/);
+  assert.match(backgroundSource, /async function loadDownloadedVideoIdentityCache\(\)/);
+  assert.match(backgroundSource, /function getDownloadedVideoIdentitiesForItem\(item\)/);
+  assert.match(backgroundSource, /function isItemDownloadedByIdentity\(item, knownIdentities = downloadedVideoIdentitySet\)/);
   assert.match(popupRuntimeSource, /requestRestoreInterruptedSession/);
   assert.match(popupRuntimeSource, /requestResumeScan/);
   assert.match(popupRuntimeSource, /export async function saveBulkRemovedState\(itemKeys, removed, options = \{\}\) \{/);
@@ -952,6 +1039,8 @@ async function testStructuralInvariants() {
   assert.match(popupPrimaryControlsSource, /const isResumeMode = fetchUiState\.primaryActionMode === "resume"/);
   assert.match(popupPrimaryControlsSource, /export function syncPrimaryControls\(\)/);
   assert.match(popupPrimaryControlsSource, /dom\.fetchButtonLabel\.textContent = isFetching[\s\S]*?"Resume Fetch"/);
+  assert.match(popupPrimaryControlsSource, /if \(dom\.selectAllButton && isSourceSelectionVisible\)/);
+  assert.match(popupPrimaryControlsSource, /if \(dom\.clearSelectionButton && isSourceSelectionVisible\)/);
   assert.doesNotMatch(popupItemCardPartsSource, /titleButton\.disabled = context\.disableInputs;/);
   assert.match(popupItemCardPartsSource, /export function createItemContentSurface/);
   assert.doesNotMatch(popupItemCardPartsSource, /export function createGridTooltip/);
@@ -1031,6 +1120,9 @@ async function testStructuralInvariants() {
   assert.match(popupSelectionSource, /found so far/);
   assert.match(popupSelectionSource, /queued to archive/);
   assert.match(popupSelectionSource, /Archive Selected \(\$\{formatWholeNumber\(bulkArchiveSelectedCount\)\}\)/);
+  assert.match(popupSelectionSource, /const hasBulkArchiveSelection =\s+showBulkArchiveActions && bulkArchiveSelectedKeys\.length > 0/);
+  assert.match(popupSelectionSource, /dom\.archiveSelectedButton\.classList\.toggle\("hidden", !hasBulkArchiveSelection\);/);
+  assert.match(popupSelectionSource, /showSourceSelectionActions \? !showSourceSelectionActions : !hasBulkArchiveSelection/);
   assert.match(popupSelectionSource, /!fetchUiState\.isBusy[\s\S]*?!fetchUiState\.isAnyPaused/);
   assert.match(popupSelectionSource, /Object\.prototype\.hasOwnProperty\.call\(countSnapshot, "downloadableBytes"\)/);
   assert.match(popupListSource, /const effectiveTotalCount = Number\.isFinite\(Number\(popupState\.latestRenderState\.totalCount\)\)/);
@@ -1117,6 +1209,9 @@ async function testStructuralInvariants() {
   assert.match(backgroundSource, /row && row\.post && row\.post\.prompt/);
   assert.match(backgroundSource, /existingSharedPost && existingSharedPost\.prompt/);
   assert.match(backgroundSource, /sharedPostId: sharedReference && sharedReference\.sharedPostId/);
+  assert.match(backgroundSource, /sharedPostId: postId,/);
+  assert.match(backgroundSource, /generationId: attachmentGenerationId,/);
+  assert.match(backgroundSource, /isDownloaded: compactItem\.isDownloaded === true \|\| isItemDownloadedByIdentity\(compactItem\),/);
   assert.match(backgroundSource, /function buildPopupBatchMetricSnapshot\(items = \[\]\)/);
   assert.match(backgroundSource, /const countSnapshot = resolveAuthoritativeFetchCountSnapshot\(\{\s+items: sourceItems,/s);
   assert.match(backgroundSource, /popupDownloadableBytes: metricSnapshot\.downloadableBytes,/);
@@ -1145,7 +1240,7 @@ async function testStructuralInvariants() {
   assert.match(backgroundSource, /const resumedMergedItems = buildWorkingItemsFromCatalog\(\s+await loadMergedFetchItemsForState\(currentState\),/s);
   assert.match(backgroundSource, /cachedBackedUpItemCount = Math\.max\(\s+0,\s+resumedFetchedCount - resumedMergedItems\.length,/s);
   assert.match(backgroundSource, /workerWindow = await chrome\.windows\.create\(\{\s*url,\s*focused: false,\s*state: "minimized",/s);
-  assert.match(backgroundSource, /await ensureHiddenWorkerWindowMinimized\(hiddenWindowId\);/);
+  assert.match(backgroundSource, /await ensureHiddenWorkerWindowMinimized\(fetchWorkerContext\.windowId, fetchWorkerContext\);/);
   assert.match(backgroundSource, /await chrome\.windows\.remove\(windowId\);/);
   assert.match(backgroundSource, /draftShare: "https:\/\/sora\.chatgpt\.com\/drafts"/);
   assert.match(backgroundSource, /if \(message\.type === PREPARE_ARCHIVE_ITEM_URL\) \{/);
@@ -1866,6 +1961,98 @@ function testDownloadedTabFilteringAndQueueExclusion() {
   );
 }
 
+function testDownloadedIdentityMatchesAcrossDraftAndSharedVariants() {
+  const draftItem = {
+    id: "gen_01draftvideo",
+    generationId: "gen_01draftvideo",
+    sharedPostId: "s_sharedvideo",
+    sourcePage: "drafts",
+    sourceType: "draft",
+    attachmentIndex: 0,
+    isDownloaded: false,
+  };
+  const publishedVariant = {
+    id: "s_sharedvideo",
+    generationId: "gen_01draftvideo",
+    sharedPostId: "s_sharedvideo",
+    sourcePage: "profile",
+    sourceType: "post",
+    attachmentIndex: 0,
+    isDownloaded: false,
+  };
+
+  const nextItems = simulateApplyDownloadedIdentityMutation(
+    [draftItem, publishedVariant],
+    draftItem,
+    true,
+  );
+
+  assert.deepEqual(
+    nextItems.map((item) => item.isDownloaded),
+    [true, true],
+    "marking one downloaded video should also mark any fetched source variant that resolves to the same underlying video identity",
+  );
+}
+
+function testDownloadedIdentitySurvivesRefetches() {
+  const downloadedDraft = {
+    id: "gen_01draftvideo",
+    generationId: "gen_01draftvideo",
+    sharedPostId: "s_sharedvideo",
+    sourcePage: "drafts",
+    sourceType: "draft",
+    attachmentIndex: 0,
+  };
+  const refetchedPublishedVariant = {
+    id: "s_sharedvideo",
+    generationId: "gen_01draftvideo",
+    sharedPostId: "s_sharedvideo",
+    sourcePage: "creatorPublished",
+    sourceType: "post",
+    attachmentIndex: 0,
+    isDownloaded: false,
+  };
+  const downloadedIdentities = new Set(simulateDownloadedVideoIdentitiesForItem(downloadedDraft));
+  const normalizedItems = simulateNormalizeDownloadedState(
+    [refetchedPublishedVariant],
+    downloadedIdentities,
+  );
+
+  assert.equal(
+    normalizedItems[0].isDownloaded,
+    true,
+    "refetched items should inherit the downloaded state from the persisted video identity ledger even when the original row key is gone",
+  );
+}
+
+function testBulkArchiveToolbarDefaultsToSelectAllOnly() {
+  const defaultToolbarState = simulateBulkArchiveToolbarState({
+    hasLoadedResults: true,
+    candidateCount: 2444,
+    selectedCount: 0,
+  });
+
+  assert.equal(defaultToolbarState.selectAllHidden, false);
+  assert.equal(defaultToolbarState.selectAllDisabled, false);
+  assert.equal(defaultToolbarState.archiveSelectedHidden, true);
+  assert.equal(defaultToolbarState.archiveSelectedDisabled, true);
+  assert.equal(defaultToolbarState.clearSelectionHidden, true);
+  assert.equal(defaultToolbarState.clearSelectionDisabled, true);
+
+  const selectedToolbarState = simulateBulkArchiveToolbarState({
+    hasLoadedResults: true,
+    candidateCount: 2444,
+    selectedCount: 2444,
+  });
+
+  assert.equal(selectedToolbarState.selectAllHidden, false);
+  assert.equal(selectedToolbarState.selectAllDisabled, true);
+  assert.equal(selectedToolbarState.archiveSelectedHidden, false);
+  assert.equal(selectedToolbarState.archiveSelectedDisabled, false);
+  assert.equal(selectedToolbarState.clearSelectionHidden, false);
+  assert.equal(selectedToolbarState.clearSelectionDisabled, false);
+}
+
 function testDraftsPreferSharedNoWatermarkDownloadsWhenAvailable() {
   const preferredUrl = simulatePreferredDownloadUrl({
     id: "gen_01draft",
@@ -2204,6 +2391,9 @@ testPausedFetchCountsPreferAuthoritativeFetchedTotal();
 testRestoredMirrorItemsMergeIntoRuntimeCatalog();
 testGridCardsDoNotDuplicateHiddenListBodies();
 testDownloadedTabFilteringAndQueueExclusion();
+testDownloadedIdentityMatchesAcrossDraftAndSharedVariants();
+testDownloadedIdentitySurvivesRefetches();
+testBulkArchiveToolbarDefaultsToSelectAllOnly();
 testDraftsPreferSharedNoWatermarkDownloadsWhenAvailable();
 testDraftFetchSkipsErroredAndEditedRows();
 testDraftPromptPrefersExistingSharedPostMetadata();

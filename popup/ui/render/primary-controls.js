@@ -2,11 +2,7 @@ import { dom } from "../../dom.js";
 import { popupState } from "../../state.js";
 import { getFetchUiState } from "../../utils/runtime-state.js";
 import { getSelectedSourceValues } from "../../utils/settings.js";
-import {
-  applyCurrentSelectionUi,
-  getVisibleActiveKeysFromDom,
-  getVisibleArchivedKeysFromDom,
-} from "../selection.js";
+import { applyCurrentSelectionUi } from "../selection.js";
 import {
   getSelectionScreenActionState,
   isSourceSelectionScreenVisible,
@@ -67,23 +63,17 @@ export function syncPrimaryControls() {
 
   applyCurrentSelectionUi();
 
-  if (dom.selectAllButton) {
+  if (dom.selectAllButton && isSourceSelectionVisible) {
     dom.selectAllButton.disabled =
-      isBusy || isAnyPaused || (
-        isSourceSelectionVisible
-          ? selectionScreenState.visibleCount === 0 ||
-            selectionScreenState.visibleSelectedCount === selectionScreenState.visibleCount
-          : getVisibleArchivedKeysFromDom().length === 0
-      );
+      isBusy ||
+      isAnyPaused ||
+      selectionScreenState.visibleCount === 0 ||
+      selectionScreenState.visibleSelectedCount === selectionScreenState.visibleCount;
   }
 
-  if (dom.clearSelectionButton) {
+  if (dom.clearSelectionButton && isSourceSelectionVisible) {
     dom.clearSelectionButton.disabled =
-      isBusy || isAnyPaused || (
-        isSourceSelectionVisible
-          ? selectionScreenState.visibleSelectedCount === 0
-          : getVisibleActiveKeysFromDom().length === 0
-      );
+      isBusy || isAnyPaused || selectionScreenState.visibleSelectedCount === 0;
   }
 }
 

@@ -422,6 +422,8 @@ export function syncSelectionControls(totalCount, selectedCount, visibleCount = 
     !fetchUiState.isBusy &&
     !fetchUiState.isAnyPaused &&
     !isFetching;
+  const hasBulkArchiveSelection =
+    showBulkArchiveActions && bulkArchiveSelectedKeys.length > 0;
   const downloadLabel =
     normalizedSelectedCount === 1
       ? "Download 1 Video"
@@ -467,8 +469,8 @@ export function syncSelectionControls(totalCount, selectedCount, visibleCount = 
   }
   if (dom.archiveSelectedButton instanceof HTMLButtonElement) {
     const bulkArchiveSelectedCount = bulkArchiveSelectedKeys.length;
-    dom.archiveSelectedButton.classList.toggle("hidden", !showBulkArchiveActions);
-    dom.archiveSelectedButton.disabled = !showBulkArchiveActions || bulkArchiveSelectedCount === 0;
+    dom.archiveSelectedButton.classList.toggle("hidden", !hasBulkArchiveSelection);
+    dom.archiveSelectedButton.disabled = !hasBulkArchiveSelection || bulkArchiveSelectedCount === 0;
     dom.archiveSelectedButton.textContent =
       bulkArchiveSelectedCount > 0
         ? `Archive Selected (${formatWholeNumber(bulkArchiveSelectedCount)})`
@@ -476,11 +478,14 @@ export function syncSelectionControls(totalCount, selectedCount, visibleCount = 
   }
   if (dom.clearSelectionButton) {
     dom.clearSelectionButton.textContent = "Select None";
-    dom.clearSelectionButton.classList.toggle("hidden", !(showSourceSelectionActions || showBulkArchiveActions));
+    dom.clearSelectionButton.classList.toggle(
+      "hidden",
+      showSourceSelectionActions ? !showSourceSelectionActions : !hasBulkArchiveSelection,
+    );
     dom.clearSelectionButton.disabled =
       showSourceSelectionActions
         ? !showSourceSelectionActions || sourceSelectionState.visibleSelectedCount === 0
-        : !showBulkArchiveActions || bulkArchiveSelectedKeys.length === 0;
+        : !hasBulkArchiveSelection || bulkArchiveSelectedKeys.length === 0;
   }
   if (dom.resultsViewToggle instanceof HTMLElement) {
     dom.resultsViewToggle.classList.toggle("hidden", !showBrowseTools);

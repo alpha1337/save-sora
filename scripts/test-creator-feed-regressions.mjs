@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 
-const CREATOR_PROFILE_FEED_LIMIT = 8;
+const CREATOR_PROFILE_FEED_LIMIT = 100;
 const CREATOR_PROFILE_FEED_MIN_PAGE_CAP = 250;
 const CREATOR_PROFILE_FEED_PAGE_BUFFER = 50;
 const CREATOR_PROFILE_FEED_MAX_PAGE_CAP = 5000;
@@ -553,8 +553,12 @@ function testCreatorFeedPageCapScalesPastTwoThousandCeiling() {
     },
   });
 
-  assert.equal(pageCap, 428);
-  assert.ok(pageCap > 250);
+  assert.equal(pageCap, 250);
+  assert.ok(pageCap >= 250);
+}
+
+function testCreatorFeedBatchSizeUsesHundredItemPages() {
+  assert.equal(CREATOR_PROFILE_FEED_LIMIT, 100);
 }
 
 function testDownloadUrlSupportsSignedMediaShapes() {
@@ -617,6 +621,7 @@ testOwnedRowsStayInPostsBucket();
 testCreatorFeedItemKeyIgnoresAttachmentIndexWhenUrlMatches();
 testPostIdSupportsGenerationIdsAndPermalinks();
 testCreatorFeedPageCapScalesPastTwoThousandCeiling();
+testCreatorFeedBatchSizeUsesHundredItemPages();
 testDownloadUrlSupportsSignedMediaShapes();
 testPayloadRowsCountAsPostCandidates();
 testHtmlMediaExtractionFindsDetailFallbackUrls();

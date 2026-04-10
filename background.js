@@ -13,7 +13,8 @@ const OFFSCREEN_ARCHIVE_ITEM_PROGRESS = "OFFSCREEN_ARCHIVE_ITEM_PROGRESS";
 const PREPARE_ARCHIVE_ITEM_URL = "PREPARE_ARCHIVE_ITEM_URL";
 const RELEASE_ARCHIVE_OBJECT_URL = "RELEASE_ARCHIVE_OBJECT_URL";
 const PROFILE_LIMIT = 100;
-const CREATOR_PROFILE_FEED_LIMIT = 8;
+const CREATOR_PROFILE_FEED_LIMIT = 100;
+const FETCH_PARALLEL_WORKER_COUNT = 3;
 const CREATOR_PROFILE_FEED_MIN_PAGE_CAP = 250;
 const CREATOR_PROFILE_FEED_PAGE_BUFFER = 50;
 const CREATOR_PROFILE_FEED_MAX_PAGE_CAP = 50000;
@@ -21,7 +22,7 @@ const POPUP_STATE_ITEM_LIMIT = 3000;
 const POPUP_STATE_TARGET_BYTES = 8 * 1024 * 1024;
 const VOLATILE_SOURCE_PREVIEW_LIMIT = 3000;
 const VOLATILE_BACKUP_DB_NAME = "saveSoraVolatileBackup";
-const VOLATILE_BACKUP_DB_VERSION = 4;
+const VOLATILE_BACKUP_DB_VERSION = 5;
 const VOLATILE_BACKUP_ITEM_STORE = "items";
 const VOLATILE_BACKUP_META_STORE = "meta";
 const VOLATILE_BACKUP_UPDATER_STORE = "updater";
@@ -29,6 +30,7 @@ const SOURCE_MIRROR_ITEM_STORE = "source_mirror_items";
 const SOURCE_CHECKPOINT_STORE = "source_checkpoints";
 const SYNC_SESSION_STORE = "sync_sessions";
 const SOURCE_RETRY_STATE_STORE = "source_retry_state";
+const DOWNLOADED_VIDEO_IDENTITY_STORE = "downloaded_video_identities";
 const SCHEMA_META_STORE = "schema_meta";
 const VOLATILE_BACKUP_WRITE_CHUNK_SIZE = 250;
 const VOLATILE_BACKUP_DEFAULT_SCOPE_ID = "__scope__";
@@ -116,11 +118,10 @@ const SOURCE_ROUTES = {
 
 let currentState = createDefaultState();
 let currentCatalog = createDefaultCatalogState();
-let hiddenTabId = null;
-let hiddenWindowId = null;
 let activeRun = null;
 let activeDownloadId = null;
 let activeArchiveJob = null;
+const defaultFetchWorkerContext = createFetchWorkerContext("default");
 const draftSharePreparationPromises = new Map();
 let draftSharePreparationChain = Promise.resolve();
 let creatingOffscreenDocument = null;
@@ -139,6 +140,7 @@ let currentUpdateState = createDefaultUpdateState();
 let linkedInstallFolderRecordCache = null;
 let updaterReadyPromise = null;
 let zipLibraryLoaded = false;
+let downloadedVideoIdentitySet = new Set();
 const archiveDebugRoot = getArchiveDebugRoot();
 
 function getArchiveDebugRoot() {
@@ -1471,6 +1473,12 @@ function openVolatileBackupDb() {
           keyPath: "sourceScopeHash",
         });
       }
+      if (!db.objectStoreNames.contains(DOWNLOADED_VIDEO_IDENTITY_STORE)) {
+        const downloadedIdentityStore = db.createObjectStore(DOWNLOADED_VIDEO_IDENTITY_STORE, {
+          keyPath: "downloadIdentity",
+        });
+        downloadedIdentityStore.createIndex("downloadedAt", "downloadedAt", { unique: false });
+      }
       if (!db.objectStoreNames.contains(SCHEMA_META_STORE)) {
         db.createObjectStore(SCHEMA_META_STORE, {
           keyPath: "key",
@@ -1485,6 +1493,59 @@ function openVolatileBackupDb() {
   });
 
   return volatileBackupDbPromise;
+}
+
+async function loadDownloadedVideoIdentityCache() {
+  try {
+    const db = await openVolatileBackupDb();
+    const transaction = db.transaction([DOWNLOADED_VIDEO_IDENTITY_STORE], "readonly");
+    const store = transaction.objectStore(DOWNLOADED_VIDEO_IDENTITY_STORE);
+    const storedIdentities = await createIndexedDbRequestPromise(store.getAllKeys());
+    downloadedVideoIdentitySet = new Set(
+      (Array.isArray(storedIdentities) ? storedIdentities : [])
+        .filter((value) => typeof value === "string" && value),
+    );
+  } catch (error) {
+    downloadedVideoIdentitySet = new Set();
+    console.warn("Failed to restore downloaded video identities.", error);
+  }
+}
+
+async function persistDownloadedVideoIdentities(identities, downloaded) {
+  const normalizedIdentities = [...new Set(
+    (Array.isArray(identities) ? identities : [])
+      .filter((value) => typeof value === "string" && value),
+  )];
+  if (normalizedIdentities.length === 0) {
+    return;
+  }
+
+  try {
+    const db = await openVolatileBackupDb();
+    await new Promise((resolve, reject) => {
+      const transaction = db.transaction([DOWNLOADED_VIDEO_IDENTITY_STORE], "readwrite");
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () =>
+        reject(transaction.error || new Error("Could not persist downloaded video identities."));
+      const store = transaction.objectStore(DOWNLOADED_VIDEO_IDENTITY_STORE);
+
+      for (const downloadIdentity of normalizedIdentities) {
+        if (downloaded === false) {
+          store.delete(downloadIdentity);
+          downloadedVideoIdentitySet.delete(downloadIdentity);
+          continue;
+        }
+
+        store.put({
+          downloadIdentity,
+          downloadedAt: new Date().toISOString(),
+        });
+        downloadedVideoIdentitySet.add(downloadIdentity);
+      }
+    });
+  } catch (error) {
+    console.warn("Failed to persist downloaded video identities.", error);
+  }
 }
 
 async function readSchemaMeta(key) {
@@ -5275,6 +5336,7 @@ function normalizeCatalogItems(items) {
     itemMap.set(key, {
       ...compactItem,
       key,
+      isDownloaded: compactItem.isDownloaded === true || isItemDownloadedByIdentity(compactItem),
     });
   }
 
@@ -5328,6 +5390,8 @@ function compactItemForPopup(item) {
     createdAt: item.createdAt ?? null,
     postedAt: item.postedAt ?? null,
     generationId: typeof item.generationId === "string" ? item.generationId : "",
+    sharedPostId: typeof item.sharedPostId === "string" ? item.sharedPostId : "",
+    attachmentId: typeof item.attachmentId === "string" ? item.attachmentId : "",
     durationSeconds: item.durationSeconds ?? null,
     fileSizeBytes: item.fileSizeBytes ?? null,
     width: item.width ?? null,
@@ -6304,6 +6368,7 @@ async function restoreState() {
   // Restore local-only extension state so the popup can reopen without losing the current
   // queue, previous results, or user preferences.
   try {
+    await loadDownloadedVideoIdentityCache();
     const stored = await chrome.storage.local.get([STATE_KEY, CATALOG_STORAGE_KEY]);
     const savedState = stored && stored[STATE_KEY] ? stored[STATE_KEY] : null;
     if (stored && stored[STATE_KEY]) {
@@ -6437,6 +6502,10 @@ async function restoreState() {
     }
 
     currentState = await restoreInterruptedFetchState(currentState);
+    await backfillDownloadedVideoIdentitiesFromItems([
+      ...normalizeCatalogItems(currentCatalog.items),
+      ...normalizeCatalogItems(currentState.items),
+    ]);
   } catch (error) {
     console.warn("Failed to restore extension state.", error);
   }
@@ -6776,6 +6845,123 @@ function getDraftGenerationIdForItem(item) {
         ? item.id
         : "";
   return /^gen_[A-Za-z0-9_-]+$/.test(generationId) ? generationId : "";
+}
+
+function extractDownloadFileIdentity(value) {
+  if (typeof value !== "string" || !value) {
+    return "";
+  }
+
+  try {
+    const parsedUrl = new URL(value);
+    if (!/videos\.openai\.com$/i.test(parsedUrl.hostname)) {
+      return "";
+    }
+
+    const fileMatch = parsedUrl.pathname.match(/\/files\/([^/]+)/i);
+    if (fileMatch && typeof fileMatch[1] === "string" && fileMatch[1]) {
+      return `file:${fileMatch[1]}`;
+    }
+
+    const rawDriveMatch = parsedUrl.pathname.match(/\/drvs\/([^/]+)\/raw/i);
+    if (rawDriveMatch && typeof rawDriveMatch[1] === "string" && rawDriveMatch[1]) {
+      return `drive:${rawDriveMatch[1]}`;
+    }
+
+    const trimmedPath = parsedUrl.pathname.replace(/\/+$/, "");
+    return trimmedPath ? `path:${trimmedPath}` : "";
+  } catch (_error) {
+    return "";
+  }
+}
+
+function getDownloadedVideoIdentitiesForItem(item) {
+  if (!item || typeof item !== "object") {
+    return [];
+  }
+
+  const attachmentIndex = Number.isInteger(item.attachmentIndex) ? item.attachmentIndex : 0;
+  const identities = new Set();
+  const generationId = getDraftGenerationIdForItem(item);
+  const sharedPostId = getSharedPostIdForItem(item);
+  const attachmentId =
+    typeof item.attachmentId === "string" && item.attachmentId.trim()
+      ? item.attachmentId.trim()
+      : "";
+
+  if (generationId) {
+    identities.add(`generation:${generationId}`);
+  }
+
+  if (sharedPostId) {
+    identities.add(`post:${sharedPostId}:${attachmentIndex}`);
+  }
+
+  if (attachmentId) {
+    identities.add(`attachment:${attachmentId}`);
+  }
+
+  const itemId = typeof item.id === "string" ? item.id.trim() : "";
+  if (/^gen_[A-Za-z0-9_-]+$/.test(itemId)) {
+    identities.add(`generation:${itemId}`);
+  }
+  if (/^s_[A-Za-z0-9_-]+$/.test(itemId)) {
+    identities.add(`post:${itemId}:${attachmentIndex}`);
+  }
+
+  const mediaUrls = [
+    typeof item.downloadUrl === "string" ? item.downloadUrl : "",
+    typeof item.no_watermark === "string" ? item.no_watermark : "",
+    typeof item.detailUrl === "string" ? item.detailUrl : "",
+    item.download_urls && typeof item.download_urls === "object"
+      ? item.download_urls.no_watermark
+      : "",
+    item.download_urls && typeof item.download_urls === "object"
+      ? item.download_urls.watermark
+      : "",
+    item.download_urls && typeof item.download_urls === "object"
+      ? item.download_urls.endcard_watermark
+      : "",
+  ];
+
+  for (const mediaUrl of mediaUrls) {
+    const fileIdentity = extractDownloadFileIdentity(mediaUrl);
+    if (fileIdentity) {
+      identities.add(fileIdentity);
+    }
+  }
+
+  return [...identities];
+}
+
+function isItemDownloadedByIdentity(item, knownIdentities = downloadedVideoIdentitySet) {
+  const identitySet = knownIdentities instanceof Set ? knownIdentities : new Set();
+  if (!identitySet.size) {
+    return false;
+  }
+
+  return getDownloadedVideoIdentitiesForItem(item).some((identity) => identitySet.has(identity));
+}
+
+async function backfillDownloadedVideoIdentitiesFromItems(items = []) {
+  const knownIdentities = new Set();
+
+  for (const item of Array.isArray(items) ? items : []) {
+    if (!item || item.isDownloaded !== true) {
+      continue;
+    }
+
+    for (const identity of getDownloadedVideoIdentitiesForItem(item)) {
+      if (downloadedVideoIdentitySet.has(identity) || knownIdentities.has(identity)) {
+        continue;
+      }
+      knownIdentities.add(identity);
+    }
+  }
+
+  if (knownIdentities.size > 0) {
+    await persistDownloadedVideoIdentities([...knownIdentities], true);
+  }
 }
 
 function shouldPrepareDraftShareForDownload(item) {
@@ -8018,6 +8204,14 @@ function getProfileFeedPageCap(expectedCount) {
   );
 }
 
+async function fetchSourceDataWithVerifiedCreatorFeedLimit(source, options = {}) {
+  const requestedLimit = Math.max(1, Number(options.limit) || CREATOR_PROFILE_FEED_LIMIT);
+  return fetchSourceDataFromTab(source, {
+    ...options,
+    limit: requestedLimit,
+  });
+}
+
 function buildWorkingItemsFromCatalog(
   catalogItems,
   sources,
@@ -8310,9 +8504,40 @@ function updateCatalogItemsWithMutation(itemKeys, mutation) {
   });
 }
 
+function updateCatalogItemsWithDownloadedState(itemKeys, itemDownloadIdentities, downloaded) {
+  const keySet = new Set(Array.isArray(itemKeys) ? itemKeys : []);
+  const identitySet = new Set(
+    (Array.isArray(itemDownloadIdentities) ? itemDownloadIdentities : [])
+      .filter((value) => typeof value === "string" && value),
+  );
+
+  return normalizeCatalogItems(currentCatalog.items).map((item) => {
+    const key = getCanonicalItemKey(item);
+    const matchesIdentity =
+      identitySet.size > 0 &&
+      getDownloadedVideoIdentitiesForItem(item).some((identity) => identitySet.has(identity));
+    if (!keySet.has(key) && !matchesIdentity) {
+      return item;
+    }
+
+    return {
+      ...item,
+      isDownloaded: Boolean(downloaded),
+      key,
+    };
+  });
+}
+
 async function applyCatalogItemMutation(itemKeys, mutation, options = {}) {
   await setCatalogState({
     items: updateCatalogItemsWithMutation(itemKeys, mutation),
+  }, options);
+}
+
+async function applyCatalogDownloadedState(itemKeys, itemDownloadIdentities, downloaded, options = {}) {
+  await persistDownloadedVideoIdentities(itemDownloadIdentities, downloaded);
+  await setCatalogState({
+    items: updateCatalogItemsWithDownloadedState(itemKeys, itemDownloadIdentities, downloaded),
   }, options);
 }
 
@@ -10794,13 +11019,20 @@ async function setItemsRemovedState(itemKeys, removed) {
   await setState(patch);
 }
 
-function applyDownloadedState(items, _selectedKeys, itemKeys, downloaded) {
+function applyDownloadedState(items, _selectedKeys, itemKeys, itemDownloadIdentities, downloaded) {
   const keySet = new Set(Array.isArray(itemKeys) ? itemKeys : []);
+  const identitySet = new Set(
+    (Array.isArray(itemDownloadIdentities) ? itemDownloadIdentities : [])
+      .filter((value) => typeof value === "string" && value),
+  );
   let didUpdate = false;
 
   const nextItems = (Array.isArray(items) ? items : []).map((item) => {
     const key = item.key || getItemKey(item);
-    if (!keySet.has(key) || Boolean(item.isDownloaded) === Boolean(downloaded)) {
+    const matchesIdentity =
+      identitySet.size > 0 &&
+      getDownloadedVideoIdentitiesForItem(item).some((identity) => identitySet.has(identity));
+    if ((!keySet.has(key) && !matchesIdentity) || Boolean(item.isDownloaded) === Boolean(downloaded)) {
       return item;
     }
 
@@ -10829,10 +11061,19 @@ async function setItemDownloadedState(itemKey, downloaded) {
     throw new Error("Wait until the current fetch or download run finishes before updating downloads.");
   }
 
+  const currentItem = normalizeCatalogItems(currentState.items).find(
+    (item) => getCanonicalItemKey(item) === itemKey,
+  );
+  if (!currentItem) {
+    throw new Error("That video is no longer in the current set.");
+  }
+  const itemDownloadIdentities = getDownloadedVideoIdentitiesForItem(currentItem);
+
   const { didUpdate, nextItems, nextSelectedKeys } = applyDownloadedState(
     currentState.items,
     currentState.selectedKeys,
     [itemKey],
+    itemDownloadIdentities,
     downloaded,
   );
 
@@ -10850,10 +11091,7 @@ async function setItemDownloadedState(itemKey, downloaded) {
     patch.message = buildReadyMessage(nextSelectedKeys.length);
   }
 
-  await applyCatalogItemMutation([itemKey], (item) => ({
-    ...item,
-    isDownloaded: Boolean(downloaded),
-  }));
+  await applyCatalogDownloadedState([itemKey], itemDownloadIdentities, downloaded);
   await setState(patch);
 }
 
@@ -11448,6 +11686,11 @@ async function performArchiveDownloadRun(downloadItems, options) {
     }
 
     const successfulKeys = archiveJob.successfulItems.map((item) => item.key || getItemKey(item));
+    const successfulDownloadIdentities = [
+      ...new Set(
+        archiveJob.successfulItems.flatMap((item) => getDownloadedVideoIdentitiesForItem(item)),
+      ),
+    ];
     let nextItems = currentState.items;
     let nextSelectedKeys = currentState.selectedKeys;
 
@@ -11456,17 +11699,16 @@ async function performArchiveDownloadRun(downloadItems, options) {
         currentState.items,
         currentState.selectedKeys,
         successfulKeys,
+        successfulDownloadIdentities,
         true,
       );
       nextItems = downloadedState.nextItems;
       nextSelectedKeys = downloadedState.nextSelectedKeys;
 
-      await applyCatalogItemMutation(
+      await applyCatalogDownloadedState(
         successfulKeys,
-        (catalogItem) => ({
-          ...catalogItem,
-          isDownloaded: true,
-        }),
+        successfulDownloadIdentities,
+        true,
       );
     }
 
@@ -11670,10 +11912,12 @@ async function performDownloadRun(downloadItems, options) {
       await downloadItemWithRetry(item);
       completed += 1;
       pendingItems.shift();
+      const itemDownloadIdentities = getDownloadedVideoIdentitiesForItem(item);
       const { nextItems, nextSelectedKeys } = applyDownloadedState(
         currentState.items,
         currentState.selectedKeys,
         [item.key || getItemKey(item)],
+        itemDownloadIdentities,
         true,
       );
       const shouldPersistProgress = shouldPersistDownloadProgress(
@@ -11681,12 +11925,10 @@ async function performDownloadRun(downloadItems, options) {
         failedItems.length,
         pendingItems.length,
       );
-      await applyCatalogItemMutation(
+      await applyCatalogDownloadedState(
         [item.key || getItemKey(item)],
-        (catalogItem) => ({
-          ...catalogItem,
-          isDownloaded: true,
-        }),
+        itemDownloadIdentities,
+        true,
         { persist: shouldPersistProgress },
       );
       await setState({
@@ -13294,7 +13536,7 @@ async function fetchAllCharacterAppearanceItems(options = {}) {
 
   for (let pageNumber = 0; pageNumber < maxPageCount; pageNumber += 1) {
     throwIfFetchAbortRequested();
-    const page = await fetchSourceDataFromTab("characters", {
+    const page = await fetchSourceDataWithVerifiedCreatorFeedLimit("characters", {
       limit: CREATOR_PROFILE_FEED_LIMIT,
       cursor,
     });
@@ -13969,11 +14211,12 @@ async function fetchAllCreatorFeedItems(creatorProfile, options = {}) {
 
   for (let pageNumber = 0; pageNumber < maxPageCount; pageNumber += 1) {
     throwIfFetchAbortRequested();
-    const page = await fetchSourceDataFromTab("creatorPublished", {
+    const page = await fetchSourceDataWithVerifiedCreatorFeedLimit("creatorPublished", {
       routeUrl: getCreatorRouteUrl(creatorProfile),
       creatorId: creatorProfile.userId,
       creatorUserId: creatorProfile.userId,
       creatorUsername: creatorProfile.username,
+      fetchWorkerContext: options.fetchWorkerContext,
       limit: CREATOR_PROFILE_FEED_LIMIT,
       cursor,
     });
@@ -14178,9 +14421,10 @@ async function fetchAllCreatorCameoItems(creatorProfile, options = {}) {
 
   for (let pageNumber = 0; pageNumber < maxPageCount; pageNumber += 1) {
     throwIfFetchAbortRequested();
-    const page = await fetchSourceDataFromTab("creatorCameos", {
+    const page = await fetchSourceDataWithVerifiedCreatorFeedLimit("creatorCameos", {
       routeUrl: getCreatorRouteUrl(creatorProfile),
       creatorId: getCreatorLookupId(creatorProfile),
+      fetchWorkerContext: options.fetchWorkerContext,
       limit: CREATOR_PROFILE_FEED_LIMIT,
       cursor,
     });
@@ -14306,6 +14550,7 @@ async function fetchAllCreatorCharacterPublishedItems(creatorProfile, options = 
 
   const result = await fetchAllCharacterAccountPublishedItems(characterAccount, {
     ...options,
+    fetchWorkerContext: options.fetchWorkerContext,
     knownItemKeys: null,
     progressKey: getVolatileBackupProgressKey("creatorCharacters", creatorProfile.profileId),
     backupSource: "creators",
@@ -14429,9 +14674,10 @@ async function fetchAllCreatorCharacterCameoItems(creatorProfile, options = {}) 
 
   for (let pageNumber = 0; pageNumber < maxPageCount; pageNumber += 1) {
     throwIfFetchAbortRequested();
-    const pageResult = await fetchSourceDataFromTab("characterAccountAppearances", {
+    const pageResult = await fetchSourceDataWithVerifiedCreatorFeedLimit("characterAccountAppearances", {
       routeUrl: getCreatorRouteUrl(creatorProfile),
       characterId: characterAccount.userId,
+      fetchWorkerContext: options.fetchWorkerContext,
       limit: CREATOR_PROFILE_FEED_LIMIT,
       cursor,
     });
@@ -14696,9 +14942,10 @@ async function fetchAllCreatorCharacterCameoItemsSimple(creatorProfile, options 
 
   for (let pageNumber = 0; pageNumber < maxPageCount; pageNumber += 1) {
     throwIfFetchAbortRequested();
-    const pageResult = await fetchSourceDataFromTab("characterAccountAppearances", {
+    const pageResult = await fetchSourceDataWithVerifiedCreatorFeedLimit("characterAccountAppearances", {
       routeUrl: getCreatorRouteUrl(creatorProfile),
       characterId: characterAccount.userId,
+      fetchWorkerContext: options.fetchWorkerContext,
       limit: CREATOR_PROFILE_FEED_LIMIT,
       cursor,
     });
@@ -14950,6 +15197,7 @@ async function fetchAllCharacterAccountPublishedItems(characterAccount, options 
     throwIfFetchAbortRequested();
     const page = await fetchSourceDataFromTab("characterAccountPosts", {
       characterId: characterAccount.userId,
+      fetchWorkerContext: options.fetchWorkerContext,
       limit: CHARACTERS_BATCH_LIMIT,
       cursor,
     });
@@ -15124,8 +15372,9 @@ async function fetchAllCharacterAccountAppearanceItems(characterAccount, options
 
   for (let pageNumber = 0; pageNumber < 250; pageNumber += 1) {
     throwIfFetchAbortRequested();
-    const pageResult = await fetchSourceDataFromTab("characterAccountAppearances", {
+    const pageResult = await fetchSourceDataWithVerifiedCreatorFeedLimit("characterAccountAppearances", {
       characterId: characterAccount.userId,
+      fetchWorkerContext: options.fetchWorkerContext,
       limit: CHARACTERS_BATCH_LIMIT,
       cursor,
     });
@@ -15333,6 +15582,7 @@ async function fetchAllCharacterAccountDraftItems(characterAccount, options = {}
     try {
       page = await fetchSourceDataFromTab("characterAccountDrafts", {
         characterId: characterAccount.userId,
+        fetchWorkerContext: options.fetchWorkerContext,
         limit: CHARACTERS_BATCH_LIMIT,
         cursor,
       });
@@ -15781,7 +16031,22 @@ async function fetchAllCreatorItems(options = {}) {
     });
   };
 
-  for (const creatorProfile of selectedCreatorProfiles) {
+  const buildPreviewItems = () =>
+    sortItemsByNewest([...itemMap.values()]).slice(0, VOLATILE_SOURCE_PREVIEW_LIMIT);
+
+  const reportMergedProgress = async (messagePrefix) => {
+    totalCount = itemMap.size + backedUpItemCount;
+    await reportProgress(messagePrefix, {
+      previewItems: buildPreviewItems(),
+      backedUpItemCount,
+    });
+  };
+
+  const processCreatorProfile = async (
+    creatorProfile,
+    fetchWorkerContext = null,
+    parallelMode = false,
+  ) => {
     throwIfFetchAbortRequested();
     const creatorProfileForFetch = await ensureCreatorProfileReadyForFetch(creatorProfile);
     const characterAccount = createCharacterAccountFromCreatorProfile(creatorProfileForFetch);
@@ -15790,7 +16055,7 @@ async function fetchAllCreatorItems(options = {}) {
     const creatorEffectiveBaseCount = itemMap.size + backedUpItemCount;
 
     if (!includeOfficialPosts && !includeCommunityPosts) {
-      continue;
+      return;
     }
 
     if (characterAccount) {
@@ -15800,7 +16065,7 @@ async function fetchAllCreatorItems(options = {}) {
           const characterPublishedMaxRemaining = getRemainingFetchCapacity(characterBaseCount, maxItems);
           if (characterPublishedMaxRemaining === 0) {
             isExhaustive = false;
-            break;
+            return;
           }
 
           const creatorCharacterResult = await fetchAllCreatorCharacterPublishedItems(
@@ -15811,10 +16076,11 @@ async function fetchAllCreatorItems(options = {}) {
               volatileBackupSessionKey,
               selectionSignature: creatorSelectionSignature,
               syncPhase,
+              fetchWorkerContext,
               resumeState: volatileBackupProgressByKey[
                 getVolatileBackupProgressKey("creatorCharacters", creatorProfileForFetch.profileId)
               ],
-              onProgress: async ({ count }) => {
+              onProgress: parallelMode ? null : async ({ count }) => {
                 totalCount = maxItems
                   ? Math.min(maxItems, characterBaseCount + count)
                   : characterBaseCount + count;
@@ -15824,6 +16090,11 @@ async function fetchAllCreatorItems(options = {}) {
           );
           mergeResult(creatorCharacterResult);
           isExhaustive = isExhaustive && creatorCharacterResult.isExhaustive === true;
+          if (parallelMode) {
+            await reportMergedProgress(
+              `Loaded ${creatorProfileForFetch.displayName} official character posts.`,
+            );
+          }
         }
 
         if (includeCommunityPosts) {
@@ -15831,7 +16102,7 @@ async function fetchAllCreatorItems(options = {}) {
           const characterCameoMaxRemaining = getRemainingFetchCapacity(characterCameoBaseCount, maxItems);
           if (characterCameoMaxRemaining === 0) {
             isExhaustive = false;
-            break;
+            return;
           }
 
           const creatorCharacterCameoResult = await fetchAllCreatorCharacterCameoItemsSimple(
@@ -15842,10 +16113,11 @@ async function fetchAllCreatorItems(options = {}) {
               volatileBackupSessionKey,
               selectionSignature: creatorSelectionSignature,
               syncPhase,
+              fetchWorkerContext,
               resumeState: volatileBackupProgressByKey[
                 getVolatileBackupProgressKey("creatorCharacterCameos", creatorProfileForFetch.profileId)
               ],
-              onProgress: async ({
+              onProgress: parallelMode ? null : async ({
                 count,
                 previewItems,
                 backedUpItemCount: previewBackedUpItemCount,
@@ -15865,18 +16137,23 @@ async function fetchAllCreatorItems(options = {}) {
           );
           mergeResult(creatorCharacterCameoResult);
           isExhaustive = isExhaustive && creatorCharacterCameoResult.isExhaustive === true;
+          if (parallelMode) {
+            await reportMergedProgress(
+              `Loaded ${creatorProfileForFetch.displayName} Side Character videos.`,
+            );
+          }
         }
-        continue;
+        return;
       } catch (error) {
-        if (isControlError(error, "abort")) {
-          throw error;
-        }
-
-        partialWarnings.push(
-          `${creatorProfileForFetch.displayName}: ${getErrorMessage(error)}`,
-        );
-        continue;
+      if (isControlError(error, "abort")) {
+        throw error;
       }
+
+      partialWarnings.push(
+        `${creatorProfileForFetch.displayName}: ${getErrorMessage(error)}`,
+      );
+      return;
+    }
     }
 
     const creatorLookupId = isCanonicalCreatorUserId(creatorProfileForFetch.userId)
@@ -15887,7 +16164,7 @@ async function fetchAllCreatorItems(options = {}) {
       partialWarnings.push(
         `Could not resolve a canonical creator user_id for ${creatorProfileForFetch.displayName}.`,
       );
-      continue;
+      return;
     }
 
     try {
@@ -15896,7 +16173,7 @@ async function fetchAllCreatorItems(options = {}) {
         const maxRemaining = getRemainingFetchCapacity(publishedBaseCount, maxItems);
         if (maxRemaining === 0) {
           isExhaustive = false;
-          break;
+          return;
         }
 
         const creatorFeedResult = await fetchAllCreatorFeedItems(
@@ -15908,10 +16185,11 @@ async function fetchAllCreatorItems(options = {}) {
             volatileBackupSessionKey,
             selectionSignature: creatorSelectionSignature,
             syncPhase,
+            fetchWorkerContext,
             resumeState: volatileBackupProgressByKey[
               getVolatileBackupProgressKey("creatorPublished", creatorProfileForFetch.profileId)
             ],
-            onProgress: async ({ count, previewItems, backedUpItemCount: previewBackedUpItemCount }) => {
+            onProgress: parallelMode ? null : async ({ count, previewItems, backedUpItemCount: previewBackedUpItemCount }) => {
               totalCount = maxItems
                 ? Math.min(maxItems, publishedBaseCount + count)
                 : publishedBaseCount + count;
@@ -15927,6 +16205,9 @@ async function fetchAllCreatorItems(options = {}) {
         );
         mergeResult(creatorFeedResult);
         isExhaustive = isExhaustive && creatorFeedResult.isExhaustive === true;
+        if (parallelMode) {
+          await reportMergedProgress(`Loaded ${creatorProfileForFetch.displayName} official posts.`);
+        }
       }
 
       if (includeCommunityPosts) {
@@ -15934,7 +16215,7 @@ async function fetchAllCreatorItems(options = {}) {
         const cameoMaxRemaining = getRemainingFetchCapacity(cameoBaseCount, maxItems);
         if (cameoMaxRemaining === 0) {
           isExhaustive = false;
-          break;
+          return;
         }
 
         const creatorCameoResult = await fetchAllCreatorCameoItems(
@@ -15945,10 +16226,11 @@ async function fetchAllCreatorItems(options = {}) {
             volatileBackupSessionKey,
             selectionSignature: creatorSelectionSignature,
             syncPhase,
+            fetchWorkerContext,
             resumeState: volatileBackupProgressByKey[
               getVolatileBackupProgressKey("creatorCameos", creatorProfileForFetch.profileId)
             ],
-            onProgress: async ({ count, previewItems, backedUpItemCount: previewBackedUpItemCount }) => {
+            onProgress: parallelMode ? null : async ({ count, previewItems, backedUpItemCount: previewBackedUpItemCount }) => {
               totalCount = maxItems
                 ? Math.min(maxItems, cameoBaseCount + count)
                 : cameoBaseCount + count;
@@ -15964,6 +16246,11 @@ async function fetchAllCreatorItems(options = {}) {
         );
         mergeResult(creatorCameoResult);
         isExhaustive = isExhaustive && creatorCameoResult.isExhaustive === true;
+        if (parallelMode) {
+          await reportMergedProgress(
+            `Loaded ${creatorProfileForFetch.displayName} community cameo posts.`,
+          );
+        }
       }
     } catch (error) {
       if (isControlError(error, "abort")) {
@@ -15973,6 +16260,23 @@ async function fetchAllCreatorItems(options = {}) {
       partialWarnings.push(
         `${creatorProfileForFetch.displayName}: ${getErrorMessage(error)}`,
       );
+    }
+  };
+
+  const shouldUseParallelCreatorWorkers =
+    !maxItems && selectedCreatorProfiles.length > 1;
+
+  if (shouldUseParallelCreatorWorkers) {
+    await runTasksWithFetchWorkers(
+      selectedCreatorProfiles,
+      FETCH_PARALLEL_WORKER_COUNT,
+      async (creatorProfile, fetchWorkerContext) => {
+        await processCreatorProfile(creatorProfile, fetchWorkerContext, true);
+      },
+    );
+  } else {
+    for (const creatorProfile of selectedCreatorProfiles) {
+      await processCreatorProfile(creatorProfile, options.fetchWorkerContext || null, false);
     }
   }
 
@@ -16220,13 +16524,17 @@ async function markFetchHeartbeat(source) {
   ]);
 }
 
-async function recreateHiddenTabForFetchRecovery(routeUrl, source) {
+async function recreateHiddenTabForFetchRecovery(
+  routeUrl,
+  source,
+  fetchWorkerContext = defaultFetchWorkerContext,
+) {
   try {
-    await cleanupHiddenTab();
+    await cleanupHiddenTab(fetchWorkerContext);
   } catch (_error) {
     // Ignore close races while recovering the hidden tab.
   }
-  const recreatedTabId = await ensureHiddenTab(routeUrl);
+  const recreatedTabId = await ensureHiddenTab(routeUrl, fetchWorkerContext);
   const now = new Date().toISOString();
   await Promise.all([
     updateActiveSyncSession({
@@ -16285,12 +16593,13 @@ function createFetchControlOrTimeoutSignal(timeoutMs) {
 
 async function executeSourceFetchWithRecovery(source, routeUrl, options) {
   let recoveryAttempts = 0;
+  const fetchWorkerContext = getFetchWorkerContext(options);
 
   while (recoveryAttempts < FETCH_SOURCE_MAX_RECOVERY_ATTEMPTS) {
     throwIfFetchAbortRequested();
     await markFetchHeartbeat(source);
 
-    const tabId = await ensureHiddenTab(routeUrl);
+    const tabId = await ensureHiddenTab(routeUrl, fetchWorkerContext);
     const controlSignal = createFetchControlOrTimeoutSignal(FETCH_SOURCE_REQUEST_TIMEOUT_MS);
     try {
       const payload = await Promise.race([
@@ -16304,7 +16613,7 @@ async function executeSourceFetchWithRecovery(source, routeUrl, options) {
       controlSignal.cleanup();
       if (isControlError(error)) {
         try {
-          await cleanupHiddenTab();
+          await cleanupHiddenTab(fetchWorkerContext);
         } catch (_cleanupError) {
           // Ignore cleanup races during explicit control actions.
         }
@@ -16349,7 +16658,7 @@ async function executeSourceFetchWithRecovery(source, routeUrl, options) {
         );
       }
 
-      await recreateHiddenTabForFetchRecovery(routeUrl, source);
+      await recreateHiddenTabForFetchRecovery(routeUrl, source, fetchWorkerContext);
     }
   }
 
@@ -16405,35 +16714,80 @@ async function fetchSourceDataFromTab(source, options) {
   }
 }
 
-async function ensureHiddenTab(url) {
+function createFetchWorkerContext(label = "") {
+  return {
+    label: typeof label === "string" ? label : "",
+    tabId: null,
+    windowId: null,
+  };
+}
+
+function getFetchWorkerContext(options) {
+  if (options && options.fetchWorkerContext && typeof options.fetchWorkerContext === "object") {
+    return options.fetchWorkerContext;
+  }
+
+  return defaultFetchWorkerContext;
+}
+
+async function runTasksWithFetchWorkers(tasks, concurrency, workerFn) {
+  const pendingTasks = Array.isArray(tasks) ? tasks.filter(Boolean) : [];
+  if (!pendingTasks.length || typeof workerFn !== "function") {
+    return;
+  }
+
+  const workerCount = Math.max(1, Math.min(Number(concurrency) || 1, pendingTasks.length));
+  let nextTaskIndex = 0;
+
+  const runWorker = async (workerIndex) => {
+    const fetchWorkerContext = createFetchWorkerContext(`fetch-worker-${workerIndex + 1}`);
+    try {
+      while (nextTaskIndex < pendingTasks.length) {
+        throwIfFetchAbortRequested();
+        const task = pendingTasks[nextTaskIndex];
+        nextTaskIndex += 1;
+        if (!task) {
+          continue;
+        }
+        await workerFn(task, fetchWorkerContext, workerIndex);
+      }
+    } finally {
+      await cleanupHiddenTab(fetchWorkerContext);
+    }
+  };
+
+  await Promise.all(Array.from({ length: workerCount }, (_, workerIndex) => runWorker(workerIndex)));
+}
+
+async function ensureHiddenTab(url, fetchWorkerContext = defaultFetchWorkerContext) {
   // The extension reuses one dedicated minimized Sora worker window across requests.
   // That keeps the fetch worker out of the user's main tab strip while still letting
   // chrome.scripting run packaged code inside a real signed-in Sora page.
-  if (hiddenTabId !== null) {
+  if (fetchWorkerContext.tabId !== null) {
     try {
-      const existingTab = await chrome.tabs.get(hiddenTabId);
-      hiddenWindowId =
-        typeof existingTab.windowId === "number" ? existingTab.windowId : hiddenWindowId;
-      await ensureHiddenWorkerWindowMinimized(hiddenWindowId);
+      const existingTab = await chrome.tabs.get(fetchWorkerContext.tabId);
+      fetchWorkerContext.windowId =
+        typeof existingTab.windowId === "number" ? existingTab.windowId : fetchWorkerContext.windowId;
+      await ensureHiddenWorkerWindowMinimized(fetchWorkerContext.windowId, fetchWorkerContext);
       if (existingTab.url !== url) {
-        await chrome.tabs.update(hiddenTabId, { url, active: false });
-        await waitForTabComplete(hiddenTabId);
+        await chrome.tabs.update(fetchWorkerContext.tabId, { url, active: false });
+        await waitForTabComplete(fetchWorkerContext.tabId);
       } else if (existingTab.status !== "complete") {
-        await waitForTabComplete(hiddenTabId);
+        await waitForTabComplete(fetchWorkerContext.tabId);
       }
-      await ensureHiddenWorkerWindowMinimized(hiddenWindowId);
-      return hiddenTabId;
+      await ensureHiddenWorkerWindowMinimized(fetchWorkerContext.windowId, fetchWorkerContext);
+      return fetchWorkerContext.tabId;
     } catch (_error) {
-      hiddenTabId = null;
-      hiddenWindowId = null;
+      fetchWorkerContext.tabId = null;
+      fetchWorkerContext.windowId = null;
     }
   }
 
-  const tab = await createHiddenWorkerTab(url);
+  const tab = await createHiddenWorkerTab(url, fetchWorkerContext);
   return tab;
 }
 
-async function createHiddenWorkerTab(url) {
+async function createHiddenWorkerTab(url, fetchWorkerContext = defaultFetchWorkerContext) {
   let workerWindow = null;
   try {
     workerWindow = await chrome.windows.create({
@@ -16446,41 +16800,41 @@ async function createHiddenWorkerTab(url) {
       "Could not create a minimized Sora worker window. Falling back to an inactive tab.",
       error,
     );
-    return createFallbackHiddenTab(url);
+    return createFallbackHiddenTab(url, fetchWorkerContext);
   }
 
   if (!workerWindow || typeof workerWindow.id !== "number") {
-    return createFallbackHiddenTab(url);
+    return createFallbackHiddenTab(url, fetchWorkerContext);
   }
 
-  hiddenWindowId = workerWindow.id;
+  fetchWorkerContext.windowId = workerWindow.id;
 
   let workerTabs = [];
   try {
-    workerTabs = await chrome.tabs.query({ windowId: hiddenWindowId });
+    workerTabs = await chrome.tabs.query({ windowId: fetchWorkerContext.windowId });
   } catch (_error) {
     workerTabs = [];
   }
 
   const workerTab = workerTabs.find((entry) => entry && typeof entry.id === "number") || null;
   if (!workerTab || typeof workerTab.id !== "number") {
-    const staleWindowId = hiddenWindowId;
-    hiddenWindowId = null;
+    const staleWindowId = fetchWorkerContext.windowId;
+    fetchWorkerContext.windowId = null;
     try {
       await chrome.windows.remove(staleWindowId);
     } catch (_error) {
       // Ignore cleanup failures if Chrome already discarded the worker window.
     }
-    return createFallbackHiddenTab(url);
+    return createFallbackHiddenTab(url, fetchWorkerContext);
   }
 
-  hiddenTabId = workerTab.id;
-  await ensureHiddenWorkerWindowMinimized(hiddenWindowId);
-  await waitForTabComplete(hiddenTabId);
-  return hiddenTabId;
+  fetchWorkerContext.tabId = workerTab.id;
+  await ensureHiddenWorkerWindowMinimized(fetchWorkerContext.windowId, fetchWorkerContext);
+  await waitForTabComplete(fetchWorkerContext.tabId);
+  return fetchWorkerContext.tabId;
 }
 
-async function createFallbackHiddenTab(url) {
+async function createFallbackHiddenTab(url, fetchWorkerContext = defaultFetchWorkerContext) {
   const tab = await chrome.tabs.create({
     url,
     active: false,
@@ -16490,13 +16844,16 @@ async function createFallbackHiddenTab(url) {
     throw new Error("Chrome did not create the hidden Sora worker tab.");
   }
 
-  hiddenTabId = tab.id;
-  hiddenWindowId = typeof tab.windowId === "number" ? tab.windowId : null;
-  await waitForTabComplete(hiddenTabId);
-  return hiddenTabId;
+  fetchWorkerContext.tabId = tab.id;
+  fetchWorkerContext.windowId = typeof tab.windowId === "number" ? tab.windowId : null;
+  await waitForTabComplete(fetchWorkerContext.tabId);
+  return fetchWorkerContext.tabId;
 }
 
-async function ensureHiddenWorkerWindowMinimized(windowId) {
+async function ensureHiddenWorkerWindowMinimized(
+  windowId,
+  fetchWorkerContext = defaultFetchWorkerContext,
+) {
   if (typeof windowId !== "number") {
     return;
   }
@@ -16510,21 +16867,21 @@ async function ensureHiddenWorkerWindowMinimized(windowId) {
       });
     }
   } catch (_error) {
-    if (hiddenWindowId === windowId) {
-      hiddenWindowId = null;
+    if (fetchWorkerContext.windowId === windowId) {
+      fetchWorkerContext.windowId = null;
     }
   }
 }
 
-async function cleanupHiddenTab() {
-  if (hiddenTabId === null && hiddenWindowId === null) {
+async function cleanupHiddenTab(fetchWorkerContext = defaultFetchWorkerContext) {
+  if (fetchWorkerContext.tabId === null && fetchWorkerContext.windowId === null) {
     return;
   }
 
-  const tabId = hiddenTabId;
-  const windowId = hiddenWindowId;
-  hiddenTabId = null;
-  hiddenWindowId = null;
+  const tabId = fetchWorkerContext.tabId;
+  const windowId = fetchWorkerContext.windowId;
+  fetchWorkerContext.tabId = null;
+  fetchWorkerContext.windowId = null;
 
   if (typeof windowId === "number") {
     try {
@@ -19522,6 +19879,9 @@ function injectedFetchSource(config) {
             detailUrl,
             downloadUrl: noWatermarkUrl || downloadUrl,
             no_watermark: noWatermarkUrl,
+            sharedPostId: entry.id,
+            generationId: "",
+            attachmentId: "",
             download_urls: {
               no_watermark: noWatermarkUrl,
               watermark: downloadUrl,
@@ -19868,6 +20228,17 @@ function injectedFetchSource(config) {
         attachments.forEach((attachment, attachmentIndex) => {
           const durationSeconds = getDurationSeconds(attachment) || null;
           const fileSizeBytes = getFileSizeBytes(attachment) || null;
+          const attachmentGenerationId = pickFirstString([
+            attachment && attachment.generation_id,
+            attachment && attachment.generationId,
+          ]) || "";
+          const attachmentIdentity = pickFirstString([
+            attachment && attachment.id,
+            attachment && attachment.asset_id,
+            attachment && attachment.assetId,
+            attachment && attachment.task_id,
+            attachment && attachment.taskId,
+          ]) || "";
           const downloadUrl =
             getDownloadUrl(attachment) ||
             getDirectMediaUrl(attachment) ||
@@ -19895,6 +20266,9 @@ function injectedFetchSource(config) {
             detailUrl,
             downloadUrl: noWatermarkUrl || watermarkUrl || downloadUrl,
             no_watermark: noWatermarkUrl,
+            sharedPostId: postId,
+            generationId: attachmentGenerationId,
+            attachmentId: attachmentIdentity,
             download_urls: {
               no_watermark: noWatermarkUrl,
               watermark: watermarkUrl,
@@ -20294,6 +20668,7 @@ function injectedFetchSource(config) {
           downloadUrl: noWatermarkUrl || watermarkUrl,
           no_watermark: noWatermarkUrl,
           sharedPostId: sharedReference && sharedReference.sharedPostId ? sharedReference.sharedPostId : "",
+          attachmentId: taskId || "",
           download_urls: {
             no_watermark: noWatermarkUrl,
             watermark: watermarkUrl,
