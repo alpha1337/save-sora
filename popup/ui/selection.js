@@ -398,9 +398,7 @@ export function syncSelectionControls(totalCount, selectedCount, visibleCount = 
     popupState.latestRuntimeState,
     popupState.latestRenderState,
   );
-  const phase = fetchUiState.phase || "idle";
   const hasLoadedResults = popupState.latestRenderState.items.length > 0;
-  const isFetching = fetchUiState.isFetching;
   const sourceSelectionState = getSelectionScreenActionState();
   const showSourceSelectionActions =
     sourceSelectionState.visible && sourceSelectionState.visibleCount > 0;
@@ -418,10 +416,7 @@ export function syncSelectionControls(totalCount, selectedCount, visibleCount = 
   const showBulkArchiveActions =
     hasLoadedResults &&
     !showSourceSelectionActions &&
-    bulkArchiveCandidateKeys.length > 0 &&
-    !fetchUiState.isBusy &&
-    !fetchUiState.isAnyPaused &&
-    !isFetching;
+    bulkArchiveCandidateKeys.length > 0;
   const hasBulkArchiveSelection =
     showBulkArchiveActions && bulkArchiveSelectedKeys.length > 0;
   const downloadLabel =

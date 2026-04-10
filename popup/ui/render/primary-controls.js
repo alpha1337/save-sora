@@ -32,12 +32,19 @@ export function syncPrimaryControls() {
     selectionScreenState.selectedCount > 0;
   const isResumeMode = fetchUiState.primaryActionMode === "resume";
   const isResetMode = fetchUiState.primaryActionMode === "reset";
+  const isRefreshMode = fetchUiState.primaryActionMode === "refresh";
 
   if (dom.fetchButton) {
     dom.fetchButton.disabled =
       isBusy ||
       (!isResetMode && !isResumeMode && (!hasSelectedSources || !hasRequiredScopedSelection));
-    dom.fetchButton.dataset.mode = isResetMode ? "reset" : isResumeMode ? "resume" : "scan";
+    dom.fetchButton.dataset.mode = isResetMode
+      ? "reset"
+      : isResumeMode
+        ? "resume"
+        : isRefreshMode
+          ? "refresh"
+          : "scan";
     dom.fetchButton.dataset.loading = String(isFetching);
     dom.fetchButton.classList.toggle("is-danger", isResetMode);
   }
@@ -47,6 +54,8 @@ export function syncPrimaryControls() {
       ? "Fetching Videos"
       : isResumeMode
         ? "Resume Fetch"
+        : isRefreshMode
+          ? "Check for updates"
         : hasResults
           ? "Start Over"
           : "Fetch Videos";

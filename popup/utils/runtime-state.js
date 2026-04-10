@@ -34,10 +34,12 @@ export function getFetchUiState(runtimeState, renderState) {
   const isPaused = phase === "paused";
   const isAnyPaused = isPaused || isFetchPaused;
   const primaryActionMode =
-    hasResults && !isFetching
-      ? "reset"
-      : isFetchPaused && hasResumableFetchRequest
-        ? "resume"
+    isFetchPaused && hasResumableFetchRequest
+      ? hasResults
+        ? "reset"
+        : "resume"
+      : hasResults && !isBusy
+        ? "refresh"
         : "scan";
 
   return {

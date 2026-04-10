@@ -408,15 +408,20 @@ function simulateFetchUiState(runtimeState, renderState) {
       (runtimePhase !== "fetching" &&
         (syncStatus === "paused" || syncStatus === "stalled" || syncStatus === "error")));
   const phase = hasPausedFetchSession ? "fetch-paused" : runtimePhase;
+  const isFetching = phase === "fetching";
+  const isDownloading = phase === "downloading";
+  const isBusy = isFetching || isDownloading;
 
   return {
     phase,
     primaryActionMode:
-      hasResults && phase !== "fetching"
+      phase === "fetch-paused" && hasResumableFetchRequest
+        ? hasResults
           ? "reset"
-          : phase === "fetch-paused" && hasResumableFetchRequest
-            ? "resume"
-            : "scan",
+          : "resume"
+        : hasResults && !isBusy
+          ? "refresh"
+          : "scan",
   };
 }
 
@@ -700,10 +705,7 @@ function simulateBulkArchiveToolbarState({
 } = {}) {
   const showBulkArchiveActions =
     hasLoadedResults &&
-    candidateCount > 0 &&
-    !isBusy &&
-    !isAnyPaused &&
-    !isFetching;
+    candidateCount > 0;
   const hasBulkArchiveSelection = showBulkArchiveActions && selectedCount > 0;
 
   return {
@@ -1037,8 +1039,10 @@ async function testStructuralInvariants() {
   assert.match(popupUpdateGateSource, /const shouldKeepGateVisible = popupState\.startupGateLocked \|\| shouldShow/);
   assert.match(popupUpdateGateSource, /Link the unpacked extension folder in Settings if you want Save Sora to install future GitHub updates automatically\./);
   assert.match(popupPrimaryControlsSource, /const isResumeMode = fetchUiState\.primaryActionMode === "resume"/);
+  assert.match(popupPrimaryControlsSource, /const isRefreshMode = fetchUiState\.primaryActionMode === "refresh"/);
   assert.match(popupPrimaryControlsSource, /export function syncPrimaryControls\(\)/);
   assert.match(popupPrimaryControlsSource, /dom\.fetchButtonLabel\.textContent = isFetching[\s\S]*?"Resume Fetch"/);
+  assert.match(popupPrimaryControlsSource, /"Check for updates"/);
   assert.match(popupPrimaryControlsSource, /if \(dom\.selectAllButton && isSourceSelectionVisible\)/);
   assert.match(popupPrimaryControlsSource, /if \(dom\.clearSelectionButton && isSourceSelectionVisible\)/);
   assert.doesNotMatch(popupItemCardPartsSource, /titleButton\.disabled = context\.disableInputs;/);
@@ -1149,6 +1153,9 @@ async function testStructuralInvariants() {
   assert.match(popupCssSource, /\.item-grid-overlay \{[\s\S]*?position: absolute;[\s\S]*?opacity: 0;[\s\S]*?visibility: hidden;/s);
   assert.match(popupCssSource, /\.item-list\.is-grid-view \.item-card:hover \.item-grid-overlay,[\s\S]*?\.item-list\.is-grid-view \.item-card:focus-within \.item-grid-overlay,[\s\S]*?opacity: 1;[\s\S]*?visibility: visible;/s);
   assert.match(popupCssSource, /\.item-grid-tooltip-surface \{[\s\S]*?width: 100%;[\s\S]*?pointer-events: auto;/s);
+  assert.match(popupCssSource, /\.item-grid-tooltip-surface \.item-meta-row \{[\s\S]*?display: grid;[\s\S]*?grid-template-columns: auto minmax\(0, 1fr\);/s);
+  assert.match(popupCssSource, /\.item-grid-tooltip-surface \.item-source-badge \{[\s\S]*?grid-column: 1 \/ -1;/s);
+  assert.match(popupCssSource, /\.item-grid-tooltip-surface \.item-footer \{[\s\S]*?flex-direction: column;[\s\S]*?align-items: flex-start;/s);
   assert.match(popupCssSource, /\.empty-state-image \{\s+display: block;\s+width: auto;\s+height: auto;/s);
   assert.match(popupCssSource, /\.empty-state-text \{[\s\S]*?white-space: pre-line;[\s\S]*?max-width: 44ch;/s);
   assert.match(popupCssSource, /\.empty-state\.is-fetching \.empty-state-text \{/);
@@ -1758,6 +1765,26 @@ function testPausedResultsPreferResetCta() {
   );
 }
 
+function testReadyResultsPreferRefreshCta() {
+  const uiState = simulateFetchUiState(
+    {
+      phase: "ready",
+      syncStatus: "idle",
+      fetchedCount: 41216,
+      resumableFetchRequest: null,
+    },
+    {
+      items: [{ id: "item-1" }],
+    },
+  );
+
+  assert.equal(
+    uiState.primaryActionMode,
+    "refresh",
+    "completed result sets should offer a non-destructive update check instead of forcing a reset",
+  );
+}
+
 function testPausedCountsPreferResetCtaBeforeItemsHydrate() {
   const uiState = simulateFetchUiState(
     {
@@ -2051,6 +2078,28 @@ function testBulkArchiveToolbarDefaultsToSelectAllOnly() {
   assert.equal(selectedToolbarState.archiveSelectedDisabled, false);
   assert.equal(selectedToolbarState.clearSelectionHidden, false);
   assert.equal(selectedToolbarState.clearSelectionDisabled, false);
+}
+
+function testBulkArchiveToolbarKeepsSelectAllVisibleWhilePaused() {
+  const pausedToolbarState = simulateBulkArchiveToolbarState({
+    hasLoadedResults: true,
+    candidateCount: 8593,
+    selectedCount: 0,
+    isAnyPaused: true,
+  });
+
+  assert.equal(
+    pausedToolbarState.selectAllHidden,
+    false,
+    "paused fetch results should still show Select All so users can queue bulk archive actions",
+  );
+  assert.equal(
+    pausedToolbarState.selectAllDisabled,
+    false,
+    "paused fetch results should keep Select All active when there are archive candidates",
+  );
+  assert.equal(pausedToolbarState.archiveSelectedHidden, true);
+  assert.equal(pausedToolbarState.clearSelectionHidden, true);
 }
 
 function testDraftsPreferSharedNoWatermarkDownloadsWhenAvailable() {
@@ -2382,6 +2431,7 @@ testInstallPrefersNewestAvailableRelease();
 testCachedInterfaceStateErrorIsRetryable();
 testExpiredSoraSessionErrorIsRetryable();
 testPausedResultsPreferResetCta();
+testReadyResultsPreferRefreshCta();
 testPausedCountsPreferResetCtaBeforeItemsHydrate();
 testDismissedRestorePromptReturnsToFetchCta();
 testResumeBootstrapKeepsPausedResultsVisible();
@@ -2394,6 +2444,7 @@ testDownloadedTabFilteringAndQueueExclusion();
 testDownloadedIdentityMatchesAcrossDraftAndSharedVariants();
 testDownloadedIdentitySurvivesRefetches();
 testBulkArchiveToolbarDefaultsToSelectAllOnly();
+testBulkArchiveToolbarKeepsSelectAllVisibleWhilePaused();
 testDraftsPreferSharedNoWatermarkDownloadsWhenAvailable();
 testDraftFetchSkipsErroredAndEditedRows();
 testDraftPromptPrefersExistingSharedPostMetadata();
