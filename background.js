@@ -1518,6 +1518,23 @@ function commitIndexedDbTransaction(transaction) {
   }
 }
 
+function isIndexedDbVersionMismatchError(error) {
+  if (!error) {
+    return false;
+  }
+
+  const errorName =
+    typeof error.name === "string" ? error.name : "";
+  const errorMessage =
+    typeof error.message === "string" ? error.message : "";
+
+  if (errorName === "VersionError") {
+    return true;
+  }
+
+  return /requested version .* less than the existing version/i.test(errorMessage);
+}
+
 function openVolatileBackupDb() {
   if (volatileBackupDbPromise) {
     return volatileBackupDbPromise;
@@ -1590,7 +1607,22 @@ function openVolatileBackupDb() {
       }
     };
     request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error || new Error("Could not open the volatile backup database."));
+    request.onerror = () => {
+      const error =
+        request.error || new Error("Could not open the volatile backup database.");
+      if (!isIndexedDbVersionMismatchError(error)) {
+        reject(error);
+        return;
+      }
+
+      const compatibilityRequest = indexedDB.open(VOLATILE_BACKUP_DB_NAME);
+      compatibilityRequest.onsuccess = () => resolve(compatibilityRequest.result);
+      compatibilityRequest.onerror = () =>
+        reject(
+          compatibilityRequest.error ||
+          new Error("Could not open the volatile backup database."),
+        );
+    };
   }).catch((error) => {
     volatileBackupDbPromise = null;
     throw error;
