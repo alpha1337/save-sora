@@ -959,6 +959,27 @@ function simulateAuthoritativePopupTotals({ runtimeState = {}, renderState = {} 
   };
 }
 
+function simulatePopupViewFetchedCount({
+  persistedFetchedCount = 0,
+  mergedItemsCount = 0,
+  restoreTotalItems = 0,
+  restoreLoadedItems = 0,
+} = {}) {
+  let fetchedCount = Math.max(0, Number(mergedItemsCount) || 0);
+
+  for (const value of [persistedFetchedCount, restoreTotalItems, restoreLoadedItems]) {
+    const numericValue = Number(value);
+    if (Number.isFinite(numericValue)) {
+      fetchedCount = Math.max(fetchedCount, Math.max(0, numericValue));
+    }
+  }
+
+  return {
+    fetchedCount,
+    backedUpItemCount: Math.max(0, fetchedCount - Math.max(0, Number(mergedItemsCount) || 0)),
+  };
+}
+
 function simulateLegacyCleanupTargets() {
   return ["items", "volatile_backup_meta", "volatile_backup_updater"];
 }
@@ -1085,6 +1106,9 @@ async function testStructuralInvariants() {
   assert.match(backgroundSource, /async function getRecoverablePausedSyncSession/);
   assert.match(backgroundSource, /async function loadVolatileBackupItemsForSyncSession\(sessionRecord, state = currentState\)/);
   assert.match(backgroundSource, /async function loadHydratedItemsForSyncSession\(sessionRecord, state = currentState\)/);
+  assert.match(backgroundSource, /const authoritativeCountSnapshot = resolveAuthoritativeFetchCountSnapshot\(\{/);
+  assert.match(backgroundSource, /fetchedCount: authoritativeCountSnapshot\.fetchedCount,/);
+  assert.match(backgroundSource, /settleBootstrapState\(\s*await buildPopupStateSnapshotForView\(currentState, \{\s*query: searchQuery,/s);
   assert.match(backgroundSource, /const defaultFetchWorkerContext = createFetchWorkerContext\("default"\);/);
   assert.match(backgroundSource, /async function loadDownloadedVideoIdentityCache\(\)/);
   assert.match(backgroundSource, /function getDownloadedVideoIdentitiesForItem\(item\)/);
@@ -1178,10 +1202,8 @@ async function testStructuralInvariants() {
   assert.match(popupCountsSource, /downloadableCount: Math\.max\(0, fetchedCount - downloadedCount - archivedCount\),/);
   assert.match(popupCountsSource, /downloadableBytes,/);
   assert.match(popupCountsSource, /popupDownloadableBytes/);
-  assert.match(popupRenderSource, /const popupTotalItemCount = Number\.isFinite\(Number\(state && state\.popupTotalItemCount\)\)/);
   assert.match(popupRenderSource, /const countSnapshot = buildRenderCountSnapshot\(state, items\);/);
-  assert.match(popupRenderSource, /const foundVideos = Math\.max\(popupTotalItemCount, countSnapshot\.fetchedCount\);/);
-  assert.match(popupRenderSource, /const totalVideos = foundVideos;/);
+  assert.match(popupRenderSource, /const totalVideos = countSnapshot\.fetchedCount;/);
   assert.match(popupRenderSource, /const selectedCountTotal = countSnapshot\.downloadableCount;/);
   assert.match(popupRenderSource, /downloadableBytes: countSnapshot\.downloadableBytes,/);
   assert.match(popupRenderSource, /popupState\.pendingDownloadStart &&\s*\(phase === "downloading" \|\|\s*phase === "complete" \|\|\s*Boolean\(state && state\.lastError\)\)/s);
@@ -1200,6 +1222,7 @@ async function testStructuralInvariants() {
   assert.match(popupSelectionSource, /dom\.archiveSelectedButton\.classList\.toggle\("hidden", !hasBulkArchiveSelection\);/);
   assert.match(popupSelectionSource, /showSourceSelectionActions \? !showSourceSelectionActions : !hasBulkArchiveSelection/);
   assert.match(popupSelectionSource, /!fetchUiState\.isBusy[\s\S]*?!fetchUiState\.isAnyPaused/);
+  assert.doesNotMatch(popupSelectionSource, /!isFetching/);
   assert.match(popupSelectionSource, /Object\.prototype\.hasOwnProperty\.call\(countSnapshot, "downloadableBytes"\)/);
   assert.match(popupListSource, /const effectiveTotalCount = Number\.isFinite\(Number\(popupState\.latestRenderState\.totalCount\)\)/);
   assert.match(popupFetchStatusSource, /buildFetchSelectionSummary\(/);
@@ -1447,6 +1470,24 @@ function testPopupTotalsPreferAuthoritativeRenderCountsOverPreviewLength() {
   assert.equal(totals.totalCount, 3800);
   assert.equal(totals.selectedCount, 3125);
   assert.equal(totals.fetchedCount, 3800);
+}
+
+function testPopupViewFetchedCountPrefersMergedWorkingSetOverPreviewCap() {
+  const countSnapshot = simulatePopupViewFetchedCount({
+    persistedFetchedCount: 3000,
+    mergedItemsCount: 27080,
+  });
+
+  assert.equal(
+    countSnapshot.fetchedCount,
+    27080,
+    "the first full popup view snapshot should prefer the merged working-set total over the 3000 preview cap",
+  );
+  assert.equal(
+    countSnapshot.backedUpItemCount,
+    0,
+    "a fully merged popup view should not invent hidden backup items once the full working set is available",
+  );
 }
 
 function testCheckpointBackedResumeNeverStartsFromZero() {
@@ -2511,6 +2552,7 @@ testSourceScopeMirrorKeyIsSessionIndependent();
 testLegacyCleanupNeverTargetsCanonicalRecoveryStores();
 testProgressPreviewPrefersMirrorOverLegacyRows();
 testPopupTotalsPreferAuthoritativeRenderCountsOverPreviewLength();
+testPopupViewFetchedCountPrefersMergedWorkingSetOverPreviewCap();
 testHeadSyncThenResume();
 testCheckpointAdvancesOnlyAfterDurableMirrorWrite();
 testKnownBoundaryKeyOnlyAdvancesDuringCommittedHeadSync();

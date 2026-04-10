@@ -5777,6 +5777,16 @@ async function buildPopupStateSnapshotForView(state = currentState, options = {}
   const sortKey = typeof options.sortKey === "string" && options.sortKey ? options.sortKey : "newest";
   const query = typeof options.query === "string" ? options.query : "";
   const mergedItems = await loadMergedFetchItemsForState(sourceState);
+  const authoritativeCountSnapshot = resolveAuthoritativeFetchCountSnapshot({
+    items: mergedItems,
+    fetchedCount: Math.max(
+      0,
+      Number(sourceState.fetchedCount) || 0,
+      Number(popupSnapshot.fetchedCount) || 0,
+    ),
+    totalItems: popupSnapshot.restoreStatus && popupSnapshot.restoreStatus.totalItems,
+    loadedItems: popupSnapshot.restoreStatus && popupSnapshot.restoreStatus.loadedItems,
+  });
   const queryFilteredItems = mergedItems.filter((item) =>
     matchesPopupSearch(item, sourceState.titleOverrides, query),
   );
@@ -5793,6 +5803,8 @@ async function buildPopupStateSnapshotForView(state = currentState, options = {}
   return {
     ...popupSnapshot,
     items: fullItems,
+    fetchedCount: authoritativeCountSnapshot.fetchedCount,
+    backedUpItemCount: authoritativeCountSnapshot.backedUpItemCount,
     selectedKeys: resolvedSelectedKeys.filter((key) => typeof key === "string" && visibleKeys.has(key)),
     partialWarning: sourceState.partialWarning || "",
     popupItemsTruncated: false,
@@ -9512,14 +9524,22 @@ async function startScan(requestedSources, requestedSearchQuery = "", options = 
   activeRun = (async () => {
     try {
       await scanSources(sources, searchQuery, {
-        onFetchStateReady: () => {
-          settleBootstrapState(buildPopupStateSnapshot(currentState));
+        onFetchStateReady: async () => {
+          settleBootstrapState(
+            await buildPopupStateSnapshotForView(currentState, {
+              query: searchQuery,
+            }),
+          );
         },
       });
       if (currentState.phase !== "fetch-paused") {
         pausedFetchRequest = null;
       }
-      settleBootstrapState(buildPopupStateSnapshot(currentState));
+      settleBootstrapState(
+        await buildPopupStateSnapshotForView(currentState, {
+          query: searchQuery,
+        }),
+      );
     } catch (error) {
       failBootstrapState(error);
       throw error;

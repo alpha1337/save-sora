@@ -406,8 +406,7 @@ export function syncSelectionControls(totalCount, selectedCount, visibleCount = 
     hasLoadedResults &&
     selectedCount > 0 &&
     !fetchUiState.isBusy &&
-    !fetchUiState.isAnyPaused &&
-    !isFetching;
+    !fetchUiState.isAnyPaused;
   const showBrowseTools = hasLoadedResults;
   const showSummaryPanel = hasLoadedResults;
   const normalizedSelectedCount = Math.max(0, Number(selectedCount) || 0);

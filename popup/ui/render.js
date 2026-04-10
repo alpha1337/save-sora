@@ -90,12 +90,8 @@ export function renderState(state) {
     settings && settings.preferredViewMode === "windowed" ? "windowed" : "fullscreen";
   const downloadMode = settings && settings.downloadMode === "direct" ? "direct" : "archive";
   const automaticUpdatesEnabled = settings && settings.automaticUpdatesEnabled !== false;
-  const popupTotalItemCount = Number.isFinite(Number(state && state.popupTotalItemCount))
-    ? Math.max(0, Number(state.popupTotalItemCount))
-    : items.length;
   const countSnapshot = buildRenderCountSnapshot(state, items);
-  const foundVideos = Math.max(popupTotalItemCount, countSnapshot.fetchedCount);
-  const totalVideos = foundVideos;
+  const totalVideos = countSnapshot.fetchedCount;
   const selectedCountTotal = countSnapshot.downloadableCount;
 
   if (
