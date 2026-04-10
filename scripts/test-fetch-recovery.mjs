@@ -1048,6 +1048,10 @@ async function testStructuralInvariants() {
     path.join(projectRoot, "popup/ui/media.js"),
     "utf8",
   );
+  const popupExportSource = await readFile(
+    path.join(projectRoot, "popup/utils/export.js"),
+    "utf8",
+  );
   const popupItemsUtilsSource = await readFile(
     path.join(projectRoot, "popup/utils/items.js"),
     "utf8",
@@ -1166,6 +1170,7 @@ async function testStructuralInvariants() {
   assert.match(popupHtmlSource, /class="download-overlay-video"/);
   assert.match(popupHtmlSource, /class="download-overlay-backdrop"/);
   assert.match(popupHtmlSource, /id="download-overlay-source"/);
+  assert.match(popupHtmlSource, /Download Metadata/);
   assert.match(popupActionsSource, /const isResumeMode = fetchUiState\.primaryActionMode === "resume"/);
   assert.match(popupActionsSource, /if \(!isResetMode && !isResumeMode && sources\.length === 0\)/);
   assert.match(popupActionsSource, /let immediateState = null;/);
@@ -1179,10 +1184,22 @@ async function testStructuralInvariants() {
   assert.match(popupActionsSource, /export function handleFetchProgressPanelMouseEnter\(\)/);
   assert.match(popupActionsSource, /export function handleFetchProgressPanelMouseLeave\(\)/);
   assert.match(popupActionsSource, /const isExpanded = popupState\.fetchDrawerExpanded \|\| popupState\.fetchDrawerHoverExpanded;/);
+  assert.match(popupActionsSource, /buildSelectedMetadataText/);
+  assert.match(popupActionsSource, /buildSelectedMetadataFilename/);
+  assert.match(popupActionsSource, /downloadTextFile/);
+  assert.match(popupActionsSource, /The current selection does not include any exportable metadata\./);
+  assert.doesNotMatch(popupActionsSource, /handleExportUrlsButtonClick/);
   assert.match(popupActionsSource, /popupState\.bulkArchiveSelectionKeys = getBulkArchiveCandidateKeys\(\);/);
   assert.match(popupActionsSource, /popupState\.bulkArchiveSelectionKeys = \[\];/);
   assert.match(popupActionsSource, /export async function handleArchiveSelectedClick\(\)/);
   assert.match(popupActionsSource, /const didArchive = await handleBatchArchiveStateChange\(itemKeys, true\);/);
+  assert.match(popupExportSource, /export function getItemMetadataText\(item\)/);
+  assert.match(popupExportSource, /item && typeof item\.prompt === "string" \? item\.prompt\.trim\(\) : ""/);
+  assert.match(popupExportSource, /item && typeof item\.description === "string" \? item\.description\.trim\(\) : ""/);
+  assert.match(popupExportSource, /item && typeof item\.discoveryPhrase === "string" \? item\.discoveryPhrase\.trim\(\) : ""/);
+  assert.match(popupExportSource, /item && typeof item\.caption === "string" \? item\.caption\.trim\(\) : ""/);
+  assert.match(popupExportSource, /save-sora-selected-metadata-/);
+  assert.doesNotMatch(popupExportSource, /getItemReviewUrl/);
   assert.match(popupDomSource, /archiveSelectedButton: document\.getElementById\("archive-selected-button"\),/);
   assert.match(popupDomSource, /downloadOverlaySource: document\.getElementById\("download-overlay-source"\),/);
   assert.match(popupControllersIndexSource, /dom\.fetchProgressPanel\?\.addEventListener\("mouseenter", handleFetchProgressPanelMouseEnter\);/);
@@ -1316,6 +1333,14 @@ async function testStructuralInvariants() {
   assert.match(backgroundSource, /generationId: attachmentGenerationId,/);
   assert.match(backgroundSource, /isDownloaded: compactItem\.isDownloaded === true \|\| isItemDownloadedByIdentity\(compactItem\),/);
   assert.match(backgroundSource, /function buildPopupBatchMetricSnapshot\(items = \[\]\)/);
+  assert.match(backgroundSource, /function buildArchiveMetadataText\(items\)/);
+  assert.match(backgroundSource, /function getArchiveMetadataText\(item\)/);
+  assert.match(backgroundSource, /function buildArchiveSelectedMetadataFilename\(now = new Date\(\)\)/);
+  assert.match(backgroundSource, /item && typeof item\.prompt === "string" \? item\.prompt\.trim\(\) : ""/);
+  assert.match(backgroundSource, /item && typeof item\.description === "string" \? item\.description\.trim\(\) : ""/);
+  assert.match(backgroundSource, /item && typeof item\.discoveryPhrase === "string" \? item\.discoveryPhrase\.trim\(\) : ""/);
+  assert.match(backgroundSource, /item && typeof item\.caption === "string" \? item\.caption\.trim\(\) : ""/);
+  assert.match(backgroundSource, /save-sora-selected-metadata-/);
   assert.match(backgroundSource, /const countSnapshot = resolveAuthoritativeFetchCountSnapshot\(\{\s+items: sourceItems,/s);
   assert.match(backgroundSource, /popupDownloadableBytes: metricSnapshot\.downloadableBytes,/);
   assert.match(backgroundSource, /popupDownloadedBytes: metricSnapshot\.downloadedBytes,/);
@@ -1380,7 +1405,7 @@ async function testStructuralInvariants() {
   assert.match(popupOverlaySource, /Preparing ZIP archive\.\.\./);
   assert.match(popupOverlaySource, /Downloading and packaging videos/);
   assert.match(popupOverlaySource, /Archive download finished/);
-  assert.match(offscreenSource, /const ARCHIVE_PARALLEL_DOWNLOADS = 5;/);
+  assert.match(offscreenSource, /const ARCHIVE_PARALLEL_DOWNLOADS = 1;/);
   assert.match(offscreenSource, /const ITEM_PROGRESS_MESSAGE = "OFFSCREEN_ARCHIVE_ITEM_PROGRESS";/);
   assert.match(offscreenSource, /const PREPARE_ARCHIVE_ITEM_URL = "PREPARE_ARCHIVE_ITEM_URL";/);
   assert.match(offscreenSource, /candidate && candidate\.requiresSharedDraftPreparation === true/);
@@ -1390,12 +1415,13 @@ async function testStructuralInvariants() {
   assert.match(offscreenSource, /sourceLabel: item && typeof item\.sourceLabel === "string" \? item\.sourceLabel : "",/);
   assert.match(offscreenSource, /await sendArchiveItemProgress\(jobId, candidate, "Removing watermark\.\.\."\);/);
   assert.match(offscreenSource, /await sendArchiveItemProgress\(jobId, candidate, "Downloading video\.\.\."\);/);
-  assert.match(offscreenSource, /await sendArchiveItemProgress\(jobId, candidate, "Packaging into ZIP\.\.\."\);/);
+  assert.match(offscreenSource, /await sendArchiveItemProgress\(jobId, candidate, "Compressing video\.\.\."\);/);
   assert.match(offscreenSource, /type: PREPARE_ARCHIVE_ITEM_URL,/);
   assert.match(offscreenSource, /async function runArchiveItemsWithConcurrency\(zipWriter, archiveItems, signal, jobId\)/);
   assert.match(offscreenSource, /await runArchiveItemsWithConcurrency\(zipWriter, archiveItems, signal, jobId\);/);
   assert.match(offscreenSource, /keepOrder: false,/);
   assert.match(offscreenSource, /bufferedWrite: true,/);
+  assert.match(offscreenSource, /Adding metadata\.\.\./);
   assert.match(offscreenSource, /Downloading and packaging videos\.\.\./);
   assert.match(backgroundSource, /preservedCharacterAccounts = normalizeCharacterAccounts\(currentState\.characterAccounts\)/);
   assert.match(backgroundSource, /selectedCharacterAccountIds: preservedSelectedCharacterAccountIds/);

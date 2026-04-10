@@ -593,8 +593,16 @@ function syncCreatorResultsTabs(tabs) {
   }
 
   const validKeys = new Set(tabs.map((tab) => tab.key));
+  const queueTab = tabs.find((tab) => tab.key === "all") || null;
+  const queueCount = queueTab ? Math.max(0, Number(queueTab.count) || 0) : 0;
+  const hasNonQueueResults = tabs.some(
+    (tab) => tab.key !== "all" && Math.max(0, Number(tab.count) || 0) > 0,
+  );
+  if (queueTab && queueCount === 0 && hasNonQueueResults) {
+    popupState.activeCreatorResultsTab = "all";
+  }
   if (!validKeys.has(popupState.activeCreatorResultsTab)) {
-    popupState.activeCreatorResultsTab = tabs[0].key;
+    popupState.activeCreatorResultsTab = queueTab ? queueTab.key : tabs[0].key;
   }
 
   const fragment = document.createDocumentFragment();

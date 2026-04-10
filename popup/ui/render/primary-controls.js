@@ -33,32 +33,45 @@ export function syncPrimaryControls() {
   const isResumeMode = fetchUiState.primaryActionMode === "resume";
   const isResetMode = fetchUiState.primaryActionMode === "reset";
   const isRefreshMode = fetchUiState.primaryActionMode === "refresh";
+  const effectivePrimaryMode = isSourceSelectionVisible
+    ? "scan"
+    : fetchUiState.primaryActionMode;
+  const effectiveIsResumeMode = effectivePrimaryMode === "resume";
+  const effectiveIsResetMode = effectivePrimaryMode === "reset";
+  const effectiveIsRefreshMode = effectivePrimaryMode === "refresh";
 
   if (dom.fetchButton) {
     dom.fetchButton.disabled =
       isBusy ||
-      (!isResetMode && !isResumeMode && (!hasSelectedSources || !hasRequiredScopedSelection));
-    dom.fetchButton.dataset.mode = isResetMode
+      (!effectiveIsResetMode &&
+        !effectiveIsResumeMode &&
+        (!hasSelectedSources || !hasRequiredScopedSelection));
+    dom.fetchButton.dataset.mode = effectiveIsResetMode
       ? "reset"
-      : isResumeMode
+      : effectiveIsResumeMode
         ? "resume"
-        : isRefreshMode
+        : effectiveIsRefreshMode
           ? "refresh"
           : "scan";
     dom.fetchButton.dataset.loading = String(isFetching);
-    dom.fetchButton.classList.toggle("is-danger", isResetMode);
+    dom.fetchButton.classList.toggle("is-danger", effectiveIsResetMode);
   }
 
   if (dom.fetchButtonLabel) {
     dom.fetchButtonLabel.textContent = isFetching
       ? "Fetching Videos"
-      : isResumeMode
+      : effectiveIsResumeMode
         ? "Resume Fetch"
-        : isRefreshMode
+        : effectiveIsRefreshMode
           ? "Check for updates"
         : hasResults
           ? "Start Over"
           : "Fetch Videos";
+  }
+
+  if (dom.goBackButton instanceof HTMLButtonElement) {
+    dom.goBackButton.classList.remove("hidden");
+    dom.goBackButton.disabled = isBusy;
   }
 
   setSourceControlDisabled(dom.sourceSelectButton, dom.sourceSelectInputs, isBusy || isAnyPaused);

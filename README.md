@@ -240,6 +240,15 @@ The GitHub Pages landing page, `privacy.html`, screenshots, and other non-runtim
 project files stay in the repository but are not bundled into the extension
 release package.
 
+## Ship A Build
+
+Ship from `main` with a short, public-facing fixes summary because that same text
+becomes the GitHub release description shown in Save Sora's updater:
+
+1. Run `npm run ship -- "improves fetch recovery and update prompts"` for a patch release.
+2. Run `npm run ship:minor -- "adds clearer queue controls and download feedback"` for a minor release.
+3. Keep the summary concise and user-facing instead of using internal labels like `popup UI` or `release automation`.
+
 ## Development Notes
 
 - No build step is required for local development.

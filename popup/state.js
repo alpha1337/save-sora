@@ -26,8 +26,6 @@ export const popupState = {
   selectedCreatorProfileIds: [],
   activeSourceSelectionTab: "",
   activeCreatorResultsTab: "all",
-  preferredExportType: "prompts",
-  exportMenuOpen: false,
   openCreatorActionMenuId: "",
   creatorDetailsProfileId: "",
   creatorDetailsHeroSignature: "",

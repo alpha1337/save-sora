@@ -96,11 +96,17 @@ export function renderState(state) {
 
   if (
     popupState.pendingDownloadStart &&
-    (phase === "downloading" ||
-      phase === "complete" ||
-      Boolean(state && state.lastError))
+    (phase === "downloading" || phase === "complete" || Boolean(state && state.lastError))
   ) {
-    popupState.pendingDownloadStart = false;
+    const runTotal = Math.max(0, Number(state && state.runTotal) || 0);
+    const completed = Math.max(0, Number(state && state.completed) || 0);
+    const failed = Math.max(0, Number(state && state.failed) || 0);
+    const shouldKeepPendingOnStaleComplete =
+      phase === "complete" && runTotal === 0 && completed === 0 && failed === 0;
+
+    if (!shouldKeepPendingOnStaleComplete || Boolean(state && state.lastError)) {
+      popupState.pendingDownloadStart = false;
+    }
   }
 
   popupState.latestSummaryContext = {
@@ -159,18 +165,23 @@ export function renderState(state) {
     phase,
   });
   const {
+    phase: fetchUiPhase,
     isBusy,
     isPaused,
     isAnyPaused,
   } = fetchUiState;
 
-  if (phase === "fetch-paused" && previousPhase !== "fetch-paused" && !popupState.fetchDrawerUserToggled) {
+  if (
+    fetchUiPhase === "fetch-paused" &&
+    previousPhase !== "fetch-paused" &&
+    !popupState.fetchDrawerUserToggled
+  ) {
     popupState.fetchDrawerExpanded = false;
-  } else if (phase === "fetching" && previousPhase !== "fetching") {
+  } else if (fetchUiPhase === "fetching" && previousPhase !== "fetching") {
     popupState.fetchDrawerExpanded = false;
     popupState.fetchDrawerHoverExpanded = false;
     popupState.fetchDrawerUserToggled = false;
-  } else if (phase !== "fetching" && phase !== "fetch-paused") {
+  } else if (fetchUiPhase !== "fetching" && fetchUiPhase !== "fetch-paused") {
     popupState.fetchDrawerExpanded = false;
     popupState.fetchDrawerHoverExpanded = false;
     popupState.fetchDrawerUserToggled = false;
@@ -198,9 +209,10 @@ export function renderState(state) {
     selectedCountTotal,
     counts: countSnapshot,
     disableInputs: isBusy || isPaused,
-    phase,
+    phase: fetchUiPhase,
   };
   popupState.browseState.viewMode = resultsViewMode;
+  maybeResetTransientSessionFlags(state, items, phase);
 
   syncFetchProgressPanel(state);
   updateDownloadOverlay(state);
@@ -209,4 +221,30 @@ export function renderState(state) {
 
   updateAppScrollLock();
   updateBackToTopVisibility();
+}
+
+function maybeResetTransientSessionFlags(state, items, phase) {
+  const hasItems = Array.isArray(items) && items.length > 0;
+  const fetchedCount = Math.max(0, Number(state && state.fetchedCount) || 0);
+  const queueCount = Math.max(0, Number(state && state.queued) || 0);
+  const runTotal = Math.max(0, Number(state && state.runTotal) || 0);
+  const isFreshSession =
+    !hasItems &&
+    fetchedCount === 0 &&
+    queueCount === 0 &&
+    runTotal === 0 &&
+    (phase === "idle" || phase === "ready" || phase === "complete");
+
+  if (!isFreshSession) {
+    return;
+  }
+
+  popupState.pendingDownloadStart = false;
+  popupState.downloadOverlaySessionActive = false;
+  popupState.bulkArchiveSelectionKeys = [];
+  popupState.activeCreatorResultsTab = "all";
+  popupState.browseState.query = "";
+  if (dom.searchInput instanceof HTMLInputElement) {
+    dom.searchInput.value = "";
+  }
 }

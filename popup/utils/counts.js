@@ -18,23 +18,23 @@ export function buildRenderCountSnapshot(runtimeState, items) {
     safeRuntimeState.popupItemsTruncated === true ||
     Math.max(0, Number(safeRuntimeState.popupHiddenItemCount) || 0) > 0;
   const downloadedCount =
-    shouldPreferRuntimeMetrics && Number.isFinite(Number(safeRuntimeState.popupDownloadedCount))
+    shouldPreferRuntimeMetrics && hasMetricNumber(safeRuntimeState.popupDownloadedCount)
       ? Math.max(0, Number(safeRuntimeState.popupDownloadedCount))
       : localSnapshot.downloadedCount;
   const archivedCount =
-    shouldPreferRuntimeMetrics && Number.isFinite(Number(safeRuntimeState.popupArchivedCount))
+    shouldPreferRuntimeMetrics && hasMetricNumber(safeRuntimeState.popupArchivedCount)
       ? Math.max(0, Number(safeRuntimeState.popupArchivedCount))
       : localSnapshot.archivedCount;
   const downloadableBytes =
-    shouldPreferRuntimeMetrics && Number.isFinite(Number(safeRuntimeState.popupDownloadableBytes))
+    shouldPreferRuntimeMetrics && hasMetricNumber(safeRuntimeState.popupDownloadableBytes)
       ? Math.max(0, Number(safeRuntimeState.popupDownloadableBytes))
       : localSnapshot.downloadableBytes;
   const downloadedBytes =
-    shouldPreferRuntimeMetrics && Number.isFinite(Number(safeRuntimeState.popupDownloadedBytes))
+    shouldPreferRuntimeMetrics && hasMetricNumber(safeRuntimeState.popupDownloadedBytes)
       ? Math.max(0, Number(safeRuntimeState.popupDownloadedBytes))
       : localSnapshot.downloadedBytes;
   const archivedBytes =
-    shouldPreferRuntimeMetrics && Number.isFinite(Number(safeRuntimeState.popupArchivedBytes))
+    shouldPreferRuntimeMetrics && hasMetricNumber(safeRuntimeState.popupArchivedBytes)
       ? Math.max(0, Number(safeRuntimeState.popupArchivedBytes))
       : localSnapshot.archivedBytes;
 
@@ -47,6 +47,15 @@ export function buildRenderCountSnapshot(runtimeState, items) {
     downloadedBytes,
     archivedBytes,
   };
+}
+
+function hasMetricNumber(value) {
+  if (value == null || value === "") {
+    return false;
+  }
+
+  const numericValue = Number(value);
+  return Number.isFinite(numericValue);
 }
 
 /**

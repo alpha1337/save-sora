@@ -975,11 +975,30 @@ function renderCreatorDetailsDialog(profile) {
       ]);
     const stats = [
       ["Posts", postsValue],
-      ["Cameos", pickFirstCountValue([profileData && profileData.cameo_count])],
-      ["Remixes", pickFirstCountValue([profileData && profileData.remix_count])],
-      ["Likes", pickFirstCountValue([profileData && profileData.likes_received_count])],
-      ["Followers", pickFirstCountValue([profileData && profileData.follower_count])],
-      ["Following", pickFirstCountValue([profileData && profileData.following_count])],
+      ["Cameos", pickFirstCountValue([
+        profileData && profileData.cameo_count,
+        profileData && profileData.cameoCount,
+        profileData && profileData.appearance_count,
+        profileData && profileData.appearanceCount,
+      ])],
+      ["Remixes", pickFirstCountValue([
+        profileData && profileData.remix_count,
+        profileData && profileData.remixCount,
+      ])],
+      ["Likes", pickFirstCountValue([
+        profileData && profileData.likes_received_count,
+        profileData && profileData.likesReceivedCount,
+        profileData && profileData.likes_count,
+        profileData && profileData.likesCount,
+      ])],
+      ["Followers", pickFirstCountValue([
+        profileData && profileData.follower_count,
+        profileData && profileData.followerCount,
+      ])],
+      ["Following", pickFirstCountValue([
+        profileData && profileData.following_count,
+        profileData && profileData.followingCount,
+      ])],
     ];
 
     for (const [label, rawValue] of stats) {

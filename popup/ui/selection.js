@@ -434,20 +434,8 @@ export function syncSelectionControls(totalCount, selectedCount, visibleCount = 
   if (dom.exportButton) {
     dom.exportButton.disabled = !showDownloadButton;
   }
-  if (dom.exportMenuButton) {
-    dom.exportMenuButton.disabled = !showDownloadButton;
-  }
   if (!showDownloadButton) {
-    if (dom.exportMenuButton instanceof HTMLButtonElement) {
-      dom.exportMenuButton.setAttribute("aria-expanded", "false");
-    }
-    if (dom.exportControl instanceof HTMLElement) {
-      dom.exportControl.classList.remove("is-open");
-    }
-    if (dom.exportMenu instanceof HTMLElement) {
-      dom.exportMenu.classList.add("hidden");
-    }
-    popupState.exportMenuOpen = false;
+    syncExportButtonLabel();
   }
   if (dom.selectAllButton) {
     dom.selectAllButton.textContent = "Select All";
@@ -498,6 +486,12 @@ export function syncSelectionControls(totalCount, selectedCount, visibleCount = 
   }
 }
 
+function syncExportButtonLabel() {
+  if (dom.exportButtonLabel instanceof HTMLElement) {
+    dom.exportButtonLabel.textContent = "Download Metadata";
+  }
+}
+
 /**
  * Updates the left summary card with total result count and aggregate file size.
  *
@@ -512,13 +506,9 @@ export function updateTotalSummary(items) {
     popupState.latestRenderState.counts && typeof popupState.latestRenderState.counts === "object"
       ? popupState.latestRenderState.counts
       : null;
-  const totalCount = Number.isFinite(Number(countSnapshot && countSnapshot.fetchedCount))
-    ? Math.max(0, Number(countSnapshot.fetchedCount))
-    : Number.isFinite(Number(popupState.latestRenderState.totalCount))
-      ? Math.max(0, Number(popupState.latestRenderState.totalCount))
-      : Array.isArray(items)
-        ? items.length
-        : 0;
+  const totalCount = Number.isFinite(Number(countSnapshot && countSnapshot.downloadableCount))
+    ? Math.max(0, Number(countSnapshot.downloadableCount))
+    : getImplicitSelectedKeys(items).length;
   const totalBytes =
     countSnapshot && Object.prototype.hasOwnProperty.call(countSnapshot, "downloadableBytes")
       ? countSnapshot.downloadableBytes

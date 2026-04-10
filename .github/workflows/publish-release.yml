@@ -50,14 +50,7 @@ jobs:
           fi
 
           RAW_SUBJECT="$(git log --format=%s -n 1 "$GITHUB_SHA")"
-          SUMMARY="$(printf '%s' "$RAW_SUBJECT" | sed -E 's/^[A-Za-z]+(\([^)]+\))?:[[:space:]]*//' | sed -E 's/[[:space:]]+$//' | sed -E 's/[.]$//')"
-          if [[ -z "$SUMMARY" ]]; then
-            SUMMARY="This release updates Save Sora."
-          else
-            FIRST_CHAR="$(printf '%s' "$SUMMARY" | cut -c1 | tr '[:lower:]' '[:upper:]')"
-            REST_CHARS="$(printf '%s' "$SUMMARY" | cut -c2-)"
-            SUMMARY="$FIRST_CHAR$REST_CHARS."
-          fi
+          SUMMARY="$(node scripts/release-summary.mjs notes "$RAW_SUBJECT")"
 
           echo "version=$MANIFEST_VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=v$MANIFEST_VERSION" >> "$GITHUB_OUTPUT"

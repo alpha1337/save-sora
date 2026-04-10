@@ -36,6 +36,8 @@ export function getFetchUiState(runtimeState, renderState) {
   const primaryActionMode =
     isFetchPaused && hasResumableFetchRequest
       ? "resume"
+      : hasResults && !isBusy && syncStatus === "aborted"
+        ? "reset"
       : hasResults && !isBusy
         ? "refresh"
         : "scan";

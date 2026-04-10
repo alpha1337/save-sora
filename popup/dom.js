@@ -28,15 +28,11 @@ export const dom = {
   errorBox: document.getElementById("error-box"),
   fetchButton: document.getElementById("fetch-button"),
   fetchButtonLabel: document.querySelector("#fetch-button .button-label"),
+  goBackButton: document.getElementById("go-back-button"),
   downloadButton: document.getElementById("download-button"),
   exportControl: document.getElementById("export-control"),
   exportButton: document.getElementById("export-button"),
   exportButtonLabel: document.getElementById("export-button-label"),
-  exportMenuButton: document.getElementById("export-menu-button"),
-  exportMenu: document.getElementById("export-menu"),
-  get exportMenuOptions() {
-    return [...document.querySelectorAll("[data-export-type]")];
-  },
   selectAllButton: document.getElementById("select-all-button"),
   clearSelectionButton: document.getElementById("clear-selection-button"),
   resultsViewToggle: document.getElementById("results-view-toggle"),

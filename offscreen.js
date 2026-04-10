@@ -11,7 +11,7 @@ const ERROR_MESSAGE = "OFFSCREEN_ARCHIVE_ERROR";
 const ZIP_MIME_TYPE = "application/zip";
 const PROFILE_IMAGE_BASENAME = "profile-image";
 const ARCHIVE_DEBUG_MAX_JOBS = 8;
-const ARCHIVE_PARALLEL_DOWNLOADS = 5;
+const ARCHIVE_PARALLEL_DOWNLOADS = 1;
 
 let activeArchiveController = null;
 let activeArchiveJobId = null;
@@ -177,7 +177,7 @@ async function buildArchive(message, signal) {
     }
 
     if (supplementalEntries.length > 0) {
-      await sendStage(jobId, "metadata", "Adding prompts and URLs...");
+      await sendStage(jobId, "metadata", "Adding metadata...");
       await addSupplementalArchiveEntries(zipWriter, supplementalEntries, signal);
     }
 
@@ -325,16 +325,18 @@ async function addArchiveItem(zipWriter, item, signal, jobId) {
     debug.attempts.push(attemptDebug);
 
     try {
-      if (attempt === 0 && candidate && candidate.requiresSharedDraftPreparation === true) {
+      if (attempt === 0) {
         await sendArchiveItemProgress(jobId, candidate, "Removing watermark...");
-        const preparedItem = await prepareArchiveItem(candidate);
-        if (preparedItem && typeof preparedItem.downloadUrl === "string" && preparedItem.downloadUrl) {
-          attemptDebug.preparedDownloadUrl = preparedItem.downloadUrl;
-          candidate = {
-            ...candidate,
-            ...preparedItem,
-            requiresSharedDraftPreparation: false,
-          };
+        if (candidate && candidate.requiresSharedDraftPreparation === true) {
+          const preparedItem = await prepareArchiveItem(candidate);
+          if (preparedItem && typeof preparedItem.downloadUrl === "string" && preparedItem.downloadUrl) {
+            attemptDebug.preparedDownloadUrl = preparedItem.downloadUrl;
+            candidate = {
+              ...candidate,
+              ...preparedItem,
+              requiresSharedDraftPreparation: false,
+            };
+          }
         }
       }
 
@@ -347,7 +349,7 @@ async function addArchiveItem(zipWriter, item, signal, jobId) {
         response.headers && typeof response.headers.get === "function"
           ? response.headers.get("content-type") || ""
           : "";
-      await sendArchiveItemProgress(jobId, candidate, "Packaging into ZIP...");
+      await sendArchiveItemProgress(jobId, candidate, "Compressing video...");
       await zipWriter.add(candidate.archivePath, response.body, {
         level: 0,
         keepOrder: false,

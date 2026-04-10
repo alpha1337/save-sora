@@ -401,6 +401,8 @@ export function getCreatorResultsTabKey(item) {
  */
 export function getCreatorResultsTabLabel(tabKey) {
   switch (tabKey) {
+    case "all":
+      return "Download Queue";
     case "archived":
       return "Archived";
     case "downloaded":
@@ -414,7 +416,7 @@ export function getCreatorResultsTabLabel(tabKey) {
     case "characterCameos":
       return "Character Cameos";
     default:
-      return "Queue";
+      return "Download Queue";
   }
 }
 
@@ -450,51 +452,25 @@ export function getCreatorResultsTabs(items) {
     counts.set(tabKey, (counts.get(tabKey) || 0) + 1);
   }
 
-  if (!canShowCreatorTabs || counts.size <= 1) {
-    if (archivedCount <= 0 && downloadedCount <= 0) {
-      return [];
-    }
-
-    const tabs = [];
-    if (activeItems.length > 0) {
-      tabs.push({
-        key: "all",
-        label: getCreatorResultsTabLabel("all"),
-        count: activeItems.length,
-      });
-    }
-
-    tabs.push({
-      key: "archived",
-      label: getCreatorResultsTabLabel("archived"),
-      count: archivedCount,
-    });
-
-    if (downloadedCount > 0) {
-      tabs.push({
-        key: "downloaded",
-        label: getCreatorResultsTabLabel("downloaded"),
-        count: downloadedCount,
-      });
-    }
-
-    return tabs.filter((tab) => tab.count > 0);
-  }
-
   const tabs = [
     {
       key: "all",
       label: getCreatorResultsTabLabel("all"),
       count: activeItems.length,
     },
-    ...["published", "castIn", "characters", "characterCameos"]
-      .filter((tabKey) => counts.has(tabKey))
-      .map((tabKey) => ({
-        key: tabKey,
-        label: getCreatorResultsTabLabel(tabKey),
-        count: counts.get(tabKey) || 0,
-      })),
   ];
+
+  if (canShowCreatorTabs && counts.size > 1) {
+    tabs.push(
+      ...["published", "castIn", "characters", "characterCameos"]
+        .filter((tabKey) => counts.has(tabKey))
+        .map((tabKey) => ({
+          key: tabKey,
+          label: getCreatorResultsTabLabel(tabKey),
+          count: counts.get(tabKey) || 0,
+        })),
+    );
+  }
 
   if (archivedCount > 0) {
     tabs.push({

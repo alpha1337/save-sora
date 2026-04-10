@@ -170,6 +170,27 @@ export async function requestScan(sources, searchQuery) {
 }
 
 /**
+ * Starts a new scan with an explicit update-check mode.
+ *
+ * @param {string[]} sources
+ * @param {string} searchQuery
+ * @param {"full" | "head_match"} updateCheckMode
+ * @returns {Promise<object>}
+ */
+export async function requestScanWithMode(sources, searchQuery, updateCheckMode = "full") {
+  const response = await sendPopupMessage(
+    {
+      type: "START_SCAN",
+      sources,
+      searchQuery,
+      updateCheckMode: updateCheckMode === "head_match" ? "head_match" : "full",
+    },
+    "Could not fetch the video list.",
+  );
+  return response.state;
+}
+
+/**
  * Requests that the active fetch be canceled.
  *
  * @returns {Promise<object>}
@@ -232,6 +253,19 @@ export async function requestResetState() {
     { type: "RESET_STATE" },
     "Could not reset the current video list.",
   );
+}
+
+/**
+ * Resets only the active working session while preserving stored source history.
+ *
+ * @returns {Promise<object>}
+ */
+export async function requestResetWorkingSession() {
+  const response = await sendPopupMessage(
+    { type: "RESET_WORKING_SESSION" },
+    "Could not start over from a fresh session.",
+  );
+  return response.state;
 }
 
 /**

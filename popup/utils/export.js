@@ -1,7 +1,7 @@
-import { getItemKey, getItemReviewUrl } from "./items.js";
+import { getDefaultItemTitle, getItemKey } from "./items.js";
 
 /**
- * CSV export helpers for the popup.
+ * Metadata export helpers for the popup.
  *
  * The popup already has the selected working set in memory, so generating the
  * CSV locally keeps the feature simple and avoids routing a one-off file export
@@ -9,57 +9,34 @@ import { getItemKey, getItemReviewUrl } from "./items.js";
  */
 
 /**
- * Builds a CSV string containing the Sora page URLs for the current selection.
+ * Resolves the best metadata text available for a fetched item.
  *
- * @param {object[]} items
- * @param {string[]} selectedKeys
- * @returns {{csvText:string|null, exportedCount:number, skippedCount:number}}
+ * The fallback order intentionally mirrors the archive metadata export so both
+ * download paths stay aligned: prompt -> description -> discovery phrase ->
+ * caption.
+ *
+ * @param {object} item
+ * @returns {string}
  */
-export function buildSelectedUrlsCsv(items, selectedKeys) {
-  const selectedKeySet = new Set(Array.isArray(selectedKeys) ? selectedKeys : []);
-  const rows = [];
-  let skippedCount = 0;
+export function getItemMetadataText(item) {
+  const candidates = [
+    item && typeof item.prompt === "string" ? item.prompt.trim() : "",
+    item && typeof item.description === "string" ? item.description.trim() : "",
+    item && typeof item.discoveryPhrase === "string" ? item.discoveryPhrase.trim() : "",
+    item && typeof item.caption === "string" ? item.caption.trim() : "",
+  ];
 
-  for (const item of Array.isArray(items) ? items : []) {
-    if (!selectedKeySet.has(getItemKey(item))) {
-      continue;
-    }
-
-    const reviewUrl = getItemReviewUrl(item);
-    if (!reviewUrl) {
-      skippedCount += 1;
-      continue;
-    }
-
-    rows.push(reviewUrl);
-  }
-
-  if (!rows.length) {
-    return {
-      csvText: null,
-      exportedCount: 0,
-      skippedCount,
-    };
-  }
-
-  const csvLines = ["url", ...rows.map(escapeCsvValue)];
-  return {
-    csvText: `\uFEFF${csvLines.join("\r\n")}\r\n`,
-    exportedCount: rows.length,
-    skippedCount,
-  };
+  return candidates.find(Boolean) || "";
 }
 
 /**
- * Builds a single-column CSV containing prompt text for the current selection.
- *
- * When prompt text is missing, the export falls back to the item's description.
+ * Builds a plain-text metadata export for the current selection.
  *
  * @param {object[]} items
  * @param {string[]} selectedKeys
- * @returns {{csvText:string|null, exportedCount:number, skippedCount:number}}
+ * @returns {{textContent:string|null, exportedCount:number, skippedCount:number}}
  */
-export function buildSelectedPromptsCsv(items, selectedKeys) {
+export function buildSelectedMetadataText(items, selectedKeys) {
   const selectedKeySet = new Set(Array.isArray(selectedKeys) ? selectedKeys : []);
   const rows = [];
   let skippedCount = 0;
@@ -69,72 +46,53 @@ export function buildSelectedPromptsCsv(items, selectedKeys) {
       continue;
     }
 
-    const prompt =
-      item && typeof item.prompt === "string"
-        ? item.prompt.trim()
-        : "";
-    const description =
-      item && typeof item.description === "string"
-        ? item.description.trim()
-        : "";
-    const exportText = prompt || description;
+    const exportText = getItemMetadataText(item);
 
     if (!exportText) {
       skippedCount += 1;
       continue;
     }
 
-    rows.push(exportText);
+    const title = getDefaultItemTitle(item).trim() || (item && typeof item.id === "string" ? item.id : "Video");
+    rows.push(title && title !== exportText ? `${title}\n${exportText}` : exportText);
   }
 
   if (!rows.length) {
     return {
-      csvText: null,
+      textContent: null,
       exportedCount: 0,
       skippedCount,
     };
   }
 
-  const csvLines = ["prompt", ...rows.map(escapeCsvValue)];
   return {
-    csvText: `\uFEFF${csvLines.join("\r\n")}\r\n`,
+    textContent: rows.join("\n\n"),
     exportedCount: rows.length,
     skippedCount,
   };
 }
 
 /**
- * Returns a stable, human-readable filename for the exported CSV.
+ * Returns a stable filename for the selected metadata text export.
  *
  * @param {Date} [now]
  * @returns {string}
  */
-export function buildSelectedUrlsFilename(now = new Date()) {
+export function buildSelectedMetadataFilename(now = new Date()) {
   const isoDate = now.toISOString().slice(0, 10);
-  return `save-sora-selected-urls-${isoDate}.csv`;
+  return `save-sora-selected-metadata-${isoDate}.txt`;
 }
 
 /**
- * Returns a stable filename for the selected prompts CSV.
+ * Downloads plain text through the extension downloads permission.
  *
- * @param {Date} [now]
- * @returns {string}
- */
-export function buildSelectedPromptsFilename(now = new Date()) {
-  const isoDate = now.toISOString().slice(0, 10);
-  return `save-sora-selected-prompts-${isoDate}.csv`;
-}
-
-/**
- * Downloads the CSV through the extension downloads permission.
- *
- * @param {string} csvText
+ * @param {string} textContent
  * @param {string} filename
  * @returns {Promise<number|undefined>}
  */
-export async function downloadCsvText(csvText, filename) {
-  const blob = new Blob([csvText], {
-    type: "text/csv;charset=utf-8",
+export async function downloadTextFile(textContent, filename) {
+  const blob = new Blob([textContent], {
+    type: "text/plain;charset=utf-8",
   });
   const objectUrl = URL.createObjectURL(blob);
 
@@ -149,14 +107,4 @@ export async function downloadCsvText(csvText, filename) {
       URL.revokeObjectURL(objectUrl);
     }, 1000);
   }
-}
-
-/**
- * Escapes one CSV cell.
- *
- * @param {string} value
- * @returns {string}
- */
-function escapeCsvValue(value) {
-  return `"${String(value).replace(/"/g, "\"\"")}"`;
 }

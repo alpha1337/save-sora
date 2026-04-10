@@ -28,6 +28,9 @@ const updateManifestPath = path.join(distRoot, `${packageSlug}-update-manifest.j
 const requiredRootEntries = [
   "manifest.json",
   "background.js",
+  "background/archive/organizer.js",
+  "background/shared/source-selection.js",
+  "background/shared/source-selection.mjs",
   "offscreen.html",
   "offscreen.js",
   "popup.html",

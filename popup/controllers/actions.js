@@ -5,19 +5,18 @@ import {
   requestResumeScan,
   requestAbortDownloads,
   requestDownloadSelected,
-  requestResetState,
+  requestResetWorkingSession,
   requestScan,
+  requestScanWithMode,
   saveCharacterSelection,
   saveCreatorSelection,
 } from "../runtime.js";
 import { popupState } from "../state.js";
 import { getFetchUiState } from "../utils/runtime-state.js";
 import {
-  buildSelectedPromptsCsv,
-  buildSelectedPromptsFilename,
-  buildSelectedUrlsCsv,
-  buildSelectedUrlsFilename,
-  downloadCsvText,
+  buildSelectedMetadataFilename,
+  buildSelectedMetadataText,
+  downloadTextFile,
 } from "../utils/export.js";
 import { hideNotice, setControlsDisabled, showNotice } from "../ui/layout.js";
 import { updateDownloadOverlay } from "../ui/overlay.js";
@@ -48,12 +47,19 @@ import { handleBatchArchiveStateChange } from "./item-mutations.js";
 export async function handleRunFormSubmit(event) {
   event.preventDefault();
 
-  const fetchUiState = getFetchUiState(
+  const baseFetchUiState = getFetchUiState(
     popupState.latestRuntimeState,
     popupState.latestRenderState,
   );
+  const fetchUiState = isSourceSelectionScreenVisible()
+    ? {
+      ...baseFetchUiState,
+      primaryActionMode: "scan",
+    }
+    : baseFetchUiState;
   const isResetMode = fetchUiState.primaryActionMode === "reset";
   const isResumeMode = fetchUiState.primaryActionMode === "resume";
+  const isRefreshMode = fetchUiState.primaryActionMode === "refresh";
   const sources = getSelectedSourceValues(dom.sourceSelectInputs);
 
   closeAllSourceMenus();
@@ -69,12 +75,20 @@ export async function handleRunFormSubmit(event) {
   try {
     let immediateState = null;
     if (isResetMode) {
-      await requestResetState();
+      immediateState = await requestResetWorkingSession();
     } else if (isResumeMode) {
       immediateState = await requestResumeScan();
     } else {
       await persistScopedSelectionBeforeScan(sources);
-      immediateState = await requestScan(sources, popupState.browseState.query);
+      if (isRefreshMode) {
+        immediateState = await requestScanWithMode(
+          sources,
+          popupState.browseState.query,
+          "head_match",
+        );
+      } else {
+        immediateState = await requestScan(sources, popupState.browseState.query);
+      }
     }
 
     if (immediateState && typeof immediateState === "object") {
@@ -159,70 +173,25 @@ export async function handleDownloadButtonClick() {
 }
 
 /**
- * Exports a CSV containing the Sora URLs for the current selection.
- */
-export async function handleExportUrlsButtonClick() {
-  hideNotice(dom.warningBox);
-  hideNotice(dom.errorBox);
-
-  const selectedKeys = getSelectedKeysFromDom();
-  const { csvText, exportedCount, skippedCount } = buildSelectedUrlsCsv(
-    popupState.latestRenderState.items,
-    selectedKeys,
-  );
-
-  if (!csvText || exportedCount === 0) {
-    showNotice(dom.errorBox, "The current selection does not include any exportable Sora URLs.");
-    return;
-  }
-
-  try {
-    await downloadCsvText(csvText, buildSelectedUrlsFilename());
-  } catch (error) {
-    showNotice(dom.errorBox, error instanceof Error ? error.message : String(error));
-    return;
-  }
-
-  if (skippedCount > 0) {
-    showNotice(
-      dom.warningBox,
-      `Downloaded a CSV with ${exportedCount} URL(s). ${skippedCount} selected item(s) were skipped because a Sora page URL was not available.`,
-    );
-  }
-}
-
-/**
- * Exports using the popup's currently selected export type.
+ * Downloads the current selection's metadata as plain text.
  */
 export async function handleExportButtonClick() {
-  if (popupState.preferredExportType === "urls") {
-    await handleExportUrlsButtonClick();
-    return;
-  }
-
-  await handleExportPromptsButtonClick();
-}
-
-/**
- * Exports a single-column CSV containing prompt text for the current selection.
- */
-export async function handleExportPromptsButtonClick() {
   hideNotice(dom.warningBox);
   hideNotice(dom.errorBox);
 
   const selectedKeys = getSelectedKeysFromDom();
-  const { csvText, exportedCount, skippedCount } = buildSelectedPromptsCsv(
+  const { textContent, exportedCount, skippedCount } = buildSelectedMetadataText(
     popupState.latestRenderState.items,
     selectedKeys,
   );
 
-  if (!csvText || exportedCount === 0) {
-    showNotice(dom.errorBox, "The current selection does not include any exportable prompts.");
+  if (!textContent || exportedCount === 0) {
+    showNotice(dom.errorBox, "The current selection does not include any exportable metadata.");
     return;
   }
 
   try {
-    await downloadCsvText(csvText, buildSelectedPromptsFilename());
+    await downloadTextFile(textContent, buildSelectedMetadataFilename());
   } catch (error) {
     showNotice(dom.errorBox, error instanceof Error ? error.message : String(error));
     return;
@@ -231,8 +200,8 @@ export async function handleExportPromptsButtonClick() {
   showNotice(
     dom.warningBox,
     skippedCount > 0
-      ? `Downloaded a CSV with ${exportedCount} prompt(s). ${skippedCount} selected item(s) were skipped because prompt text was not available.`
-      : `Downloaded a CSV with ${exportedCount} prompt(s).`,
+      ? `Downloaded metadata for ${exportedCount} video(s). ${skippedCount} selected item(s) were skipped because no prompt or fallback text was available.`
+      : `Downloaded metadata for ${exportedCount} video(s).`,
   );
 }
 
@@ -242,15 +211,26 @@ export async function handleExportPromptsButtonClick() {
 export async function handleDownloadOverlayCancel() {
   const action = dom.downloadOverlayCancel?.dataset.action || "cancel";
   if (action === "return") {
-    await refreshStatus();
     popupState.downloadOverlaySessionActive = false;
     popupState.pendingDownloadStart = false;
+    popupState.bulkArchiveSelectionKeys = [];
+    popupState.activeCreatorResultsTab = "all";
+    popupState.browseState.query = "";
+    if (dom.searchInput instanceof HTMLInputElement) {
+      dom.searchInput.value = "";
+    }
+    const immediateState = await requestResetWorkingSession();
+    if (immediateState && typeof immediateState === "object") {
+      renderState(immediateState);
+      syncPollingForState(immediateState);
+    }
     updateDownloadOverlay({
       phase: popupState.latestRenderState.phase || "idle",
       runTotal: popupState.latestSummaryContext.downloadableCount,
       completed: 0,
       failed: 0,
     });
+    await refreshStatus();
     return;
   }
 
@@ -428,4 +408,35 @@ export async function handleArchiveSelectedClick() {
 
   popupState.bulkArchiveSelectionKeys = [];
   applyCurrentSelectionUi();
+}
+
+/**
+ * Resets the current overview session while preserving saved sources and settings.
+ */
+export async function handleGoBackClick() {
+  hideNotice(dom.warningBox);
+  hideNotice(dom.errorBox);
+  closeAllSourceMenus();
+  setControlsDisabled(true);
+
+  popupState.pendingDownloadStart = false;
+  popupState.downloadOverlaySessionActive = false;
+  popupState.bulkArchiveSelectionKeys = [];
+  popupState.activeCreatorResultsTab = "all";
+  popupState.browseState.query = "";
+  if (dom.searchInput instanceof HTMLInputElement) {
+    dom.searchInput.value = "";
+  }
+
+  try {
+    const immediateState = await requestResetWorkingSession();
+    if (immediateState && typeof immediateState === "object") {
+      renderState(immediateState);
+      syncPollingForState(immediateState);
+    }
+  } catch (error) {
+    showNotice(dom.errorBox, error instanceof Error ? error.message : String(error));
+  } finally {
+    await refreshStatus();
+  }
 }

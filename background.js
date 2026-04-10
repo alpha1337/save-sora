@@ -56,6 +56,9 @@ const UPDATE_PACKAGE_IDLE_TIMEOUT_MS = 45000;
 const UPDATE_MANAGED_ROOT_ENTRIES = [
   "assets",
   "background.js",
+  "background/archive/organizer.js",
+  "background/shared/source-selection.js",
+  "background/shared/source-selection.mjs",
   "manifest.json",
   "offscreen.html",
   "offscreen.js",
@@ -88,6 +91,15 @@ const FETCH_PROCESSING_STEP_COUNT = 2;
 const FETCH_PROGRESS_CHUNK_SIZE = 250;
 const ARCHIVE_DEBUG_MAX_JOBS = 8;
 const ARCHIVE_DEBUG_MAX_EVENTS = 400;
+const ARCHIVE_DEBUG_KEY = "__SAVE_SORA_ZIP_DEBUG__";
+const archiveDebugHelpersPromise = import("./background/archive/debug.mjs");
+void archiveDebugHelpersPromise
+  .then((module) => {
+    module.getArchiveDebugRoot(globalThis, ARCHIVE_DEBUG_KEY);
+  })
+  .catch((error) => {
+    console.warn("Failed to initialize archive debug helpers.", error);
+  });
 const AVAILABLE_SOURCE_VALUES = [
   "profile",
   "drafts",
@@ -116,6 +128,15 @@ const SOURCE_ROUTES = {
   draftShare: "https://sora.chatgpt.com/drafts",
 };
 
+importScripts(chrome.runtime.getURL("background/shared/source-selection.js"));
+importScripts(chrome.runtime.getURL("background/archive/organizer.js"));
+
+const sourceSelectionHelpers =
+  globalThis.__SAVE_SORA_SOURCE_SELECTION__ &&
+  typeof globalThis.__SAVE_SORA_SOURCE_SELECTION__ === "object"
+    ? globalThis.__SAVE_SORA_SOURCE_SELECTION__
+    : {};
+
 let currentState = createDefaultState();
 let currentCatalog = createDefaultCatalogState();
 let activeRun = null;
@@ -135,128 +156,63 @@ let pausedFetchRequest = null;
 let activeSyncSessionId = "";
 let activeSyncControlIntent = "";
 let pendingInterruptedSyncSession = null;
+let pendingStartScanUpdateCheckMode = "full";
 let fetchRecoveryInitError = "";
 let currentUpdateState = createDefaultUpdateState();
 let linkedInstallFolderRecordCache = null;
 let updaterReadyPromise = null;
 let zipLibraryLoaded = false;
 let downloadedVideoIdentitySet = new Set();
-const archiveDebugRoot = getArchiveDebugRoot();
 
-function getArchiveDebugRoot() {
-  if (!globalThis.__SAVE_SORA_ZIP_DEBUG__ || typeof globalThis.__SAVE_SORA_ZIP_DEBUG__ !== "object") {
-    globalThis.__SAVE_SORA_ZIP_DEBUG__ = {
-      activeJobId: "",
-      jobs: [],
-    };
-  }
-
-  return globalThis.__SAVE_SORA_ZIP_DEBUG__;
+async function getArchiveDebugRoot() {
+  const { getArchiveDebugRoot: loadGetArchiveDebugRoot } = await archiveDebugHelpersPromise;
+  return loadGetArchiveDebugRoot(globalThis, ARCHIVE_DEBUG_KEY);
 }
 
-function getArchiveDebugJob(jobId) {
-  if (typeof jobId !== "string" || !jobId) {
-    return null;
-  }
-
-  const debugRoot = getArchiveDebugRoot();
-  return Array.isArray(debugRoot.jobs)
-    ? debugRoot.jobs.find((job) => job && job.jobId === jobId) || null
-    : null;
+async function getArchiveDebugJob(jobId) {
+  const { getArchiveDebugJob: loadGetArchiveDebugJob } = await archiveDebugHelpersPromise;
+  return loadGetArchiveDebugJob(jobId, globalThis, ARCHIVE_DEBUG_KEY);
 }
 
-function ensureArchiveDebugJob(job, options = {}) {
-  if (!job || typeof job.jobId !== "string" || !job.jobId) {
-    return null;
-  }
-
-  const debugRoot = getArchiveDebugRoot();
-  if (!Array.isArray(debugRoot.jobs)) {
-    debugRoot.jobs = [];
-  }
-
-  let debugJob = getArchiveDebugJob(job.jobId);
-  if (!debugJob) {
-    debugJob = {
-      jobId: job.jobId,
-      archiveFilename:
-        typeof options.archiveFilename === "string" && options.archiveFilename
-          ? options.archiveFilename
-          : "",
-      totalItems: Number(options.totalItems) || 0,
-      startedAt: new Date().toISOString(),
-      completedAt: "",
-      status: "running",
-      itemResults: [],
-      events: [],
-    };
-    debugRoot.jobs.unshift(debugJob);
-    if (debugRoot.jobs.length > ARCHIVE_DEBUG_MAX_JOBS) {
-      debugRoot.jobs.length = ARCHIVE_DEBUG_MAX_JOBS;
-    }
-  }
-
-  debugRoot.activeJobId = job.jobId;
-  return debugJob;
+async function ensureArchiveDebugJob(job, options = {}) {
+  const { ensureArchiveDebugJob: loadEnsureArchiveDebugJob } = await archiveDebugHelpersPromise;
+  return loadEnsureArchiveDebugJob(
+    job,
+    options,
+    globalThis,
+    ARCHIVE_DEBUG_KEY,
+    ARCHIVE_DEBUG_MAX_JOBS,
+  );
 }
 
-function pushArchiveDebugEvent(jobId, type, payload = {}) {
-  const debugJob = ensureArchiveDebugJob({ jobId });
-  if (!debugJob) {
-    return null;
-  }
-
-  if (!Array.isArray(debugJob.events)) {
-    debugJob.events = [];
-  }
-
-  debugJob.events.push({
+async function pushArchiveDebugEvent(jobId, type, payload = {}) {
+  const { pushArchiveDebugEvent: loadPushArchiveDebugEvent } = await archiveDebugHelpersPromise;
+  return loadPushArchiveDebugEvent(
+    jobId,
     type,
-    timestamp: new Date().toISOString(),
-    ...payload,
-  });
-  if (debugJob.events.length > ARCHIVE_DEBUG_MAX_EVENTS) {
-    debugJob.events.splice(0, debugJob.events.length - ARCHIVE_DEBUG_MAX_EVENTS);
-  }
-
-  return debugJob;
+    payload,
+    globalThis,
+    ARCHIVE_DEBUG_KEY,
+    ARCHIVE_DEBUG_MAX_JOBS,
+    ARCHIVE_DEBUG_MAX_EVENTS,
+  );
 }
 
-function finalizeArchiveDebugJob(jobId, patch = {}) {
-  const debugJob = ensureArchiveDebugJob({ jobId });
-  if (!debugJob) {
-    return null;
-  }
-
-  Object.assign(debugJob, patch, {
-    completedAt: new Date().toISOString(),
-  });
-  return debugJob;
+async function finalizeArchiveDebugJob(jobId, patch = {}) {
+  const { finalizeArchiveDebugJob: loadFinalizeArchiveDebugJob } = await archiveDebugHelpersPromise;
+  return loadFinalizeArchiveDebugJob(
+    jobId,
+    patch,
+    globalThis,
+    ARCHIVE_DEBUG_KEY,
+    ARCHIVE_DEBUG_MAX_JOBS,
+  );
 }
 
-function createArchiveDebugPayload(details = {}) {
-  return {
-    itemKey: typeof details.itemKey === "string" ? details.itemKey : "",
-    id: typeof details.id === "string" ? details.id : "",
-    filename: typeof details.filename === "string" ? details.filename : "",
-    archivePath: typeof details.archivePath === "string" ? details.archivePath : "",
-    sourcePage: typeof details.sourcePage === "string" ? details.sourcePage : "",
-    downloadUrl: typeof details.downloadUrl === "string" ? details.downloadUrl : "",
-    attempts: Array.isArray(details.attempts)
-      ? details.attempts.map((attempt) => ({
-          attempt: Number(attempt && attempt.attempt) || 0,
-          downloadUrl: typeof attempt?.downloadUrl === "string" ? attempt.downloadUrl : "",
-          finalUrl: typeof attempt?.finalUrl === "string" ? attempt.finalUrl : "",
-          status: Number.isFinite(Number(attempt?.status)) ? Number(attempt.status) : null,
-          statusText: typeof attempt?.statusText === "string" ? attempt.statusText : "",
-          contentType: typeof attempt?.contentType === "string" ? attempt.contentType : "",
-          refreshed: attempt?.refreshed === true,
-          refreshedDownloadUrl:
-            typeof attempt?.refreshedDownloadUrl === "string" ? attempt.refreshedDownloadUrl : "",
-          error: typeof attempt?.error === "string" ? attempt.error : "",
-        }))
-      : [],
-  };
+async function createArchiveDebugPayload(details = {}) {
+  const { createArchiveDebugPayload: loadCreateArchiveDebugPayload } =
+    await archiveDebugHelpersPromise;
+  return loadCreateArchiveDebugPayload(details);
 }
 
 initializeZipLibrary();
@@ -427,6 +383,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         return;
       }
 
+      pendingStartScanUpdateCheckMode = normalizeUpdateCheckMode(message.updateCheckMode);
       const state = await startScan(message.sources, message.searchQuery);
       sendResponse({ ok: true, state });
     })().catch((error) => {
@@ -518,6 +475,35 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       })
       .catch((error) => {
         console.error("Failed to reset the Sora downloader state.", error);
+        sendResponse({ ok: false, error: getErrorMessage(error) });
+      });
+    return true;
+  }
+
+  if (message.type === "RESET_WORKING_SESSION") {
+    void (async () => {
+      if (currentState.phase === "fetching") {
+        await requestScanAbort();
+      } else if (currentState.phase === "fetch-paused") {
+        await abortPausedScan();
+      }
+
+      if (activeRun) {
+        try {
+          await activeRun;
+        } catch (_error) {
+          // Ignore teardown failures and continue into the working-session reset.
+        }
+      }
+
+      await resetWorkingSessionState();
+      return buildPopupStateSnapshotForView(currentState, { query: "" });
+    })()
+      .then((state) => {
+        sendResponse({ ok: true, state });
+      })
+      .catch((error) => {
+        console.error("Failed to reset the active working session.", error);
         sendResponse({ ok: false, error: getErrorMessage(error) });
       });
     return true;
@@ -1302,6 +1288,124 @@ function getExpectedFetchCountForSource(source, options = {}) {
 
   if (source === "characters") {
     return getExpectedCharacterAppearanceCount(options.characterAccounts);
+  }
+
+  return 0;
+}
+
+function getLogicalItemIdentityFromKnownKey(itemKey) {
+  if (typeof itemKey !== "string" || !itemKey) {
+    return "";
+  }
+
+  const parts = itemKey.split(":");
+  if (parts.length < 3) {
+    return itemKey;
+  }
+
+  const itemId = parts[parts.length - 2] || "";
+  if (!itemId) {
+    return itemKey;
+  }
+
+  if (parts.length >= 4) {
+    const sourceType = parts[parts.length - 3] || "";
+    if (sourceType) {
+      return `${sourceType}:${itemId}`;
+    }
+  }
+
+  return itemId;
+}
+
+function getStoredScopeItemCount(scopeKnownKeys, checkpoint = null) {
+  const logicalKnownIdentities = new Set();
+  if (scopeKnownKeys instanceof Set) {
+    for (const itemKey of scopeKnownKeys) {
+      const logicalIdentity = getLogicalItemIdentityFromKnownKey(itemKey);
+      if (logicalIdentity) {
+        logicalKnownIdentities.add(logicalIdentity);
+      }
+    }
+  }
+
+  if (logicalKnownIdentities.size > 0) {
+    return logicalKnownIdentities.size;
+  }
+
+  const checkpointCount = Number(checkpoint && checkpoint.itemsPersisted) || 0;
+  return Math.max(0, checkpointCount);
+}
+
+function getExpectedScopeTotalCountForProgressKey(source, progressKey, options = {}) {
+  const parsedProgress = parseVolatileBackupProgressKey(progressKey);
+  const sourcePage = parsedProgress.sourcePage;
+  const scopeId = parsedProgress.scopeId;
+
+  if (!sourcePage) {
+    return 0;
+  }
+
+  if (source === "characterAccounts") {
+    const normalizedCharacterAccounts = normalizeCharacterAccounts(options.characterAccounts);
+    const selectedIds = new Set(
+      normalizeSelectedCharacterAccountIds(
+        normalizedCharacterAccounts,
+        options.selectedCharacterAccountIds,
+        [],
+        { allowEmpty: true },
+      ),
+    );
+    const account = normalizedCharacterAccounts.find((candidate) => candidate.userId === scopeId);
+    if (!account || !selectedIds.has(account.userId)) {
+      return 0;
+    }
+
+    if (sourcePage === "characterAccountAppearances") {
+      return normalizeEstimatedFetchCount(account.cameoCount);
+    }
+
+    if (sourcePage === "characterAccountPosts") {
+      return normalizeEstimatedFetchCount(account.postCount);
+    }
+
+    return 0;
+  }
+
+  if (source === "characters") {
+    if (sourcePage === "characterAppearances") {
+      return getExpectedCharacterAppearanceCount(options.characterAccounts);
+    }
+
+    return 0;
+  }
+
+  if (source === "creators") {
+    const normalizedCreatorProfiles = normalizeCreatorProfiles(options.creatorProfiles);
+    const selectedIds = new Set(
+      normalizeSelectedCreatorProfileIds(
+        normalizedCreatorProfiles,
+        options.selectedCreatorProfileIds,
+        [],
+        { allowEmpty: true },
+      ),
+    );
+    const profile = normalizedCreatorProfiles.find((candidate) => candidate.profileId === scopeId);
+    if (!profile || !selectedIds.has(profile.profileId)) {
+      return 0;
+    }
+
+    if (sourcePage === "creatorPublished" || sourcePage === "creatorCharacters") {
+      return shouldFetchCreatorOfficialPosts(profile)
+        ? getCreatorProfileExpectedPostCount(profile)
+        : 0;
+    }
+
+    if (sourcePage === "creatorCameos" || sourcePage === "creatorCharacterCameos") {
+      return shouldFetchCreatorCommunityPosts(profile)
+        ? getCreatorProfileExpectedCameoCount(profile)
+        : 0;
+    }
   }
 
   return 0;
@@ -6750,6 +6854,58 @@ async function resetExtensionState(options = {}) {
   );
 }
 
+async function resetWorkingSessionState(options = {}) {
+  activeVolatileBackupSessionKey = "";
+  activeVolatileBackupResumeMeta = null;
+  pausedFetchRequest = null;
+  pendingInterruptedSyncSession = null;
+
+  const preservedCharacterAccounts = normalizeCharacterAccounts(currentState.characterAccounts);
+  const preservedSelectedCharacterAccountIds = normalizeSelectedCharacterAccountIds(
+    preservedCharacterAccounts,
+    currentState.selectedCharacterAccountIds,
+    [],
+    { allowEmpty: true },
+  );
+  const preservedCreatorProfiles = normalizeResolvedCreatorProfiles(currentState.creatorProfiles);
+  const preservedSelectedCreatorProfileIds = normalizeSelectedCreatorProfileIds(
+    preservedCreatorProfiles,
+    currentState.selectedCreatorProfileIds,
+    [],
+    { allowEmpty: true },
+  );
+  const preservedSettings =
+    currentState.settings && typeof currentState.settings === "object"
+      ? currentState.settings
+      : createDefaultState().settings;
+
+  await clearActiveSyncSession({ finalStatus: "completed" });
+
+  await setState(
+    createDefaultState({
+      phase: "idle",
+      message:
+        typeof options.message === "string" && options.message
+          ? options.message
+          : createDefaultState().message,
+      settings: {
+        ...createDefaultState().settings,
+        ...preservedSettings,
+      },
+      characterAccounts: preservedCharacterAccounts,
+      selectedCharacterAccountIds: preservedSelectedCharacterAccountIds,
+      hasExplicitCharacterAccountSelection: true,
+      creatorProfiles: preservedCreatorProfiles,
+      selectedCreatorProfileIds: preservedSelectedCreatorProfileIds,
+      hasExplicitCreatorProfileSelection: true,
+      finishedAt:
+        options && Object.prototype.hasOwnProperty.call(options, "finishedAt")
+          ? options.finishedAt
+          : new Date().toISOString(),
+    }),
+  );
+}
+
 async function clearLocalStorageState() {
   await chrome.storage.local.clear();
   activeVolatileBackupSessionKey = "";
@@ -6762,6 +6918,10 @@ async function clearLocalStorageState() {
 
 function normalizeSources(input) {
   return normalizeSourceSelection(input, []);
+}
+
+function normalizeUpdateCheckMode(value) {
+  return value === "head_match" ? "head_match" : "full";
 }
 
 function shouldIncludeSourceTypeInItemKey(item) {
@@ -6828,13 +6988,117 @@ function extractSharedPostId(value) {
   return match && typeof match[1] === "string" ? match[1] : "";
 }
 
+function normalizeDraftGenerationId(value) {
+  if (typeof value !== "string" || !value) {
+    return "";
+  }
+
+  const trimmed = value.trim();
+  return /^gen_[A-Za-z0-9_-]+$/.test(trimmed) ? trimmed : "";
+}
+
+function extractDraftGenerationIdFromValue(value, depth = 0, seen = new Set()) {
+  if (depth > 6 || value == null) {
+    return "";
+  }
+
+  if (typeof value === "string") {
+    return normalizeDraftGenerationId(value);
+  }
+
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const match = extractDraftGenerationIdFromValue(entry, depth + 1, seen);
+      if (match) {
+        return match;
+      }
+    }
+    return "";
+  }
+
+  if (typeof value !== "object") {
+    return "";
+  }
+
+  if (seen.has(value)) {
+    return "";
+  }
+  seen.add(value);
+
+  const directCandidates = [
+    value.generation_id,
+    value.generationId,
+    value.id,
+    value.generation && typeof value.generation === "object" ? value.generation.id : "",
+    value.generation && typeof value.generation === "object" ? value.generation.generation_id : "",
+    value.generation && typeof value.generation === "object" ? value.generation.generationId : "",
+  ];
+
+  for (const candidate of directCandidates) {
+    const match = normalizeDraftGenerationId(candidate);
+    if (match) {
+      return match;
+    }
+  }
+
+  const priorityKeys = [
+    "generation_id",
+    "generationId",
+    "generation",
+    "draft",
+    "item",
+    "data",
+    "output",
+    "result",
+    "post",
+    "creation_config",
+    "creationConfig",
+    "content",
+    "payload",
+    "object",
+    "target",
+    "entity",
+    "node",
+    "card",
+    "entry",
+    "asset",
+    "file",
+    "video",
+  ];
+
+  for (const candidateKey of priorityKeys) {
+    if (!(candidateKey in value)) {
+      continue;
+    }
+
+    const match = extractDraftGenerationIdFromValue(value[candidateKey], depth + 1, seen);
+    if (match) {
+      return match;
+    }
+  }
+
+  for (const [entryKey, entryValue] of Object.entries(value)) {
+    if (!/generation|draft|item|data|output|result|post|creation|content|payload|object|target|entity|node|card|entry|asset|file|video/i.test(entryKey)) {
+      continue;
+    }
+
+    const match = extractDraftGenerationIdFromValue(entryValue, depth + 1, seen);
+    if (match) {
+      return match;
+    }
+  }
+
+  return "";
+}
+
 function resolveNoWatermarkDownloadUrl(item) {
   if (!item || typeof item !== "object") {
     return "";
   }
 
   const itemId = typeof item.id === "string" ? item.id : "";
-  const generationId = typeof item.generationId === "string" ? item.generationId : "";
+  const generationId =
+    typeof item.generationId === "string" ? item.generationId : extractDraftGenerationIdFromValue(item);
 
   return (
     (item.download_urls &&
@@ -6868,13 +7132,7 @@ function getDraftGenerationIdForItem(item) {
     return "";
   }
 
-  const generationId =
-    typeof item.generationId === "string" && item.generationId
-      ? item.generationId
-      : typeof item.id === "string"
-        ? item.id
-        : "";
-  return /^gen_[A-Za-z0-9_-]+$/.test(generationId) ? generationId : "";
+  return extractDraftGenerationIdFromValue(item);
 }
 
 function extractDownloadFileIdentity(value) {
@@ -7511,11 +7769,21 @@ function createQueueSnapshotItem(item, errorOverride) {
     key,
     id: item && typeof item.id === "string" ? item.id : "",
     sourcePage: item && typeof item.sourcePage === "string" ? item.sourcePage : null,
+    sourceLabel: item && typeof item.sourceLabel === "string" ? item.sourceLabel : "",
+    sourceType: item && typeof item.sourceType === "string" ? item.sourceType : "",
     attachmentIndex: Number.isFinite(attachmentIndex) ? attachmentIndex : 0,
+    attachmentCount:
+      item && Number.isInteger(item.attachmentCount) ? item.attachmentCount : 1,
     filename:
       item && typeof item.filename === "string" && item.filename
         ? item.filename
         : `${(item && item.id) || "video"}.mp4`,
+    detailUrl: item && typeof item.detailUrl === "string" ? item.detailUrl : "",
+    downloadUrl: item && typeof item.downloadUrl === "string" ? item.downloadUrl : "",
+    prompt: item && typeof item.prompt === "string" ? item.prompt : "",
+    description: item && typeof item.description === "string" ? item.description : "",
+    caption: item && typeof item.caption === "string" ? item.caption : "",
+    discoveryPhrase: item && typeof item.discoveryPhrase === "string" ? item.discoveryPhrase : "",
   };
   const error =
     typeof errorOverride === "string" && errorOverride
@@ -7593,317 +7861,122 @@ function isFetchPausedDownloadMode(mode) {
   return mode === "selected-from-fetch-paused" || mode === "archive-selected-from-fetch-paused";
 }
 
-function buildArchiveWorkItems(items) {
-  const usedPaths = new Set();
+const archiveOrganizerHelperFactory =
+  globalThis.__SAVE_SORA_ARCHIVE_ORGANIZER__ &&
+  typeof globalThis.__SAVE_SORA_ARCHIVE_ORGANIZER__.createArchiveOrganizerHelpers === "function"
+    ? globalThis.__SAVE_SORA_ARCHIVE_ORGANIZER__.createArchiveOrganizerHelpers
+    : null;
 
-  return (Array.isArray(items) ? items : []).map((item) => {
-    const archivePath = uniquifyArchivePath(buildArchiveEntryPath(item), usedPaths);
-    return {
-      ...item,
-      archivePath,
-    };
-  });
+const archiveOrganizerHelpers = archiveOrganizerHelperFactory
+  ? archiveOrganizerHelperFactory({
+    getDownloadedVideoIdentitiesForItem,
+    getCanonicalItemKey,
+    getItemKey,
+    sanitizeFilenamePart,
+  })
+  : null;
+
+function getArchiveOrganizerHelpers() {
+  if (!archiveOrganizerHelpers || typeof archiveOrganizerHelpers !== "object") {
+    throw new Error("Archive organizer helpers were not initialized.");
+  }
+
+  return archiveOrganizerHelpers;
 }
 
-function buildArchiveEntryPath(item) {
-  return `${getArchiveMediaFolderPath(item)}/${getArchiveFilename(item)}`;
+function getArchiveMediaIdentity(item) {
+  return getArchiveOrganizerHelpers().getArchiveMediaIdentity(item);
 }
 
 function getArchiveMediaFolderPath(item) {
-  switch (item && item.sourcePage) {
-    case "profile":
-      return "published";
-    case "drafts":
-      return "drafts";
-    case "likes":
-      return "liked";
-    case "cameos":
-      return "cameos";
-    case "characters":
-      return `characters/${getArchiveCharacterFolderName(item)}/${item && item.sourceType === "draft" ? "drafts" : "published"}`;
-    case "creatorPublished":
-      return `creators/${getArchiveCreatorFolderName(item)}/published`;
-    case "creatorCameos":
-      return `creators/${getArchiveCreatorFolderName(item)}/cameos`;
-    case "creatorCharacters":
-      return `creators/${getArchiveCreatorFolderName(item)}/characters`;
-    case "creatorCharacterCameos":
-      return `creators/${getArchiveCreatorFolderName(item)}/character-cameos`;
-    default:
-      return "videos";
-  }
+  return getArchiveOrganizerHelpers().getArchiveMediaFolderPath(item);
 }
 
 function getArchiveFolderImagePath(item) {
-  if (!item || item.sourcePage !== "characters") {
-    if (
-      item &&
-      (item.sourcePage === "creatorPublished" ||
-        item.sourcePage === "creatorCameos" ||
-        item.sourcePage === "creatorCharacters" ||
-        item.sourcePage === "creatorCharacterCameos")
-    ) {
-      return getArchiveMediaFolderPath(item);
-    }
-    return getArchiveMediaFolderPath(item);
-  }
-
-  return `characters/${getArchiveCharacterFolderName(item)}`;
+  return getArchiveOrganizerHelpers().getArchiveFolderImagePath(item);
 }
 
 function getArchiveCharacterFolderName(item) {
-  const preferredName =
-    (item && item.characterAccountDisplayName) ||
-    (item && item.characterAccountUsername) ||
-    (item && item.characterAccountId) ||
-    "character";
-  return sanitizeFilenamePart(preferredName) || "character";
+  return getArchiveOrganizerHelpers().getArchiveCharacterFolderName(item);
 }
 
 function getArchiveCreatorFolderName(item) {
-  const preferredName =
-    (item && item.creatorProfileDisplayName) ||
-    (item && item.creatorProfileUsername) ||
-    (item && item.creatorProfileId) ||
-    "creator";
-  return sanitizeFilenamePart(preferredName) || "creator";
+  return getArchiveOrganizerHelpers().getArchiveCreatorFolderName(item);
 }
 
 function getArchiveFilename(item) {
-  const rawFilename =
-    item && typeof item.filename === "string" && item.filename
-      ? item.filename
-      : `${(item && item.id) || "video"}.mp4`;
-  const lastSegment = rawFilename.split("/").pop() || rawFilename;
-  const extensionMatch = lastSegment.match(/(\.[A-Za-z0-9]{1,10})$/);
-  const extension = extensionMatch ? extensionMatch[1].toLowerCase() : ".bin";
-  const basename = extensionMatch ? lastSegment.slice(0, -extension.length) : lastSegment;
-  const safeBasename = sanitizeFilenamePart(basename) || "video";
-  return `${safeBasename}${extension}`;
+  return getArchiveOrganizerHelpers().getArchiveFilename(item);
 }
 
-function uniquifyArchivePath(desiredPath, usedPaths) {
-  const normalizedPath = String(desiredPath || "").replace(/^\/+|\/+$/g, "");
-  if (!usedPaths.has(normalizedPath)) {
-    usedPaths.add(normalizedPath);
-    return normalizedPath;
-  }
-
-  const lastSlashIndex = normalizedPath.lastIndexOf("/");
-  const folderPath = lastSlashIndex === -1 ? "" : normalizedPath.slice(0, lastSlashIndex);
-  const filename = lastSlashIndex === -1 ? normalizedPath : normalizedPath.slice(lastSlashIndex + 1);
-  const extensionMatch = filename.match(/(\.[A-Za-z0-9]{1,10})$/);
-  const extension = extensionMatch ? extensionMatch[1] : "";
-  const basename = extensionMatch ? filename.slice(0, -extension.length) : filename;
-
-  for (let suffix = 2; suffix < 10000; suffix += 1) {
-    const candidateFilename = `${basename}-${suffix}${extension}`;
-    const candidatePath = folderPath ? `${folderPath}/${candidateFilename}` : candidateFilename;
-    if (!usedPaths.has(candidatePath)) {
-      usedPaths.add(candidatePath);
-      return candidatePath;
-    }
-  }
-
-  usedPaths.add(normalizedPath);
-  return normalizedPath;
+function buildArchiveWorkItems(items) {
+  return getArchiveOrganizerHelpers().buildArchiveWorkItems(items);
 }
 
 function buildArchiveFolderImages(items) {
-  const folderImages = new Map();
-
-  for (const item of Array.isArray(items) ? items : []) {
-    const candidate = getArchiveFolderImageCandidate(item);
-    if (!candidate || folderImages.has(candidate.folderPath)) {
-      continue;
-    }
-
-    folderImages.set(candidate.folderPath, candidate);
-  }
-
-  return [...folderImages.values()].sort((left, right) => left.folderPath.localeCompare(right.folderPath));
+  return getArchiveOrganizerHelpers().buildArchiveFolderImages(items);
 }
 
-function buildArchiveSupplementalEntries(items, now = new Date()) {
-  const createdAt = now.toISOString();
-  return [
-    createArchiveCsvSupplementalEntry(
-      `metadata/${buildArchiveSelectedPromptsFilename(now)}`,
-      "prompt",
-      buildArchivePromptCsvRows(items),
-      createdAt,
-    ),
-    createArchiveCsvSupplementalEntry(
-      `metadata/${buildArchiveSelectedUrlsFilename(now)}`,
-      "url",
-      buildArchiveUrlCsvRows(items),
-      createdAt,
-    ),
-  ];
+function buildArchiveSupplementalEntries(items, organizerRows = [], now = new Date()) {
+  return getArchiveOrganizerHelpers().buildArchiveSupplementalEntries(items, organizerRows, now);
 }
 
-function createArchiveCsvSupplementalEntry(archivePath, headerLabel, rows, createdAt) {
-  const csvText = buildArchiveCsvText(headerLabel, rows);
-  return {
-    archivePath,
-    createdAt,
-    blobContent: new Blob([csvText], {
-      type: "text/csv;charset=utf-8",
-    }),
-  };
-}
-
-function buildArchiveCsvText(headerLabel, rows) {
-  const csvLines = [headerLabel, ...(Array.isArray(rows) ? rows : []).map(escapeArchiveCsvValue)];
-  return `\uFEFF${csvLines.join("\r\n")}\r\n`;
-}
-
-function buildArchivePromptCsvRows(items) {
+// Compatibility wrappers kept in the orchestrator so the regression suite can
+// verify the expected metadata extraction contract while implementation lives in
+// background/archive/organizer.js.
+function buildArchiveMetadataText(items) {
   const rows = [];
 
   for (const item of Array.isArray(items) ? items : []) {
-    const prompt =
-      item && typeof item.prompt === "string"
-        ? item.prompt.trim()
-        : "";
-    const description =
-      item && typeof item.description === "string"
-        ? item.description.trim()
-        : "";
-    const exportText = prompt || description;
+    const exportText = getArchiveMetadataText(item);
 
     if (exportText) {
-      rows.push(exportText);
+      const title = getArchiveMetadataTitle(item);
+      rows.push(title && title !== exportText ? `${title}\r\n${exportText}` : exportText);
     }
   }
 
-  return rows;
+  return rows.join("\r\n\r\n");
 }
 
-function buildArchiveUrlCsvRows(items) {
-  const rows = [];
+function getArchiveMetadataText(item) {
+  const candidates = [
+    item && typeof item.prompt === "string" ? item.prompt.trim() : "",
+    item && typeof item.description === "string" ? item.description.trim() : "",
+    item && typeof item.discoveryPhrase === "string" ? item.discoveryPhrase.trim() : "",
+    item && typeof item.discovery_phrase === "string" ? item.discovery_phrase.trim() : "",
+    item && typeof item.caption === "string" ? item.caption.trim() : "",
+  ];
 
-  for (const item of Array.isArray(items) ? items : []) {
-    const reviewUrl = getArchiveReviewUrl(item);
-    if (reviewUrl) {
-      rows.push(reviewUrl);
-    }
-  }
-
-  return rows;
+  return candidates.find(Boolean) || "";
 }
 
-function buildArchiveSelectedPromptsFilename(now = new Date()) {
+function getArchiveMetadataTitle(item) {
+  const candidates = [
+    item && typeof item.filename === "string" ? item.filename.replace(/\.mp4$/i, "").trim() : "",
+    item && typeof item.discoveryPhrase === "string" ? item.discoveryPhrase.trim() : "",
+    item && typeof item.discovery_phrase === "string" ? item.discovery_phrase.trim() : "",
+    item && typeof item.prompt === "string" ? item.prompt.trim() : "",
+    item && typeof item.description === "string" ? item.description.trim() : "",
+    item && typeof item.caption === "string" ? item.caption.trim() : "",
+    item && typeof item.id === "string" ? item.id.trim() : "video",
+  ];
+
+  return candidates.find(Boolean) || "video";
+}
+
+function buildArchiveSelectedMetadataFilename(now = new Date()) {
   const isoDate = now.toISOString().slice(0, 10);
-  return `save-sora-selected-prompts-${isoDate}.csv`;
-}
-
-function buildArchiveSelectedUrlsFilename(now = new Date()) {
-  const isoDate = now.toISOString().slice(0, 10);
-  return `save-sora-selected-urls-${isoDate}.csv`;
-}
-
-function escapeArchiveCsvValue(value) {
-  return `"${String(value).replace(/"/g, "\"\"")}"`;
-}
-
-function getArchiveReviewUrl(item) {
-  const detailUrl =
-    item && typeof item.detailUrl === "string" && item.detailUrl.trim() ? item.detailUrl.trim() : "";
-  if (detailUrl) {
-    return detailUrl.startsWith("/")
-      ? `https://sora.chatgpt.com${detailUrl}`
-      : detailUrl;
-  }
-
-  const itemId = item && typeof item.id === "string" ? item.id.trim() : "";
-  const generationId =
-    item && typeof item.generationId === "string" ? item.generationId.trim() : "";
-  const noWatermarkUrl =
-    (item &&
-      item.download_urls &&
-      typeof item.download_urls === "object" &&
-      typeof item.download_urls.no_watermark === "string" &&
-      item.download_urls.no_watermark.trim()) ||
-    (item && typeof item.no_watermark === "string" ? item.no_watermark.trim() : "") ||
-    "";
-  const sharedPostMatch = noWatermarkUrl.match(/\/(?:api\/proxy\/)?video\/(s_[A-Za-z0-9_-]+)/i);
-
-  if (sharedPostMatch && typeof sharedPostMatch[1] === "string" && sharedPostMatch[1]) {
-    return `https://sora.chatgpt.com/p/${sharedPostMatch[1]}`;
-  }
-
-  const shouldUseDraftFallback =
-    item &&
-    (item.sourcePage === "drafts" ||
-      ((item.sourcePage === "cameos" ||
-        item.sourcePage === "characters" ||
-        item.sourcePage === "creatorCharacterCameos") &&
-        item.sourceType === "draft"));
-
-  if (shouldUseDraftFallback) {
-    if (itemId.startsWith("s_")) {
-      return `https://sora.chatgpt.com/p/${itemId}`;
-    }
-
-    if (generationId.startsWith("s_")) {
-      return `https://sora.chatgpt.com/p/${generationId}`;
-    }
-
-    if (generationId.startsWith("gen_")) {
-      return `https://sora.chatgpt.com/d/${generationId}`;
-    }
-
-    if (itemId.startsWith("gen_")) {
-      return `https://sora.chatgpt.com/d/${itemId}`;
-    }
-  }
-
-  if (
-    item &&
-    (item.sourcePage === "profile" ||
-      item.sourcePage === "creatorPublished" ||
-      item.sourcePage === "creatorCameos" ||
-      item.sourcePage === "creatorCharacters" ||
-      item.sourcePage === "likes" ||
-      item.sourcePage === "cameos" ||
-      item.sourcePage === "characters") &&
-    itemId
-  ) {
-    return `https://sora.chatgpt.com/p/${itemId}`;
-  }
-
-  return null;
-}
-
-function getArchiveFolderImageCandidate(item) {
-  if (!item) {
-    return null;
-  }
-
-  if (
-    item.sourcePage === "characters" &&
-    typeof item.characterAccountProfilePictureUrl === "string" &&
-    item.characterAccountProfilePictureUrl
-  ) {
-    return {
-      folderPath: getArchiveFolderImagePath(item),
-      imageUrl: item.characterAccountProfilePictureUrl,
-    };
-  }
-
-  if (typeof item.creatorProfilePictureUrl === "string" && item.creatorProfilePictureUrl) {
-    return {
-      folderPath: getArchiveFolderImagePath(item),
-      imageUrl: item.creatorProfilePictureUrl,
-    };
-  }
-
-  return null;
+  return `save-sora-selected-metadata-${isoDate}.txt`;
 }
 
 function createArchiveJobContext(downloadItems, options) {
-  const archiveItems = buildArchiveWorkItems(downloadItems);
+  const workPlan = buildArchiveWorkItems(downloadItems);
+  const archiveItems = Array.isArray(workPlan && workPlan.archiveItems)
+    ? workPlan.archiveItems
+    : [];
+  const organizerRows = Array.isArray(workPlan && workPlan.organizerRows)
+    ? workPlan.organizerRows
+    : [];
   return {
     jobId: createArchiveJobId(),
     mode: options && options.mode ? options.mode : "selected",
@@ -7915,7 +7988,7 @@ function createArchiveJobContext(downloadItems, options) {
     failedItems: [],
     scopeRefreshPromisesByKey: new Map(),
     folderImages: buildArchiveFolderImages(archiveItems),
-    supplementalEntries: buildArchiveSupplementalEntries(downloadItems),
+    supplementalEntries: buildArchiveSupplementalEntries(downloadItems, organizerRows),
     resolve: null,
     reject: null,
   };
@@ -8171,8 +8244,9 @@ function getCreatorProfileExpectedPostCount(profile) {
   ];
 
   for (const candidate of candidates) {
-    if (typeof candidate === "number" && Number.isFinite(candidate) && candidate > 0) {
-      return Math.floor(candidate);
+    const normalizedCandidate = normalizeEstimatedFetchCount(candidate);
+    if (normalizedCandidate > 0) {
+      return normalizedCandidate;
     }
   }
 
@@ -8202,28 +8276,20 @@ function getExpectedCreatorSelectionCount(creatorProfiles, selectedCreatorProfil
   return expectedCount;
 }
 
-function getCreatorFeedPageCap(creatorProfile) {
-  const expectedCount = getCreatorProfileExpectedPostCount(creatorProfile);
-  if (!expectedCount) {
-    return CREATOR_PROFILE_FEED_MIN_PAGE_CAP;
-  }
-
-  const expectedPages =
-    Math.ceil(expectedCount / Math.max(1, CREATOR_PROFILE_FEED_LIMIT)) +
-    CREATOR_PROFILE_FEED_PAGE_BUFFER;
-
-  return Math.min(
-    CREATOR_PROFILE_FEED_MAX_PAGE_CAP,
-    Math.max(CREATOR_PROFILE_FEED_MIN_PAGE_CAP, expectedPages),
-  );
+function getCreatorFeedPageCap(creatorProfile, maxItems = null) {
+  return getProfileFeedPageCap(getCreatorProfileExpectedPostCount(creatorProfile), maxItems);
 }
 
-function getProfileFeedPageCap(expectedCount) {
-  const numericExpectedCount = Number(expectedCount);
-  if (!Number.isFinite(numericExpectedCount) || numericExpectedCount <= 0) {
-    return CREATOR_PROFILE_FEED_MIN_PAGE_CAP;
+function getProfileFeedPageCap(expectedCount, maxItems = null) {
+  const normalizedMaxItems = getMaxVideosSetting({ maxVideos: maxItems });
+  if (!normalizedMaxItems) {
+    return CREATOR_PROFILE_FEED_MAX_PAGE_CAP;
   }
 
+  const numericExpectedCount = Math.max(
+    normalizeEstimatedFetchCount(expectedCount),
+    normalizedMaxItems,
+  );
   const expectedPages =
     Math.ceil(numericExpectedCount / Math.max(1, CREATOR_PROFILE_FEED_LIMIT)) +
     CREATOR_PROFILE_FEED_PAGE_BUFFER;
@@ -8297,6 +8363,124 @@ function getKnownItemKeysForSource(
         selectedCreatorProfileKinds,
       )
     ) {
+      continue;
+    }
+
+    knownKeys.add(getCanonicalItemKey(item));
+  }
+
+  return knownKeys;
+}
+
+/**
+ * Resolves the canonical item `sourcePage` values that map to a volatile progress scope.
+ *
+ * @param {string} source
+ * @param {string} progressSourcePage
+ * @returns {string[]}
+ */
+function getSourcePagesForProgressScope(source, progressSourcePage) {
+  if (typeof progressSourcePage !== "string" || !progressSourcePage) {
+    return [];
+  }
+
+  if (source === "characters") {
+    if (progressSourcePage === "characterAppearances") {
+      return ["cameos"];
+    }
+
+    if (progressSourcePage === "characterDrafts") {
+      return ["characters"];
+    }
+  }
+
+  if (source === "characterAccounts") {
+    if (progressSourcePage === "characterAccountAppearances") {
+      return ["characters"];
+    }
+
+    if (progressSourcePage === "characterAccountPosts") {
+      return ["profile"];
+    }
+
+    if (progressSourcePage === "characterAccountDrafts") {
+      return ["drafts"];
+    }
+  }
+
+  return [progressSourcePage];
+}
+
+/**
+ * Returns whether a compact catalog item belongs to a specific progress scope.
+ *
+ * @param {object} item
+ * @param {string} source
+ * @param {string} progressSourcePage
+ * @param {string} scopeId
+ * @returns {boolean}
+ */
+function doesItemMatchProgressScope(item, source, progressSourcePage, scopeId) {
+  if (!item || typeof item !== "object") {
+    return false;
+  }
+
+  const sourcePages = getSourcePagesForProgressScope(source, progressSourcePage);
+  if (sourcePages.length === 0) {
+    return false;
+  }
+
+  const itemSourcePage =
+    typeof item.sourcePage === "string" ? item.sourcePage : "";
+  if (!sourcePages.includes(itemSourcePage)) {
+    return false;
+  }
+
+  const normalizedScopeId =
+    typeof scopeId === "string" && scopeId ? scopeId : VOLATILE_BACKUP_DEFAULT_SCOPE_ID;
+
+  if (source === "creators" && normalizedScopeId !== VOLATILE_BACKUP_DEFAULT_SCOPE_ID) {
+    return (
+      typeof item.creatorProfileId === "string" &&
+      item.creatorProfileId === normalizedScopeId
+    );
+  }
+
+  if (source === "characterAccounts" && normalizedScopeId !== VOLATILE_BACKUP_DEFAULT_SCOPE_ID) {
+    return (
+      typeof item.characterAccountId === "string" &&
+      item.characterAccountId === normalizedScopeId
+    );
+  }
+
+  return true;
+}
+
+/**
+ * Builds the known-item key set for a specific source progress scope from catalog snapshots.
+ *
+ * @param {string} source
+ * @param {string} progressKey
+ * @param {object[]} [catalogItems]
+ * @returns {Set<string>}
+ */
+function getCatalogKnownItemKeysForProgressScope(
+  source,
+  progressKey,
+  catalogItems = currentCatalog.items,
+) {
+  const knownKeys = new Set();
+  const parsedProgress = parseVolatileBackupProgressKey(progressKey);
+  const progressSourcePage =
+    typeof parsedProgress.sourcePage === "string" ? parsedProgress.sourcePage : "";
+  const scopeId = typeof parsedProgress.scopeId === "string" ? parsedProgress.scopeId : "";
+
+  if (!progressSourcePage) {
+    return knownKeys;
+  }
+
+  for (const item of normalizeCatalogItems(catalogItems)) {
+    if (!doesItemMatchProgressScope(item, source, progressSourcePage, scopeId)) {
       continue;
     }
 
@@ -8907,11 +9091,11 @@ async function startOffscreenArchiveBuild(job) {
     throw new Error("The archive job could not be initialized.");
   }
 
-  ensureArchiveDebugJob(job, {
+  await ensureArchiveDebugJob(job, {
     archiveFilename: job.archiveFilename,
     totalItems: Array.isArray(job.pendingItems) ? job.pendingItems.length : 0,
   });
-  pushArchiveDebugEvent(job.jobId, "job-start", {
+  await pushArchiveDebugEvent(job.jobId, "job-start", {
     archiveFilename: job.archiveFilename,
     totalItems: Array.isArray(job.pendingItems) ? job.pendingItems.length : 0,
   });
@@ -8997,7 +9181,7 @@ async function handleOffscreenArchiveStage(message) {
     return;
   }
 
-  pushArchiveDebugEvent(message.jobId, "stage", {
+  await pushArchiveDebugEvent(message.jobId, "stage", {
     stage: typeof message.stage === "string" ? message.stage : "",
     message: typeof message.message === "string" ? message.message : "",
   });
@@ -9058,8 +9242,10 @@ async function handleOffscreenArchiveItemResult(message) {
     return;
   }
 
-  const debugPayload = createArchiveDebugPayload(message && typeof message.debug === "object" ? message.debug : {});
-  const debugJob = ensureArchiveDebugJob(activeArchiveJob);
+  const debugPayload = await createArchiveDebugPayload(
+    message && typeof message.debug === "object" ? message.debug : {},
+  );
+  const debugJob = await ensureArchiveDebugJob(activeArchiveJob);
   if (debugJob) {
     if (!Array.isArray(debugJob.itemResults)) {
       debugJob.itemResults = [];
@@ -9080,7 +9266,7 @@ async function handleOffscreenArchiveItemResult(message) {
 
   if (message.success) {
     activeArchiveJob.successfulItems.push(item);
-    pushArchiveDebugEvent(message.jobId, "item-success", {
+    await pushArchiveDebugEvent(message.jobId, "item-success", {
       itemKey: item.key || getItemKey(item),
       filename: item.filename,
       archivePath: item.archivePath,
@@ -9103,7 +9289,7 @@ async function handleOffscreenArchiveItemResult(message) {
           : "Could not add the item to the ZIP archive.",
       ),
     );
-    pushArchiveDebugEvent(message.jobId, "item-failure", {
+    await pushArchiveDebugEvent(message.jobId, "item-failure", {
       itemKey: item.key || getItemKey(item),
       filename: item.filename,
       archivePath: item.archivePath,
@@ -9163,7 +9349,7 @@ async function handleOffscreenArchiveComplete(message) {
     return;
   }
 
-  finalizeArchiveDebugJob(message.jobId, {
+  await finalizeArchiveDebugJob(message.jobId, {
     status: "complete",
     objectUrl:
       typeof message.objectUrl === "string" && message.objectUrl ? message.objectUrl : "",
@@ -9194,11 +9380,11 @@ async function handleOffscreenArchiveError(message) {
     return;
   }
 
-  finalizeArchiveDebugJob(message.jobId, {
+  await finalizeArchiveDebugJob(message.jobId, {
     status: message && message.aborted ? "aborted" : "error",
     error: typeof message?.error === "string" ? message.error : "",
   });
-  pushArchiveDebugEvent(message.jobId, "job-error", {
+  await pushArchiveDebugEvent(message.jobId, "job-error", {
     aborted: message && message.aborted === true,
     error: typeof message?.error === "string" ? message.error : "",
   });
@@ -9457,9 +9643,16 @@ async function startScan(requestedSources, requestedSearchQuery = "", options = 
 
   const sources = normalizeSources(requestedSources);
   const searchQuery = normalizeSearchText(requestedSearchQuery);
+  const updateCheckMode = normalizeUpdateCheckMode(
+    Object.prototype.hasOwnProperty.call(options, "updateCheckMode")
+      ? options.updateCheckMode
+      : pendingStartScanUpdateCheckMode,
+  );
+  pendingStartScanUpdateCheckMode = "full";
   pausedFetchRequest = {
     sources: [...sources],
     searchQuery,
+    updateCheckMode,
   };
 
   if (sources.length === 0) {
@@ -9524,6 +9717,7 @@ async function startScan(requestedSources, requestedSearchQuery = "", options = 
   activeRun = (async () => {
     try {
       await scanSources(sources, searchQuery, {
+        updateCheckMode,
         onFetchStateReady: async () => {
           settleBootstrapState(
             await buildPopupStateSnapshotForView(currentState, {
@@ -9687,6 +9881,7 @@ async function scanSources(sources, searchQuery = "", options = {}) {
     options && typeof options.onFetchStateReady === "function"
       ? options.onFetchStateReady
       : null;
+  const updateCheckMode = normalizeUpdateCheckMode(options.updateCheckMode);
   const maxVideos = getEffectiveMaxVideosForSources(sources, currentState.settings);
   const selectedCharacterAccountIds = [...currentState.selectedCharacterAccountIds];
   const selectedCreatorProfileIds = [...currentState.selectedCreatorProfileIds];
@@ -9833,6 +10028,7 @@ async function scanSources(sources, searchQuery = "", options = {}) {
       enableVolatileBackup: !searchQuery,
       resumeVisibleItems: isResumingCurrentPausedSession ? cachedFilteredItems : [],
       resumeBaselineCount,
+      updateCheckMode,
     });
     const mergedCatalogItems = mergeCatalogItemsWithSourceResults(
       currentCatalog.items,
@@ -9960,6 +10156,16 @@ async function scanSources(sources, searchQuery = "", options = {}) {
       lastError: "",
       partialWarning: collected.partialWarning,
     };
+    const shouldKeepResumableResults =
+      !maxVideos &&
+      collected.sourceResults.some((result) => result && result.isExhaustive !== true);
+    const resumableFetchRequest = shouldKeepResumableResults
+      ? {
+          sources: [...sources],
+          searchQuery,
+        }
+      : null;
+    const resumableCount = filteredItems.length + (Number(collected.backedUpItemCount) || 0);
 
     if (!filteredItems.length) {
       requestedControlAction = null;
@@ -9990,9 +10196,27 @@ async function scanSources(sources, searchQuery = "", options = {}) {
         status: "completed",
         fetchedCount: filteredItems.length + (Number(collected.backedUpItemCount) || 0),
         previewCount: filteredItems.length,
-      }).catch((error) => {
-        console.warn("Failed to finalize the volatile backup metadata.", error);
+        }).catch((error) => {
+          console.warn("Failed to finalize the volatile backup metadata.", error);
+        });
+    }
+    if (shouldKeepResumableResults) {
+      await setState({
+        ...baseState,
+        phase: "fetch-paused",
+        message: `Fetched ${resumableCount.toLocaleString()} videos so far. Resume to continue loading more.`,
+        resumableFetchRequest,
+        fetchProgress: getNextFetchProgress({
+          stage: "paused",
+          stageLabel: "Fetch paused",
+          detail: "Your current results stay available while the rest of this crawl is waiting to resume.",
+          itemsFound: resumableCount,
+        }),
+        finishedAt: new Date().toISOString(),
+        syncStatus: "paused",
       });
+      await markSyncSessionPaused("");
+      return;
     }
     await setState({
       ...baseState,
@@ -10183,130 +10407,27 @@ async function setSelectedKeys(requestedKeys, visibleKeys = []) {
 }
 
 function normalizeCharacterAccounts(value) {
-  return (Array.isArray(value) ? value : [])
-    .filter(
-      (account) =>
-        account &&
-        typeof account.userId === "string" &&
-        account.userId &&
-        account.userId.startsWith("ch_"),
-    )
-    .map((account) => ({
-      userId: account.userId,
-      username: typeof account.username === "string" ? account.username : "",
-      displayName:
-        typeof account.displayName === "string" && account.displayName
-          ? account.displayName
-          : typeof account.username === "string" && account.username
-            ? account.username
-            : account.userId,
-      postCount: Number.isFinite(Number(account.postCount)) ? Number(account.postCount) : 0,
-      cameoCount: Number.isFinite(Number(account.cameoCount)) ? Number(account.cameoCount) : 0,
-      permalink: typeof account.permalink === "string" ? account.permalink : null,
-      profilePictureUrl:
-        typeof account.profilePictureUrl === "string" ? account.profilePictureUrl : null,
-    }));
-}
-
-function decodeCreatorUrlSegment(value) {
-  if (typeof value !== "string" || !value) {
-    return "";
-  }
-
-  try {
-    return decodeURIComponent(value);
-  } catch (_error) {
-    return value;
-  }
+  return sourceSelectionHelpers.normalizeCharacterAccounts(value);
 }
 
 function normalizeCreatorUsername(value) {
-  if (typeof value !== "string") {
-    return "";
-  }
-
-  const cleaned = decodeCreatorUrlSegment(value)
-    .trim()
-    .replace(/^@+/, "")
-    .replace(/\/+$/, "");
-
-  if (!cleaned) {
-    return "";
-  }
-
-  const reservedSegments = new Set(["profile", "profiles", "drafts", "characters", "likes"]);
-  return reservedSegments.has(cleaned.toLowerCase()) ? "" : cleaned;
+  return sourceSelectionHelpers.normalizeCreatorUsername(value);
 }
 
 function getCreatorUsernameFromPathname(value) {
-  if (typeof value !== "string" || !value) {
-    return "";
-  }
-
-  const segments = value
-    .split("/")
-    .map((segment) => normalizeCreatorUsername(segment))
-    .filter(Boolean);
-
-  if (!segments.length) {
-    return "";
-  }
-
-  if (value.includes("/@")) {
-    const atSegment = value
-      .split("/")
-      .find((segment) => typeof segment === "string" && segment.trim().startsWith("@"));
-    return normalizeCreatorUsername(atSegment || "");
-  }
-
-  if (segments[0].toLowerCase() === "profile") {
-    return normalizeCreatorUsername(segments[1] || "");
-  }
-
-  return normalizeCreatorUsername(segments[0]);
+  return sourceSelectionHelpers.getCreatorUsernameFromPathname(value);
 }
 
 function getCreatorUsernameFromUrl(value) {
-  if (typeof value !== "string" || !value) {
-    return "";
-  }
-
-  try {
-    return getCreatorUsernameFromPathname(new URL(value, "https://sora.chatgpt.com").pathname);
-  } catch (_error) {
-    return getCreatorUsernameFromPathname(value);
-  }
+  return sourceSelectionHelpers.getCreatorUsernameFromUrl(value);
 }
 
 function isGenericCreatorDisplayName(value) {
-  if (typeof value !== "string") {
-    return false;
-  }
-
-  const normalized = value.trim().replace(/\s+/g, " ").toLowerCase();
-  if (!normalized) {
-    return false;
-  }
-
-  return (
-    normalized === "sora" ||
-    normalized === "chatgpt" ||
-    normalized === "openai" ||
-    /^sora\s*[-|:]/.test(normalized) ||
-    /^chatgpt\s*[-|:]/.test(normalized) ||
-    /^openai\s*[-|:]/.test(normalized) ||
-    normalized.includes("guardrails around content") ||
-    normalized.startsWith("http://") ||
-    normalized.startsWith("https://")
-  );
+  return sourceSelectionHelpers.isGenericCreatorDisplayName(value);
 }
 
 function normalizeCreatorDisplayName(value, fallbackUsername = "") {
-  if (typeof value === "string" && value.trim() && !isGenericCreatorDisplayName(value)) {
-    return value.trim().replace(/\s+/g, " ");
-  }
-
-  return normalizeCreatorUsername(fallbackUsername);
+  return sourceSelectionHelpers.normalizeCreatorDisplayName(value, fallbackUsername);
 }
 
 function getDefaultCreatorFetchPreferences(profile) {
@@ -11770,22 +11891,8 @@ async function performArchiveDownloadRun(downloadItems, options) {
       return;
     }
 
-    await setState({
-      phase: "complete",
-      items: nextItems,
-      selectedKeys: nextSelectedKeys,
-      currentItemTitle: "",
-      currentProcessLabel: summary,
+    await resetWorkingSessionState({
       message: summary,
-      currentSource: null,
-      currentSourceLabel: "",
-      queued: 0,
-      completed,
-      failed: failureCount,
-      failedItems: [...archiveJob.failedItems],
-      pendingItems: [],
-      runMode: (options && options.mode) || "archive-selected",
-      runTotal: 0,
       finishedAt: new Date().toISOString(),
     });
   } catch (error) {
@@ -11939,15 +12046,21 @@ async function performDownloadRun(downloadItems, options) {
     const currentItemTitle = getQueueItemProgressTitle(item);
     const currentSourceLabel = getQueueItemSourceLabel(item);
     await setState({
-      message: `Downloading ${item.filename}`,
+      message: `Preparing ${item.filename}`,
       currentSource: item.sourcePage,
       currentSourceLabel,
       currentItemTitle,
-      currentProcessLabel: "Downloading video...",
+      currentProcessLabel: "Removing watermark...",
     }, { persist: false });
 
     try {
       await downloadItemWithRetry(item);
+      await setState({
+        currentSource: item.sourcePage,
+        currentSourceLabel,
+        currentItemTitle,
+        currentProcessLabel: "Compressing video...",
+      }, { persist: false });
       completed += 1;
       pendingItems.shift();
       const itemDownloadIdentities = getDownloadedVideoIdentitiesForItem(item);
@@ -12071,20 +12184,8 @@ async function performDownloadRun(downloadItems, options) {
     return;
   }
 
-  await setState({
-    phase: "complete",
-    currentItemTitle: "",
-    currentProcessLabel: summary,
+  await resetWorkingSessionState({
     message: summary,
-    currentSource: null,
-    currentSourceLabel: "",
-    queued: 0,
-    completed,
-    failed: failureCount,
-    failedItems,
-    pendingItems: [],
-    runMode: null,
-    runTotal: 0,
     finishedAt: new Date().toISOString(),
   });
 }
@@ -12106,6 +12207,7 @@ async function collectItems(sources, maxVideos, options = {}) {
     ? options.selectedCreatorProfileIds
     : currentState.selectedCreatorProfileIds;
   const enableVolatileBackup = options.enableVolatileBackup === true;
+  const updateCheckMode = normalizeUpdateCheckMode(options.updateCheckMode);
   const resumeVisibleItems = normalizeCatalogItems(options.resumeVisibleItems);
   const resumeBaselineCount = Math.max(0, Number(options.resumeBaselineCount) || 0);
   const getVisibleFetchedCount = (count = 0) =>
@@ -12166,8 +12268,60 @@ async function collectItems(sources, maxVideos, options = {}) {
       creatorProfiles: currentState.creatorProfiles,
       selectedCreatorProfileIds,
     });
+    const scopeCheckpointByHash = new Map();
+    const knownItemKeysByProgressKey = new Map();
+    let sourceRequiresReconciliation = false;
+
+    for (const scopeRecord of scopeRecords) {
+      const checkpoint = await readSourceCheckpoint(scopeRecord.sourceScopeHash);
+      scopeCheckpointByHash.set(scopeRecord.sourceScopeHash, checkpoint);
+
+      const scopeKnownKeys = await loadMirrorItemKeysForScope(scopeRecord.sourceScopeHash);
+      const scopeKnownKeysSet = scopeKnownKeys instanceof Set ? scopeKnownKeys : new Set(scopeKnownKeys);
+      const catalogScopeKnownKeys = getCatalogKnownItemKeysForProgressScope(
+        source,
+        scopeRecord.progressKey,
+        catalogItems,
+      );
+      if (catalogScopeKnownKeys.size > 0) {
+        for (const itemKey of catalogScopeKnownKeys) {
+          scopeKnownKeysSet.add(itemKey);
+        }
+      }
+      const expectedScopeTotalCount = getExpectedScopeTotalCountForProgressKey(
+        source,
+        scopeRecord.progressKey,
+        {
+          characterAccounts: currentState.characterAccounts,
+          selectedCharacterAccountIds,
+          creatorProfiles: currentState.creatorProfiles,
+          selectedCreatorProfileIds,
+        },
+      );
+      const storedScopeCount = getStoredScopeItemCount(scopeKnownKeysSet, checkpoint);
+      const hasStoredScopeHistory = storedScopeCount > 0;
+      const forceReconciliation =
+        updateCheckMode === "head_match" &&
+        hasStoredScopeHistory &&
+        expectedScopeTotalCount > 0 &&
+        storedScopeCount !== expectedScopeTotalCount;
+      const scopeKnownController =
+        scopeKnownKeysSet.size > 0
+          ? createKnownItemBoundaryController(scopeKnownKeysSet, checkpoint, {
+              updateCheckMode,
+              forceReconciliation,
+            })
+          : null;
+
+      knownItemKeysByProgressKey.set(scopeRecord.progressKey, scopeKnownController);
+
+      if (forceReconciliation) {
+        sourceRequiresReconciliation = true;
+      }
+    }
+
     const primaryScopeCheckpoint =
-      scopeRecords.length === 1 ? await readSourceCheckpoint(scopeRecords[0].sourceScopeHash) : null;
+      scopeRecords.length === 1 ? scopeCheckpointByHash.get(scopeRecords[0].sourceScopeHash) || null : null;
     const catalogBackedSyncMode = shouldRunFullSourceRefresh(source, {
       catalogItems,
       selectedCharacterAccountIds,
@@ -12177,31 +12331,55 @@ async function collectItems(sources, maxVideos, options = {}) {
     })
       ? "full"
       : "incremental";
+    const hasKnownIncrementalState =
+      mirroredKnownItemKeys.size > 0 ||
+      scopeRecords.some((scopeRecord) => {
+        const checkpoint = scopeCheckpointByHash.get(scopeRecord.sourceScopeHash);
+        return checkpoint && Number(checkpoint.itemsPersisted) > 0;
+      });
     const syncMode =
-      mirroredKnownItemKeys.size > 0 || (primaryScopeCheckpoint && primaryScopeCheckpoint.itemsPersisted > 0)
+      updateCheckMode === "head_match"
         ? "incremental"
-        : catalogBackedSyncMode;
+        : hasKnownIncrementalState
+          ? "incremental"
+          : catalogBackedSyncMode;
     const knownItemKeys =
       syncMode === "incremental"
         ? scopeRecords.length === 1
-          ? createKnownItemBoundaryController(
-            mirroredKnownItemKeys.size > 0
-              ? mirroredKnownItemKeys
-              : getKnownItemKeysForSource(
+          ? knownItemKeysByProgressKey.get(scopeRecords[0].progressKey) ||
+            createKnownItemBoundaryController(
+              mirroredKnownItemKeys.size > 0
+                ? mirroredKnownItemKeys
+                : getKnownItemKeysForSource(
+                  source,
+                  catalogItems,
+                  selectedCharacterAccountIds,
+                  selectedCreatorProfileIds,
+                ),
+              primaryScopeCheckpoint,
+              { updateCheckMode },
+            )
+          : mirroredKnownItemKeys.size > 0
+            ? createKnownItemBoundaryController(
+              mirroredKnownItemKeys,
+              null,
+              {
+                updateCheckMode,
+                forceReconciliation: sourceRequiresReconciliation,
+              },
+            )
+            : createKnownItemBoundaryController(
+              getKnownItemKeysForSource(
                 source,
                 catalogItems,
                 selectedCharacterAccountIds,
                 selectedCreatorProfileIds,
               ),
-            primaryScopeCheckpoint,
-          )
-          : mirroredKnownItemKeys.size > 0
-            ? mirroredKnownItemKeys
-            : getKnownItemKeysForSource(
-              source,
-              catalogItems,
-              selectedCharacterAccountIds,
-              selectedCreatorProfileIds,
+              null,
+              {
+                updateCheckMode,
+                forceReconciliation: sourceRequiresReconciliation,
+              },
             )
         : null;
     await updateActiveSyncSession({
@@ -12397,10 +12575,12 @@ async function collectItems(sources, maxVideos, options = {}) {
                 }, { persist: false });
               },
             })
-            : source === "characters"
-              ? await fetchAllCameoItems({
+              : source === "characters"
+                ? await fetchAllCameoItems({
                 maxItems: maxRemaining,
                 knownItemKeys,
+                knownItemKeysByProgressKey,
+                updateCheckMode,
                 volatileBackupSessionKey: sourceVolatileBackupSessionKey,
                 selectionSignature: sourceVolatileBackupSelectionSignature,
                 volatileBackupResumeMeta: sourceVolatileBackupResumeMeta,
@@ -12444,6 +12624,8 @@ async function collectItems(sources, maxVideos, options = {}) {
                 characterAccounts: currentState.characterAccounts,
                 selectedCharacterAccountIds,
                 knownItemKeys,
+                knownItemKeysByProgressKey,
+                updateCheckMode,
                 volatileBackupSessionKey: sourceVolatileBackupSessionKey,
                 selectionSignature: sourceVolatileBackupSelectionSignature,
                 volatileBackupResumeMeta: sourceVolatileBackupResumeMeta,
@@ -12486,6 +12668,8 @@ async function collectItems(sources, maxVideos, options = {}) {
                   creatorProfiles: currentState.creatorProfiles,
                   selectedCreatorProfileIds,
                   knownItemKeys,
+                  knownItemKeysByProgressKey,
+                  updateCheckMode,
                   enableVolatileBackup,
                   volatileBackupSessionKey:
                     enableVolatileBackup === true ? sourceVolatileBackupSessionKey : "",
@@ -12792,7 +12976,7 @@ function mergeSourceFetchResults(results, maxItems = null) {
   };
 }
 
-function createKnownItemBoundaryController(knownKeys, checkpoint = null) {
+function createKnownItemBoundaryController(knownKeys, checkpoint = null, options = {}) {
   const knownKeySet = knownKeys instanceof Set ? knownKeys : null;
   if (!knownKeySet || knownKeySet.size === 0) {
     return null;
@@ -12801,6 +12985,9 @@ function createKnownItemBoundaryController(knownKeys, checkpoint = null) {
   const normalizedCheckpoint = normalizeSourceCheckpointRecord(checkpoint);
   return {
     knownKeys: knownKeySet,
+    updateCheckMode: normalizeUpdateCheckMode(options.updateCheckMode),
+    forceReconciliation: options.forceReconciliation === true,
+    hasHeadMatchEvaluation: false,
     boundaryKey:
       normalizedCheckpoint && typeof normalizedCheckpoint.knownBoundaryKey === "string"
         ? normalizedCheckpoint.knownBoundaryKey
@@ -12829,6 +13016,21 @@ function didPageContainOnlyKnownItems(items, knownItemKeys) {
   const pageItems = Array.isArray(items) ? items : [];
   if (pageItems.length === 0) {
     return false;
+  }
+
+  if (boundaryController && boundaryController.forceReconciliation === true) {
+    boundaryController.hasHeadMatchEvaluation = true;
+    return false;
+  }
+
+  if (
+    boundaryController &&
+    boundaryController.updateCheckMode === "head_match" &&
+    boundaryController.hasHeadMatchEvaluation !== true
+  ) {
+    boundaryController.hasHeadMatchEvaluation = true;
+    const firstItemKey = pageItems[0] ? getCanonicalItemKey(pageItems[0]) : "";
+    return Boolean(firstItemKey && knownKeys.has(firstItemKey));
   }
 
   const allKnown = pageItems.every((item) => knownKeys.has(item.key || getItemKey(item)));
@@ -12870,6 +13072,36 @@ function didPageContainOnlyKnownItems(items, knownItemKeys) {
   }
 
   return false;
+}
+
+function resolveKnownItemBoundaryValue(value) {
+  if (!value) {
+    return null;
+  }
+
+  if (
+    typeof value === "object" &&
+    value.knownKeys instanceof Set
+  ) {
+    return value;
+  }
+
+  return value instanceof Set ? value : null;
+}
+
+function resolveKnownItemKeysForProgress(options, progressKey, fallbackKnownItemKeys = null) {
+  const knownByProgressKey =
+    options &&
+    typeof options === "object" &&
+    options.knownItemKeysByProgressKey instanceof Map
+      ? options.knownItemKeysByProgressKey
+      : null;
+
+  if (!knownByProgressKey || !knownByProgressKey.has(progressKey)) {
+    return resolveKnownItemBoundaryValue(fallbackKnownItemKeys);
+  }
+
+  return resolveKnownItemBoundaryValue(knownByProgressKey.get(progressKey));
 }
 
 function buildCreatedAtCursorFromItems(items, cursorKind = "sv2_created_at") {
@@ -12914,7 +13146,7 @@ async function fetchAllProfileItems(options = {}) {
   const items = [];
   const cut = "nf2";
   const maxItems = getMaxVideosSetting({ maxVideos: options.maxItems });
-  const knownItemKeys = options.knownItemKeys instanceof Set ? options.knownItemKeys : null;
+  const knownItemKeys = resolveKnownItemBoundaryValue(options.knownItemKeys);
   const backupSessionKey =
     typeof options.volatileBackupSessionKey === "string" ? options.volatileBackupSessionKey : "";
   const progressKey = getVolatileBackupProgressKey("profile", VOLATILE_BACKUP_DEFAULT_SCOPE_ID);
@@ -13094,7 +13326,7 @@ async function fetchAllDraftItems(options = {}) {
   const ids = new Set();
   const itemMap = new Map();
   const maxItems = getMaxVideosSetting({ maxVideos: options.maxItems });
-  const knownItemKeys = options.knownItemKeys instanceof Set ? options.knownItemKeys : null;
+  const knownItemKeys = resolveKnownItemBoundaryValue(options.knownItemKeys);
   const backupSessionKey =
     typeof options.volatileBackupSessionKey === "string" ? options.volatileBackupSessionKey : "";
   const progressKey = getVolatileBackupProgressKey("drafts", VOLATILE_BACKUP_DEFAULT_SCOPE_ID);
@@ -13333,7 +13565,7 @@ async function fetchAllLikesItems(options = {}) {
   const ids = new Set();
   const items = [];
   const maxItems = getMaxVideosSetting({ maxVideos: options.maxItems });
-  const knownItemKeys = options.knownItemKeys instanceof Set ? options.knownItemKeys : null;
+  const knownItemKeys = resolveKnownItemBoundaryValue(options.knownItemKeys);
   const backupSessionKey =
     typeof options.volatileBackupSessionKey === "string" ? options.volatileBackupSessionKey : "";
   const progressKey = getVolatileBackupProgressKey("likes", VOLATILE_BACKUP_DEFAULT_SCOPE_ID);
@@ -13512,7 +13744,7 @@ async function fetchAllCharacterAppearanceItems(options = {}) {
   const ids = new Set();
   const items = [];
   const maxItems = getMaxVideosSetting({ maxVideos: options.maxItems });
-  const knownItemKeys = options.knownItemKeys instanceof Set ? options.knownItemKeys : null;
+  const knownItemKeys = resolveKnownItemBoundaryValue(options.knownItemKeys);
   const maxPageCount = CREATOR_PROFILE_FEED_MAX_PAGE_CAP;
   const backupSessionKey =
     typeof options.volatileBackupSessionKey === "string" ? options.volatileBackupSessionKey : "";
@@ -13681,7 +13913,7 @@ async function fetchAllCharacterDraftItems(options = {}) {
   const ids = new Set();
   const items = [];
   const maxItems = getMaxVideosSetting({ maxVideos: options.maxItems });
-  const knownItemKeys = options.knownItemKeys instanceof Set ? options.knownItemKeys : null;
+  const knownItemKeys = resolveKnownItemBoundaryValue(options.knownItemKeys);
   const backupSessionKey =
     typeof options.volatileBackupSessionKey === "string" ? options.volatileBackupSessionKey : "";
   const progressKey = getVolatileBackupProgressKey(
@@ -13989,11 +14221,11 @@ function getCreatorRouteUrl(creatorProfile) {
 }
 
 function isCanonicalCreatorUserId(value) {
-  return typeof value === "string" && /^user-[A-Za-z0-9_-]+$/.test(value);
+  return sourceSelectionHelpers.isCanonicalCreatorUserId(value);
 }
 
 function isCharacterAccountUserId(value) {
-  return typeof value === "string" && /^ch_[A-Za-z0-9_-]+$/.test(value);
+  return sourceSelectionHelpers.isCharacterAccountUserId(value);
 }
 
 function getCreatorProfileCharacterUserId(profile) {
@@ -14035,7 +14267,7 @@ function getCreatorLookupId(creatorProfile) {
     return "";
   }
 
-  if (typeof creatorProfile.userId === "string" && creatorProfile.userId) {
+  if (isCanonicalCreatorUserId(creatorProfile.userId)) {
     return creatorProfile.userId;
   }
 
@@ -14069,8 +14301,9 @@ function getCreatorProfileExpectedCameoCount(profile) {
   ];
 
   for (const candidate of candidates) {
-    if (typeof candidate === "number" && Number.isFinite(candidate) && candidate > 0) {
-      return Math.floor(candidate);
+    const normalizedCandidate = normalizeEstimatedFetchCount(candidate);
+    if (normalizedCandidate > 0) {
+      return normalizedCandidate;
     }
   }
 
@@ -14171,8 +14404,8 @@ async function fetchAllCreatorFeedItems(creatorProfile, options = {}) {
     1,
     maxItems ? Math.min(maxItems, VOLATILE_SOURCE_PREVIEW_LIMIT) : VOLATILE_SOURCE_PREVIEW_LIMIT,
   );
-  const knownItemKeys = options.knownItemKeys instanceof Set ? options.knownItemKeys : null;
-  const maxPageCount = getCreatorFeedPageCap(creatorProfile);
+  const knownItemKeys = resolveKnownItemBoundaryValue(options.knownItemKeys);
+  const maxPageCount = getCreatorFeedPageCap(creatorProfile, maxItems);
   const includeCommunityRows = options.includeCommunityRows === true;
   const backupSessionKey =
     typeof options.volatileBackupSessionKey === "string" ? options.volatileBackupSessionKey : "";
@@ -14394,8 +14627,11 @@ async function fetchAllCreatorCameoItems(creatorProfile, options = {}) {
     1,
     maxItems ? Math.min(maxItems, VOLATILE_SOURCE_PREVIEW_LIMIT) : VOLATILE_SOURCE_PREVIEW_LIMIT,
   );
-  const knownItemKeys = options.knownItemKeys instanceof Set ? options.knownItemKeys : null;
-  const maxPageCount = getProfileFeedPageCap(getCreatorProfileExpectedCameoCount(creatorProfile));
+  const knownItemKeys = resolveKnownItemBoundaryValue(options.knownItemKeys);
+  const maxPageCount = getProfileFeedPageCap(
+    getCreatorProfileExpectedCameoCount(creatorProfile),
+    maxItems,
+  );
   const backupSessionKey =
     typeof options.volatileBackupSessionKey === "string" ? options.volatileBackupSessionKey : "";
   const progressKey =
@@ -14634,8 +14870,8 @@ async function fetchAllCreatorCharacterCameoItems(creatorProfile, options = {}) 
     1,
     maxItems ? Math.min(maxItems, VOLATILE_SOURCE_PREVIEW_LIMIT) : VOLATILE_SOURCE_PREVIEW_LIMIT,
   );
-  const knownItemKeys = options.knownItemKeys instanceof Set ? options.knownItemKeys : null;
-  const maxPageCount = getProfileFeedPageCap(characterAccount.cameoCount);
+  const knownItemKeys = resolveKnownItemBoundaryValue(options.knownItemKeys);
+  const maxPageCount = getProfileFeedPageCap(characterAccount.cameoCount, maxItems);
   const backupSessionKey =
     typeof options.volatileBackupSessionKey === "string" ? options.volatileBackupSessionKey : "";
   const shouldBackupVolatileItems = Boolean(backupSessionKey);
@@ -14890,8 +15126,8 @@ async function fetchAllCreatorCharacterCameoItemsSimple(creatorProfile, options 
     1,
     maxItems ? Math.min(maxItems, VOLATILE_SOURCE_PREVIEW_LIMIT) : VOLATILE_SOURCE_PREVIEW_LIMIT,
   );
-  const knownItemKeys = options.knownItemKeys instanceof Set ? options.knownItemKeys : null;
-  const maxPageCount = getProfileFeedPageCap(characterAccount.cameoCount);
+  const knownItemKeys = resolveKnownItemBoundaryValue(options.knownItemKeys);
+  const maxPageCount = getProfileFeedPageCap(characterAccount.cameoCount, maxItems);
   const backupSessionKey =
     typeof options.volatileBackupSessionKey === "string" ? options.volatileBackupSessionKey : "";
   const shouldBackupVolatileItems = Boolean(backupSessionKey);
@@ -15168,7 +15404,7 @@ async function fetchAllCharacterAccountPublishedItems(characterAccount, options 
   const ids = new Set();
   const items = [];
   const maxItems = getMaxVideosSetting({ maxVideos: options.maxItems });
-  const knownItemKeys = options.knownItemKeys instanceof Set ? options.knownItemKeys : null;
+  const knownItemKeys = resolveKnownItemBoundaryValue(options.knownItemKeys);
   const backupSessionKey =
     typeof options.volatileBackupSessionKey === "string" ? options.volatileBackupSessionKey : "";
   const progressKey =
@@ -15345,7 +15581,7 @@ async function fetchAllCharacterAccountAppearanceItems(characterAccount, options
   const ids = new Set();
   const items = [];
   const maxItems = getMaxVideosSetting({ maxVideos: options.maxItems });
-  const knownItemKeys = options.knownItemKeys instanceof Set ? options.knownItemKeys : null;
+  const knownItemKeys = resolveKnownItemBoundaryValue(options.knownItemKeys);
   const backupSessionKey =
     typeof options.volatileBackupSessionKey === "string" ? options.volatileBackupSessionKey : "";
   const progressKey =
@@ -15550,7 +15786,7 @@ async function fetchAllCharacterAccountDraftItems(characterAccount, options = {}
   const ids = new Set();
   const items = [];
   const maxItems = getMaxVideosSetting({ maxVideos: options.maxItems });
-  const knownItemKeys = options.knownItemKeys instanceof Set ? options.knownItemKeys : null;
+  const knownItemKeys = resolveKnownItemBoundaryValue(options.knownItemKeys);
   const backupSessionKey =
     typeof options.volatileBackupSessionKey === "string" ? options.volatileBackupSessionKey : "";
   const progressKey =
@@ -15763,7 +15999,11 @@ function shouldIgnoreCharacterAccountDraftFetchError(error) {
 
 async function fetchAllCharacterItems(options = {}) {
   const maxItems = getMaxVideosSetting({ maxVideos: options.maxItems });
-  const knownItemKeys = options.knownItemKeys instanceof Set ? options.knownItemKeys : null;
+  const knownItemKeys = resolveKnownItemBoundaryValue(options.knownItemKeys);
+  const knownItemKeysByProgressKey =
+    options && typeof options === "object" && options.knownItemKeysByProgressKey instanceof Map
+      ? options.knownItemKeysByProgressKey
+      : null;
   const syncPhase = typeof options.syncPhase === "string" ? options.syncPhase : "";
   const normalizedCharacterAccounts = normalizeCharacterAccounts(options.characterAccounts);
   const selectedCharacterAccountIds = normalizeSelectedCharacterAccountIds(
@@ -15798,8 +16038,12 @@ async function fetchAllCharacterItems(options = {}) {
   const volatileBackupProgressByKey = normalizeVolatileBackupProgressMap(
     options && options.volatileBackupResumeMeta && options.volatileBackupResumeMeta.progressByKey,
   );
+  const hasKnownBoundaries =
+    Boolean(knownItemKeys) ||
+    (knownItemKeysByProgressKey instanceof Map &&
+      [...knownItemKeysByProgressKey.values()].some((value) => Boolean(resolveKnownItemBoundaryValue(value))));
 
-  if (!syncPhase && hasUsableCheckpointProgress(volatileBackupProgressByKey) && knownItemKeys) {
+  if (!syncPhase && hasUsableCheckpointProgress(volatileBackupProgressByKey) && hasKnownBoundaries) {
     const headSyncResult = await fetchAllCharacterItems({
       ...options,
       volatileBackupResumeMeta: null,
@@ -15808,6 +16052,7 @@ async function fetchAllCharacterItems(options = {}) {
     const backlogResult = await fetchAllCharacterItems({
       ...options,
       knownItemKeys: null,
+      knownItemKeysByProgressKey: null,
       syncPhase: "backlog-resume",
     });
     return mergeSourceFetchResults([headSyncResult, backlogResult], maxItems);
@@ -15845,6 +16090,13 @@ async function fetchAllCharacterItems(options = {}) {
     });
   };
 
+  const resolveScopeKnownItemKeys = (progressKey) =>
+    resolveKnownItemKeysForProgress(
+      { knownItemKeysByProgressKey },
+      progressKey,
+      knownItemKeys,
+    );
+
   for (const characterAccount of selectedCharacterAccounts) {
     throwIfFetchAbortRequested();
     const maxRemaining = getRemainingFetchCapacity(itemMap.size, maxItems);
@@ -15853,22 +16105,23 @@ async function fetchAllCharacterItems(options = {}) {
       break;
     }
 
+    const appearanceProgressKey = getVolatileBackupProgressKey(
+      "characterAccountAppearances",
+      characterAccount.userId,
+    );
     const characterAppearanceResult = await fetchAllCharacterAccountAppearanceItems(
       characterAccount,
       {
         maxItems: maxRemaining,
-        knownItemKeys,
+        knownItemKeys: resolveScopeKnownItemKeys(appearanceProgressKey),
         volatileBackupSessionKey: backupSessionKey,
         selectionSignature:
           typeof options.selectionSignature === "string" ? options.selectionSignature : "",
-        progressKey: getVolatileBackupProgressKey(
-          "characterAccountAppearances",
-          characterAccount.userId,
-        ),
+        progressKey: appearanceProgressKey,
         syncPhase,
         resumeState:
           volatileBackupProgressByKey[
-            getVolatileBackupProgressKey("characterAccountAppearances", characterAccount.userId)
+            appearanceProgressKey
           ],
         onProgress: async ({ count }) => {
           totalCount = maxItems
@@ -15890,19 +16143,23 @@ async function fetchAllCharacterItems(options = {}) {
       break;
     }
 
+    const postProgressKey = getVolatileBackupProgressKey(
+      "characterAccountPosts",
+      characterAccount.userId,
+    );
     const characterPublishedResult = await fetchAllCharacterAccountPublishedItems(
       characterAccount,
       {
         maxItems: remainingAfterAppearances,
-        knownItemKeys,
+        knownItemKeys: resolveScopeKnownItemKeys(postProgressKey),
         volatileBackupSessionKey: backupSessionKey,
         selectionSignature:
           typeof options.selectionSignature === "string" ? options.selectionSignature : "",
-        progressKey: getVolatileBackupProgressKey("characterAccountPosts", characterAccount.userId),
+        progressKey: postProgressKey,
         syncPhase,
         resumeState:
           volatileBackupProgressByKey[
-            getVolatileBackupProgressKey("characterAccountPosts", characterAccount.userId)
+            postProgressKey
           ],
         onProgress: async ({ count }) => {
           totalCount = maxItems
@@ -15924,19 +16181,23 @@ async function fetchAllCharacterItems(options = {}) {
       break;
     }
 
+    const draftProgressKey = getVolatileBackupProgressKey(
+      "characterAccountDrafts",
+      characterAccount.userId,
+    );
     const characterDraftResult = await fetchAllCharacterAccountDraftItems(
       characterAccount,
       {
         maxItems: nextMaxRemaining,
-        knownItemKeys,
+        knownItemKeys: resolveScopeKnownItemKeys(draftProgressKey),
         volatileBackupSessionKey: backupSessionKey,
         selectionSignature:
           typeof options.selectionSignature === "string" ? options.selectionSignature : "",
-        progressKey: getVolatileBackupProgressKey("characterAccountDrafts", characterAccount.userId),
+        progressKey: draftProgressKey,
         syncPhase,
         resumeState:
           volatileBackupProgressByKey[
-            getVolatileBackupProgressKey("characterAccountDrafts", characterAccount.userId)
+            draftProgressKey
           ],
         onProgress: async ({ count }) => {
           totalCount = maxItems
@@ -15974,7 +16235,12 @@ async function fetchAllCharacterItems(options = {}) {
 
 async function fetchAllCreatorItems(options = {}) {
   const maxItems = getMaxVideosSetting({ maxVideos: options.maxItems });
-  const knownItemKeys = options.knownItemKeys instanceof Set ? options.knownItemKeys : null;
+  const knownItemKeys = resolveKnownItemBoundaryValue(options.knownItemKeys);
+  const knownItemKeysByProgressKey =
+    options && typeof options === "object" && options.knownItemKeysByProgressKey instanceof Map
+      ? options.knownItemKeysByProgressKey
+      : null;
+  const updateCheckMode = normalizeUpdateCheckMode(options.updateCheckMode);
   const syncPhase = typeof options.syncPhase === "string" ? options.syncPhase : "";
   const normalizedCreatorProfiles = normalizeCreatorProfiles(options.creatorProfiles);
   const selectedCreatorProfileIds = normalizeSelectedCreatorProfileIds(
@@ -16010,12 +16276,16 @@ async function fetchAllCreatorItems(options = {}) {
   const volatileBackupProgressByKey = normalizeVolatileBackupProgressMap(
     volatileBackupResumeMeta && volatileBackupResumeMeta.progressByKey,
   );
+  const hasKnownBoundaries =
+    Boolean(knownItemKeys) ||
+    (knownItemKeysByProgressKey instanceof Map &&
+      [...knownItemKeysByProgressKey.values()].some((value) => Boolean(resolveKnownItemBoundaryValue(value))));
   const creatorSelectionSignature = getSourceSelectionSignature("creators", {
     creatorProfiles: normalizedCreatorProfiles,
     selectedCreatorProfileIds,
   });
 
-  if (!syncPhase && hasUsableCheckpointProgress(volatileBackupProgressByKey) && knownItemKeys) {
+  if (!syncPhase && hasUsableCheckpointProgress(volatileBackupProgressByKey) && hasKnownBoundaries) {
     const headSyncResult = await fetchAllCreatorItems({
       ...options,
       volatileBackupResumeMeta: null,
@@ -16024,6 +16294,7 @@ async function fetchAllCreatorItems(options = {}) {
     const backlogResult = await fetchAllCreatorItems({
       ...options,
       knownItemKeys: null,
+      knownItemKeysByProgressKey: null,
       syncPhase: "backlog-resume",
     });
     return mergeSourceFetchResults([headSyncResult, backlogResult], maxItems);
@@ -16080,6 +16351,13 @@ async function fetchAllCreatorItems(options = {}) {
     });
   };
 
+  const resolveScopeKnownItemKeys = (progressKey) =>
+    resolveKnownItemKeysForProgress(
+      { knownItemKeysByProgressKey },
+      progressKey,
+      knownItemKeys,
+    );
+
   const processCreatorProfile = async (
     creatorProfile,
     fetchWorkerContext = null,
@@ -16105,19 +16383,21 @@ async function fetchAllCreatorItems(options = {}) {
             isExhaustive = false;
             return;
           }
+          const creatorCharactersProgressKey = getVolatileBackupProgressKey(
+            "creatorCharacters",
+            creatorProfileForFetch.profileId,
+          );
 
           const creatorCharacterResult = await fetchAllCreatorCharacterPublishedItems(
             creatorProfileForFetch,
             {
               maxItems: characterPublishedMaxRemaining,
-              knownItemKeys,
+              knownItemKeys: resolveScopeKnownItemKeys(creatorCharactersProgressKey),
               volatileBackupSessionKey,
               selectionSignature: creatorSelectionSignature,
               syncPhase,
               fetchWorkerContext,
-              resumeState: volatileBackupProgressByKey[
-                getVolatileBackupProgressKey("creatorCharacters", creatorProfileForFetch.profileId)
-              ],
+              resumeState: volatileBackupProgressByKey[creatorCharactersProgressKey],
               onProgress: parallelMode ? null : async ({ count }) => {
                 totalCount = maxItems
                   ? Math.min(maxItems, characterBaseCount + count)
@@ -16142,19 +16422,21 @@ async function fetchAllCreatorItems(options = {}) {
             isExhaustive = false;
             return;
           }
+          const creatorCharacterCameosProgressKey = getVolatileBackupProgressKey(
+            "creatorCharacterCameos",
+            creatorProfileForFetch.profileId,
+          );
 
           const creatorCharacterCameoResult = await fetchAllCreatorCharacterCameoItemsSimple(
             creatorProfileForFetch,
             {
               maxItems: characterCameoMaxRemaining,
-              knownItemKeys,
+              knownItemKeys: resolveScopeKnownItemKeys(creatorCharacterCameosProgressKey),
               volatileBackupSessionKey,
               selectionSignature: creatorSelectionSignature,
               syncPhase,
               fetchWorkerContext,
-              resumeState: volatileBackupProgressByKey[
-                getVolatileBackupProgressKey("creatorCharacterCameos", creatorProfileForFetch.profileId)
-              ],
+              resumeState: volatileBackupProgressByKey[creatorCharacterCameosProgressKey],
               onProgress: parallelMode ? null : async ({
                 count,
                 previewItems,
@@ -16213,20 +16495,22 @@ async function fetchAllCreatorItems(options = {}) {
           isExhaustive = false;
           return;
         }
+        const creatorPublishedProgressKey = getVolatileBackupProgressKey(
+          "creatorPublished",
+          creatorProfileForFetch.profileId,
+        );
 
         const creatorFeedResult = await fetchAllCreatorFeedItems(
           creatorProfileForFetch,
           {
             maxItems: maxRemaining,
-            knownItemKeys,
+            knownItemKeys: resolveScopeKnownItemKeys(creatorPublishedProgressKey),
             includeCommunityRows: false,
             volatileBackupSessionKey,
             selectionSignature: creatorSelectionSignature,
             syncPhase,
             fetchWorkerContext,
-            resumeState: volatileBackupProgressByKey[
-              getVolatileBackupProgressKey("creatorPublished", creatorProfileForFetch.profileId)
-            ],
+            resumeState: volatileBackupProgressByKey[creatorPublishedProgressKey],
             onProgress: parallelMode ? null : async ({ count, previewItems, backedUpItemCount: previewBackedUpItemCount }) => {
               totalCount = maxItems
                 ? Math.min(maxItems, publishedBaseCount + count)
@@ -16255,19 +16539,21 @@ async function fetchAllCreatorItems(options = {}) {
           isExhaustive = false;
           return;
         }
+        const creatorCameosProgressKey = getVolatileBackupProgressKey(
+          "creatorCameos",
+          creatorProfileForFetch.profileId,
+        );
 
         const creatorCameoResult = await fetchAllCreatorCameoItems(
           creatorProfileForFetch,
           {
             maxItems: cameoMaxRemaining,
-            knownItemKeys,
+            knownItemKeys: resolveScopeKnownItemKeys(creatorCameosProgressKey),
             volatileBackupSessionKey,
             selectionSignature: creatorSelectionSignature,
             syncPhase,
             fetchWorkerContext,
-            resumeState: volatileBackupProgressByKey[
-              getVolatileBackupProgressKey("creatorCameos", creatorProfileForFetch.profileId)
-            ],
+            resumeState: volatileBackupProgressByKey[creatorCameosProgressKey],
             onProgress: parallelMode ? null : async ({ count, previewItems, backedUpItemCount: previewBackedUpItemCount }) => {
               totalCount = maxItems
                 ? Math.min(maxItems, cameoBaseCount + count)
@@ -16302,7 +16588,9 @@ async function fetchAllCreatorItems(options = {}) {
   };
 
   const shouldUseParallelCreatorWorkers =
-    !maxItems && selectedCreatorProfiles.length > 1;
+    !maxItems &&
+    selectedCreatorProfiles.length > 1 &&
+    updateCheckMode !== "head_match";
 
   if (shouldUseParallelCreatorWorkers) {
     await runTasksWithFetchWorkers(
@@ -16337,7 +16625,11 @@ async function fetchAllCreatorItems(options = {}) {
 
 async function fetchAllCameoItems(options = {}) {
   const maxItems = getMaxVideosSetting({ maxVideos: options.maxItems });
-  const knownItemKeys = options.knownItemKeys instanceof Set ? options.knownItemKeys : null;
+  const knownItemKeys = resolveKnownItemBoundaryValue(options.knownItemKeys);
+  const knownItemKeysByProgressKey =
+    options && typeof options === "object" && options.knownItemKeysByProgressKey instanceof Map
+      ? options.knownItemKeysByProgressKey
+      : null;
   const syncPhase = typeof options.syncPhase === "string" ? options.syncPhase : "";
   const ids = new Set();
   const itemMap = new Map();
@@ -16355,8 +16647,12 @@ async function fetchAllCameoItems(options = {}) {
   let totalCount = 0;
   let backedUpItemCount = 0;
   let usesVolatileBackup = false;
+  const hasKnownBoundaries =
+    Boolean(knownItemKeys) ||
+    (knownItemKeysByProgressKey instanceof Map &&
+      [...knownItemKeysByProgressKey.values()].some((value) => Boolean(resolveKnownItemBoundaryValue(value))));
 
-  if (!syncPhase && hasUsableCheckpointProgress(volatileBackupProgressByKey) && knownItemKeys) {
+  if (!syncPhase && hasUsableCheckpointProgress(volatileBackupProgressByKey) && hasKnownBoundaries) {
     const headSyncResult = await fetchAllCameoItems({
       ...options,
       volatileBackupResumeMeta: null,
@@ -16365,6 +16661,7 @@ async function fetchAllCameoItems(options = {}) {
     const backlogResult = await fetchAllCameoItems({
       ...options,
       knownItemKeys: null,
+      knownItemKeysByProgressKey: null,
       syncPhase: "backlog-resume",
     });
     return mergeSourceFetchResults([headSyncResult, backlogResult], maxItems);
@@ -16400,18 +16697,27 @@ async function fetchAllCameoItems(options = {}) {
       estimatedTotalCount: expectedTotalCount,
     });
   };
+  const appearanceProgressKey = getVolatileBackupProgressKey(
+    "characterAppearances",
+    VOLATILE_BACKUP_DEFAULT_SCOPE_ID,
+  );
+  const draftProgressKey = getVolatileBackupProgressKey(
+    "characterDrafts",
+    VOLATILE_BACKUP_DEFAULT_SCOPE_ID,
+  );
 
   const publishedResult = await fetchAllCharacterAppearanceItems({
     maxItems,
-    knownItemKeys,
+    knownItemKeys: resolveKnownItemKeysForProgress(
+      { knownItemKeysByProgressKey },
+      appearanceProgressKey,
+      knownItemKeys,
+    ),
     volatileBackupSessionKey: backupSessionKey,
     selectionSignature:
       typeof options.selectionSignature === "string" ? options.selectionSignature : "",
     syncPhase,
-    resumeState:
-      volatileBackupProgressByKey[
-        getVolatileBackupProgressKey("characterAppearances", VOLATILE_BACKUP_DEFAULT_SCOPE_ID)
-      ],
+    resumeState: volatileBackupProgressByKey[appearanceProgressKey],
     onProgress: async ({ count }) => {
       totalCount = maxItems ? Math.min(maxItems, count) : count;
       await reportProgress("Fetching cameo videos...");
@@ -16423,15 +16729,16 @@ async function fetchAllCameoItems(options = {}) {
   if (nextMaxRemaining !== 0) {
     const draftResult = await fetchAllCharacterDraftItems({
       maxItems: nextMaxRemaining,
-      knownItemKeys,
+      knownItemKeys: resolveKnownItemKeysForProgress(
+        { knownItemKeysByProgressKey },
+        draftProgressKey,
+        knownItemKeys,
+      ),
       volatileBackupSessionKey: backupSessionKey,
       selectionSignature:
         typeof options.selectionSignature === "string" ? options.selectionSignature : "",
       syncPhase,
-      resumeState:
-        volatileBackupProgressByKey[
-          getVolatileBackupProgressKey("characterDrafts", VOLATILE_BACKUP_DEFAULT_SCOPE_ID)
-        ],
+      resumeState: volatileBackupProgressByKey[draftProgressKey],
       onProgress: async ({ count }) => {
         totalCount = maxItems
           ? Math.min(maxItems, itemMap.size + count)
@@ -16990,14 +17297,6 @@ async function downloadItemWithRetry(item) {
   let lastError = null;
   const currentItemTitle = getQueueItemProgressTitle(item);
   const currentSourceLabel = getQueueItemSourceLabel(item);
-  if (shouldPrepareDraftShareForDownload(item)) {
-    await setState({
-      currentSource: item.sourcePage,
-      currentSourceLabel,
-      currentItemTitle,
-      currentProcessLabel: "Removing watermark...",
-    }, { persist: false });
-  }
   let candidate = await prepareDraftItemForDownload(item);
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -17008,7 +17307,7 @@ async function downloadItemWithRetry(item) {
           currentSource: item.sourcePage,
           currentSourceLabel,
           currentItemTitle,
-          currentProcessLabel: "Refreshing download link...",
+          currentProcessLabel: "Downloading video...",
         }, { persist: false });
         candidate = await refreshDownloadUrl(item);
       }
@@ -18566,21 +18865,7 @@ function injectedFetchSource(config) {
     }
 
     function getDraftShareGenerationId(row) {
-      const generationId = pickFirstString([
-        row && row.generation_id,
-        row && row.generationId,
-        row && row.output && row.output.generation_id,
-        row && row.output && row.output.generationId,
-        row && row.draft && row.draft.generation_id,
-        row && row.draft && row.draft.generationId,
-        row && row.item && row.item.generation_id,
-        row && row.item && row.item.generationId,
-        row && row.data && row.data.generation_id,
-        row && row.data && row.data.generationId,
-        row && row.id,
-      ]);
-
-      return typeof generationId === "string" && generationId.startsWith("gen_") ? generationId : "";
+      return extractDraftGenerationIdFromValue(row);
     }
 
     function hasDraftEditedVersion(row) {
@@ -18602,11 +18887,16 @@ function injectedFetchSource(config) {
 
     function shouldSkipDraftRow(row) {
       const kind = getDraftKind(row);
+      const hasDraftShareCandidate =
+        Boolean(getDraftShareGenerationId(row)) || Boolean(resolveSharedPostReferenceFromValue(row));
       return Boolean(
         !row ||
           kind === "sora_error" ||
           hasDraftEditedVersion(row) ||
-          (typeof kind === "string" && kind !== "sora_draft" && kind !== "draft"),
+          (typeof kind === "string" &&
+            kind !== "sora_draft" &&
+            kind !== "draft" &&
+            !hasDraftShareCandidate),
       );
     }
 
@@ -19195,8 +19485,9 @@ function injectedFetchSource(config) {
 
     function pickFirstNumber(candidates) {
       for (const candidate of candidates) {
-        if (typeof candidate === "number" && Number.isFinite(candidate)) {
-          return candidate;
+        const numericCandidate = Number(candidate);
+        if (Number.isFinite(numericCandidate)) {
+          return numericCandidate;
         }
       }
 
@@ -19481,6 +19772,21 @@ function injectedFetchSource(config) {
         row && row.draft && row.draft.generation_id,
         row && row.item && row.item.id,
         row && row.data && row.data.id,
+        row && row.post && row.post.id,
+        row && row.post && row.post.generation_id,
+        row && row.post && row.post.generationId,
+        row && row.result && row.result.id,
+        row && row.result && row.result.generation_id,
+        row && row.result && row.result.generationId,
+        row && row.generation && row.generation.id,
+        row && row.generation && row.generation.generation_id,
+        row && row.generation && row.generation.generationId,
+        row && row.creation_config && row.creation_config.id,
+        row && row.creation_config && row.creation_config.generation_id,
+        row && row.creation_config && row.creation_config.generationId,
+        row && row.creationConfig && row.creationConfig.id,
+        row && row.creationConfig && row.creationConfig.generation_id,
+        row && row.creationConfig && row.creationConfig.generationId,
       ]);
     }
 
@@ -19491,6 +19797,12 @@ function injectedFetchSource(config) {
         row && row.draft && row.draft.kind,
         row && row.item && row.item.kind,
         row && row.data && row.data.kind,
+        row && row.output && row.output.kind,
+        row && row.result && row.result.kind,
+        row && row.post && row.post.kind,
+        row && row.generation && row.generation.kind,
+        row && row.creation_config && row.creation_config.kind,
+        row && row.creationConfig && row.creationConfig.kind,
       ]);
     }
 
@@ -20586,12 +20898,7 @@ function injectedFetchSource(config) {
           (row.data && getDurationSeconds(row.data)) ||
           (row.output && getDurationSeconds(row.output)) ||
           null;
-        const generationId = pickFirstString([
-          row && row.generation_id,
-          row && row.generationId,
-          row && row.output && row.output.generation_id,
-          row && row.output && row.output.generationId,
-        ]);
+        const generationId = getDraftShareGenerationId(row);
         const generationType = pickFirstString([
           row && row.generation_type,
           row && row.generationType,

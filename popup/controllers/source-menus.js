@@ -252,35 +252,6 @@ export function handleCreatorDialogSubmit(event) {
   void submitCreatorDialog();
 }
 
-export function handleExportMenuButtonClick(event) {
-  event.preventDefault();
-  toggleExportMenu();
-}
-
-export function handleExportMenuClick(event) {
-  const target = event.target;
-  if (!(target instanceof Element)) {
-    return;
-  }
-
-  const optionButton = target.closest("[data-export-type]");
-  if (!(optionButton instanceof HTMLButtonElement)) {
-    return;
-  }
-
-  event.preventDefault();
-
-  const nextType =
-    typeof optionButton.dataset.exportType === "string" ? optionButton.dataset.exportType : "";
-  if (nextType !== "prompts" && nextType !== "urls") {
-    return;
-  }
-
-  popupState.preferredExportType = nextType;
-  syncExportMenu();
-  closeExportMenu();
-}
-
 export function handleSourceMenuDocumentClick(event) {
   const target = event.target;
   if (!(target instanceof Node)) {
@@ -324,7 +295,6 @@ export function handleSourceMenuDocumentKeydown(event) {
 
 export function closeAllSourceMenus() {
   const closedCreatorActionMenu = closeCreatorActionMenu(false);
-  closeExportMenu();
 
   for (const groupKey of ["overview", "settings", "characterAccounts"]) {
     const group = getSourceMenuGroup(groupKey);
@@ -349,29 +319,7 @@ export function syncSourceMenuLabels() {
 
 export function syncExportMenu() {
   if (dom.exportButtonLabel instanceof HTMLElement) {
-    dom.exportButtonLabel.textContent = "Download Prompts/URLs";
-  }
-
-  if (dom.exportMenuButton instanceof HTMLButtonElement) {
-    dom.exportMenuButton.setAttribute("aria-expanded", popupState.exportMenuOpen ? "true" : "false");
-  }
-
-  if (dom.exportControl instanceof HTMLElement) {
-    dom.exportControl.classList.toggle("is-open", popupState.exportMenuOpen);
-  }
-
-  if (dom.exportMenu instanceof HTMLElement) {
-    dom.exportMenu.classList.toggle("hidden", !popupState.exportMenuOpen);
-  }
-
-  for (const option of dom.exportMenuOptions) {
-    if (!(option instanceof HTMLButtonElement)) {
-      continue;
-    }
-
-    const isActive = option.dataset.exportType === popupState.preferredExportType;
-    option.classList.toggle("is-active", isActive);
-    option.setAttribute("aria-pressed", String(isActive));
+    dom.exportButtonLabel.textContent = "Download Metadata";
   }
 }
 
@@ -481,28 +429,6 @@ function closeCharacterMenu() {
   group.button.setAttribute("aria-expanded", "false");
   group.control?.classList.remove("is-open");
   group.menu.classList.add("hidden");
-}
-
-function toggleExportMenu() {
-  if (!(dom.exportMenuButton instanceof HTMLButtonElement) || dom.exportMenuButton.disabled) {
-    return;
-  }
-
-  const shouldOpen = !popupState.exportMenuOpen;
-  closeAllSourceMenus();
-
-  popupState.exportMenuOpen = shouldOpen;
-  syncExportMenu();
-}
-
-function closeExportMenu() {
-  if (!popupState.exportMenuOpen) {
-    return false;
-  }
-
-  popupState.exportMenuOpen = false;
-  syncExportMenu();
-  return true;
 }
 
 function toggleCreatorActionMenu(creatorProfileId) {
