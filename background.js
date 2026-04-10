@@ -3781,12 +3781,30 @@ async function resolvePendingUpdateForInstall(options = {}) {
     }
   }
 
-  const pendingUpdate = selectNewestInstallableUpdateCandidate(
-    [suppliedPendingUpdate, storedPendingUpdate, latestRelease],
-    CURRENT_EXTENSION_VERSION,
-  );
+  const pendingUpdate = refreshLatest
+    ? selectNewestInstallableUpdateCandidate(
+      [latestRelease, suppliedPendingUpdate, storedPendingUpdate],
+      CURRENT_EXTENSION_VERSION,
+    )
+    : selectNewestInstallableUpdateCandidate(
+      [suppliedPendingUpdate, storedPendingUpdate, latestRelease],
+      CURRENT_EXTENSION_VERSION,
+    );
 
   if (pendingUpdate) {
+    if (
+      refreshLatest &&
+      latestReleaseError &&
+      (!latestRelease ||
+        (typeof latestRelease.version === "string" &&
+          compareSemver(pendingUpdate.version, latestRelease.version) > 0))
+    ) {
+      const error = new Error(
+        "Save Sora could not verify the latest GitHub release before installing. Check for updates again and retry.",
+      );
+      error.cause = latestReleaseError;
+      throw error;
+    }
     await storePendingUpdate({
       ...pendingUpdate,
       pendingDeferred: false,

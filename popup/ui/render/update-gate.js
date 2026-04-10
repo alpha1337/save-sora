@@ -104,21 +104,6 @@ function syncUpdateGate(updateStatus, runtimeState = null) {
     restoreStatus.phase !== "restoring" &&
     restoreStatus.phase !== "error" &&
     (popupState.pendingDownloadStart || runtimePhase === "downloading");
-  if (
-    (!shouldSuppressRestorePrompt && restoreStatus.promptVisible) ||
-    restoreStatus.phase === "restoring" ||
-    restoreStatus.phase === "error"
-  ) {
-    popupState.restoreGatePhase = restoreStatus.phase;
-    popupState.restoreGateVisible = true;
-    syncAppShellGateVisibility(true);
-    renderRestoreGate(restoreStatus);
-    return;
-  }
-
-  popupState.restoreGatePhase = "idle";
-  popupState.restoreGateVisible = false;
-
   const pendingVersion = updateStatus.pendingUpdateVersion || updateStatus.latestVersion;
   const skippedThisSession =
     pendingVersion &&
@@ -129,15 +114,36 @@ function syncUpdateGate(updateStatus, runtimeState = null) {
     popupState.currentPhase === "fetching" || popupState.currentPhase === "fetch-paused";
   const shouldSuppressForActiveFetch =
     activeFetchPhase && FETCH_SAFE_BACKGROUND_UPDATE_PHASES.has(updateStatus.phase);
-  const shouldShow =
+  const shouldShowUpdateGate =
     ACTIVE_UPDATE_PHASES.has(updateStatus.phase) &&
     !shouldSuppressForActiveFetch &&
     !dismissedErrorForSession &&
     !(skippedThisSession && (updateStatus.phase === "update-available" || updateStatus.phase === "deferred"));
+  const shouldPreferUpdateGate =
+    shouldShowUpdateGate ||
+    (popupState.startupGateLocked &&
+      restoreStatus.phase !== "restoring" &&
+      restoreStatus.phase !== "error");
+  if (
+    !shouldPreferUpdateGate &&
+    (
+      (!shouldSuppressRestorePrompt && restoreStatus.promptVisible) ||
+      restoreStatus.phase === "restoring" ||
+      restoreStatus.phase === "error"
+    )
+  ) {
+    popupState.restoreGatePhase = restoreStatus.phase;
+    popupState.restoreGateVisible = true;
+    syncAppShellGateVisibility(true);
+    renderRestoreGate(restoreStatus);
+    return;
+  }
 
-  const shouldKeepGateVisible = popupState.startupGateLocked || shouldShow;
+  popupState.restoreGatePhase = "idle";
+  popupState.restoreGateVisible = false;
+  const shouldKeepGateVisible = popupState.startupGateLocked || shouldShowUpdateGate;
   popupState.updateGateHidden = !shouldKeepGateVisible;
-  syncAppShellGateVisibility(shouldShow);
+  syncAppShellGateVisibility(shouldShowUpdateGate);
   dom.updateGate.classList.toggle("hidden", !shouldKeepGateVisible);
   dom.updateGate.setAttribute("aria-hidden", shouldKeepGateVisible ? "false" : "true");
   dom.updateGate.setAttribute(
@@ -254,7 +260,7 @@ function renderRestoreGate(restoreStatus) {
       restoreStatus.phase === "error"
         ? "Local recovery needs attention"
         : restoreStatus.phase === "restoring"
-        ? "Restoring your saved fetch"
+        ? "One moment please..."
         : "Restore previous session?";
   }
   if (dom.updateGateMessage instanceof HTMLElement) {
@@ -263,7 +269,8 @@ function renderRestoreGate(restoreStatus) {
         ? restoreStatus.message ||
           "Save Sora could not open the local recovery store for your saved fetch."
         : restoreStatus.phase === "restoring"
-        ? restoreStatus.message ||
+        ? restoreStatus.detail ||
+          restoreStatus.message ||
           `Loading ${restoreStatus.totalItems.toLocaleString()} saved videos from local storage and preparing your full results list.`
         : restoreStatus.message ||
           `Save Sora found ${restoreStatus.totalItems.toLocaleString()} saved videos from an interrupted fetch. Restore that full session now, or start fresh.`;

@@ -225,6 +225,78 @@ function selectNewestInstallableUpdateCandidate(candidates, currentVersion = "0.
   return selectedCandidate;
 }
 
+function simulateResolvePendingUpdateForInstall({
+  refreshLatest = true,
+  currentVersion = "0.0.0",
+  suppliedPendingUpdate = null,
+  storedPendingUpdate = null,
+  latestRelease = null,
+  latestReleaseError = null,
+} = {}) {
+  const pendingUpdate = refreshLatest
+    ? selectNewestInstallableUpdateCandidate(
+      [latestRelease, suppliedPendingUpdate, storedPendingUpdate],
+      currentVersion,
+    )
+    : selectNewestInstallableUpdateCandidate(
+      [suppliedPendingUpdate, storedPendingUpdate, latestRelease],
+      currentVersion,
+    );
+
+  if (
+    pendingUpdate &&
+    refreshLatest &&
+    latestReleaseError &&
+    (!latestRelease ||
+      (typeof latestRelease.version === "string" &&
+        compareVersions(pendingUpdate.version, latestRelease.version) > 0))
+  ) {
+    throw new Error(
+      "Save Sora could not verify the latest GitHub release before installing. Check for updates again and retry.",
+    );
+  }
+
+  if (pendingUpdate) {
+    return pendingUpdate;
+  }
+
+  if (latestReleaseError) {
+    throw latestReleaseError;
+  }
+
+  return null;
+}
+
+function simulateShouldPreferUpdateGate({
+  startupGateLocked = false,
+  restorePhase = "idle",
+  updatePhase = "idle",
+  shouldSuppressForActiveFetch = false,
+  dismissedErrorForSession = false,
+  skippedThisSession = false,
+} = {}) {
+  const activeUpdatePhases = new Set([
+    "checking",
+    "awaiting-folder",
+    "update-available",
+    "downloading",
+    "applying",
+    "reloading",
+    "deferred",
+    "error",
+  ]);
+  const shouldShowUpdateGate =
+    activeUpdatePhases.has(updatePhase) &&
+    !shouldSuppressForActiveFetch &&
+    !dismissedErrorForSession &&
+    !(skippedThisSession && (updatePhase === "update-available" || updatePhase === "deferred"));
+
+  return (
+    shouldShowUpdateGate ||
+    (startupGateLocked && restorePhase !== "restoring" && restorePhase !== "error")
+  );
+}
+
 function compareVersions(leftVersion, rightVersion) {
   const leftParts = String(leftVersion || "")
     .split(".")
@@ -416,9 +488,7 @@ function simulateFetchUiState(runtimeState, renderState) {
     phase,
     primaryActionMode:
       phase === "fetch-paused" && hasResumableFetchRequest
-        ? hasResults
-          ? "reset"
-          : "resume"
+        ? "resume"
         : hasResults && !isBusy
           ? "refresh"
           : "scan",
@@ -1036,7 +1106,9 @@ async function testStructuralInvariants() {
   assert.match(popupUpdateGateSource, /Restore previous session\?/);
   assert.match(popupUpdateGateSource, /syncAppShellGateVisibility/);
   assert.match(popupUpdateGateSource, /const shouldSuppressRestorePrompt =[\s\S]*popupState\.pendingDownloadStart \|\| runtimePhase === "downloading"/s);
-  assert.match(popupUpdateGateSource, /const shouldKeepGateVisible = popupState\.startupGateLocked \|\| shouldShow/);
+  assert.match(popupUpdateGateSource, /const shouldPreferUpdateGate =[\s\S]*shouldShowUpdateGate \|\|[\s\S]*popupState\.startupGateLocked &&[\s\S]*restoreStatus\.phase !== "restoring" &&[\s\S]*restoreStatus\.phase !== "error"/);
+  assert.match(popupUpdateGateSource, /const shouldKeepGateVisible = popupState\.startupGateLocked \|\| shouldShowUpdateGate/);
+  assert.match(popupUpdateGateSource, /"One moment please\.\.\."/);
   assert.match(popupUpdateGateSource, /Link the unpacked extension folder in Settings if you want Save Sora to install future GitHub updates automatically\./);
   assert.match(popupPrimaryControlsSource, /const isResumeMode = fetchUiState\.primaryActionMode === "resume"/);
   assert.match(popupPrimaryControlsSource, /const isRefreshMode = fetchUiState\.primaryActionMode === "refresh"/);
@@ -1195,6 +1267,7 @@ async function testStructuralInvariants() {
   assert.match(backgroundSource, /function selectNewestInstallableUpdateCandidate\(candidates, currentVersion = CURRENT_EXTENSION_VERSION\)/);
   assert.match(backgroundSource, /function isCachedInterfaceStateError\(error\)/);
   assert.match(backgroundSource, /async function resolvePendingUpdateForInstall\(options = \{\}\)/);
+  assert.match(backgroundSource, /Save Sora could not verify the latest GitHub release before installing\. Check for updates again and retry\./);
   assert.match(backgroundSource, /async function applyPendingUpdateToInstallFolder\(pendingUpdate, extractedFiles, onProgress\)/);
   assert.match(backgroundSource, /const \{\s+pendingUpdate,\s+latestRelease,\s+\} = await resolvePendingUpdateForInstall\(options\);/s);
   assert.match(backgroundSource, /const installRecord = await getLinkedInstallFolderRecord\(\{ bypassCache: true \}\);/);
@@ -1706,6 +1779,29 @@ function testInstallPrefersNewestAvailableRelease() {
   assert.deepEqual(selectedUpdate, { version: "1.23.9" });
 }
 
+function testInstallRefusesStalePendingUpdateWhenLatestCannotBeVerified() {
+  assert.throws(
+    () =>
+      simulateResolvePendingUpdateForInstall({
+        refreshLatest: true,
+        currentVersion: "1.23.2",
+        storedPendingUpdate: { version: "1.23.3" },
+        latestReleaseError: new Error("Timed out while checking GitHub for updates."),
+      }),
+    /could not verify the latest GitHub release/i,
+  );
+}
+
+function testUpdateGateWinsOverRestorePromptDuringActiveUpdate() {
+  assert.equal(
+    simulateShouldPreferUpdateGate({
+      updatePhase: "update-available",
+    }),
+    true,
+    "active update phases should take precedence over restore prompts so installs are not blocked by session recovery UI",
+  );
+}
+
 function testCachedInterfaceStateErrorIsRetryable() {
   assert.equal(
     isCachedInterfaceStateErrorMessage(
@@ -1743,7 +1839,7 @@ function testExpiredSoraSessionErrorIsRetryable() {
   );
 }
 
-function testPausedResultsPreferResetCta() {
+function testPausedResultsPreferResumeCta() {
   const uiState = simulateFetchUiState(
     {
       phase: "fetch-paused",
@@ -1760,8 +1856,8 @@ function testPausedResultsPreferResetCta() {
 
   assert.equal(
     uiState.primaryActionMode,
-    "reset",
-    "paused sessions with visible results should keep the primary CTA on Start Over while the drawer owns Resume",
+    "resume",
+    "paused sessions with visible results should keep the primary CTA aligned with the drawer on Resume",
   );
 }
 
@@ -1785,7 +1881,7 @@ function testReadyResultsPreferRefreshCta() {
   );
 }
 
-function testPausedCountsPreferResetCtaBeforeItemsHydrate() {
+function testPausedCountsPreferResumeCtaBeforeItemsHydrate() {
   const uiState = simulateFetchUiState(
     {
       phase: "fetch-paused",
@@ -1804,8 +1900,8 @@ function testPausedCountsPreferResetCtaBeforeItemsHydrate() {
 
   assert.equal(
     uiState.primaryActionMode,
-    "reset",
-    "paused sessions with restored counts should keep the primary CTA on Start Over even before the full results array hydrates",
+    "resume",
+    "paused sessions with restored counts should keep the primary CTA on Resume even before the full results array hydrates",
   );
 }
 
@@ -2428,11 +2524,13 @@ testPausedRequestPersistsAfterPause();
 testResumeFallsBackToPersistedSessionRequest();
 testRuntimePhaseWinsOverStaleRenderPhase();
 testInstallPrefersNewestAvailableRelease();
+testInstallRefusesStalePendingUpdateWhenLatestCannotBeVerified();
+testUpdateGateWinsOverRestorePromptDuringActiveUpdate();
 testCachedInterfaceStateErrorIsRetryable();
 testExpiredSoraSessionErrorIsRetryable();
-testPausedResultsPreferResetCta();
+testPausedResultsPreferResumeCta();
 testReadyResultsPreferRefreshCta();
-testPausedCountsPreferResetCtaBeforeItemsHydrate();
+testPausedCountsPreferResumeCtaBeforeItemsHydrate();
 testDismissedRestorePromptReturnsToFetchCta();
 testResumeBootstrapKeepsPausedResultsVisible();
 testResumeBootstrapUsesMergedPausedWorkingSet();
