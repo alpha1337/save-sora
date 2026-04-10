@@ -51,12 +51,22 @@ export async function handleRunFormSubmit(event) {
     popupState.latestRuntimeState,
     popupState.latestRenderState,
   );
-  const fetchUiState = isSourceSelectionScreenVisible()
-    ? {
-      ...baseFetchUiState,
-      primaryActionMode: "scan",
-    }
-    : baseFetchUiState;
+  const isSourceSelectionVisible = isSourceSelectionScreenVisible();
+  const isResetPrimaryMode = baseFetchUiState.primaryActionMode === "reset";
+  const isResumePrimaryMode = baseFetchUiState.primaryActionMode === "resume";
+  const isRefreshPrimaryMode = baseFetchUiState.primaryActionMode === "refresh";
+  const fetchUiState = {
+    ...baseFetchUiState,
+    primaryActionMode: isSourceSelectionVisible
+      ? "scan"
+      : isResumePrimaryMode
+        ? "resume"
+        : isResetPrimaryMode
+          ? "reset"
+          : isRefreshPrimaryMode || baseFetchUiState.hasResults
+          ? "refresh"
+          : "scan",
+  };
   const isResetMode = fetchUiState.primaryActionMode === "reset";
   const isResumeMode = fetchUiState.primaryActionMode === "resume";
   const isRefreshMode = fetchUiState.primaryActionMode === "refresh";
@@ -136,6 +146,7 @@ export async function handleDownloadButtonClick() {
   hideNotice(dom.errorBox);
   popupState.pendingDownloadStart = true;
   popupState.downloadOverlaySessionActive = true;
+  popupState.downloadOverlayHasStarted = false;
 
   const selectedCount = getSelectedKeysFromDom().length;
   const runtimeSettings =
@@ -166,6 +177,8 @@ export async function handleDownloadButtonClick() {
     }
   } catch (error) {
     popupState.pendingDownloadStart = false;
+    popupState.downloadOverlaySessionActive = false;
+    popupState.downloadOverlayHasStarted = false;
     showNotice(dom.errorBox, error instanceof Error ? error.message : String(error));
   } finally {
     await refreshStatus();
@@ -213,6 +226,7 @@ export async function handleDownloadOverlayCancel() {
   if (action === "return") {
     popupState.downloadOverlaySessionActive = false;
     popupState.pendingDownloadStart = false;
+    popupState.downloadOverlayHasStarted = false;
     popupState.bulkArchiveSelectionKeys = [];
     popupState.activeCreatorResultsTab = "all";
     popupState.browseState.query = "";
@@ -244,6 +258,8 @@ export async function handleDownloadOverlayCancel() {
     showNotice(dom.errorBox, error instanceof Error ? error.message : String(error));
   } finally {
     popupState.pendingDownloadStart = false;
+    popupState.downloadOverlaySessionActive = false;
+    popupState.downloadOverlayHasStarted = false;
     await refreshStatus();
   }
 }
@@ -421,6 +437,7 @@ export async function handleGoBackClick() {
 
   popupState.pendingDownloadStart = false;
   popupState.downloadOverlaySessionActive = false;
+  popupState.downloadOverlayHasStarted = false;
   popupState.bulkArchiveSelectionKeys = [];
   popupState.activeCreatorResultsTab = "all";
   popupState.browseState.query = "";

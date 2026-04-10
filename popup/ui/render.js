@@ -94,6 +94,10 @@ export function renderState(state) {
   const totalVideos = countSnapshot.fetchedCount;
   const selectedCountTotal = countSnapshot.downloadableCount;
 
+  if (popupState.downloadOverlaySessionActive && phase === "downloading") {
+    popupState.downloadOverlayHasStarted = true;
+  }
+
   if (
     popupState.pendingDownloadStart &&
     (phase === "downloading" || phase === "complete" || Boolean(state && state.lastError))
@@ -101,10 +105,29 @@ export function renderState(state) {
     const runTotal = Math.max(0, Number(state && state.runTotal) || 0);
     const completed = Math.max(0, Number(state && state.completed) || 0);
     const failed = Math.max(0, Number(state && state.failed) || 0);
-    const shouldKeepPendingOnStaleComplete =
-      phase === "complete" && runTotal === 0 && completed === 0 && failed === 0;
+    const hasRunEvidence = runTotal > 0 || completed > 0 || failed > 0;
+    const hasObservedCurrentRun =
+      popupState.downloadOverlayHasStarted || (phase === "downloading" && hasRunEvidence);
+    const isTerminalDownloadPhase = phase === "ready" || phase === "complete";
 
-    if (!shouldKeepPendingOnStaleComplete || Boolean(state && state.lastError)) {
+    if (phase === "downloading") {
+      popupState.pendingDownloadStart = false;
+      popupState.downloadOverlayHasStarted = true;
+    } else if (Boolean(state && state.lastError)) {
+      popupState.pendingDownloadStart = false;
+      popupState.downloadOverlaySessionActive = false;
+      popupState.downloadOverlayHasStarted = false;
+    } else if (isTerminalDownloadPhase && hasObservedCurrentRun) {
+      popupState.pendingDownloadStart = false;
+    }
+  }
+
+  if (popupState.pendingDownloadStart && phase === "ready") {
+    const runTotal = Math.max(0, Number(state && state.runTotal) || 0);
+    const completed = Math.max(0, Number(state && state.completed) || 0);
+    const failed = Math.max(0, Number(state && state.failed) || 0);
+    const hasRunEvidence = runTotal > 0 || completed > 0 || failed > 0;
+    if (popupState.downloadOverlayHasStarted || hasRunEvidence) {
       popupState.pendingDownloadStart = false;
     }
   }
@@ -241,6 +264,7 @@ function maybeResetTransientSessionFlags(state, items, phase) {
 
   popupState.pendingDownloadStart = false;
   popupState.downloadOverlaySessionActive = false;
+  popupState.downloadOverlayHasStarted = false;
   popupState.bulkArchiveSelectionKeys = [];
   popupState.activeCreatorResultsTab = "all";
   popupState.browseState.query = "";

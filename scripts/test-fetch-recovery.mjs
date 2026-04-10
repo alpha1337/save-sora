@@ -1142,7 +1142,7 @@ async function testStructuralInvariants() {
   assert.match(popupPrimaryControlsSource, /const isRefreshMode = fetchUiState\.primaryActionMode === "refresh"/);
   assert.match(popupPrimaryControlsSource, /export function syncPrimaryControls\(\)/);
   assert.match(popupPrimaryControlsSource, /dom\.fetchButtonLabel\.textContent = isFetching[\s\S]*?"Resume Fetch"/);
-  assert.match(popupPrimaryControlsSource, /"Check for updates"/);
+  assert.match(popupPrimaryControlsSource, /"Find Updates"/);
   assert.match(popupPrimaryControlsSource, /if \(dom\.selectAllButton && isSourceSelectionVisible\)/);
   assert.match(popupPrimaryControlsSource, /if \(dom\.clearSelectionButton && isSourceSelectionVisible\)/);
   assert.doesNotMatch(popupItemCardPartsSource, /titleButton\.disabled = context\.disableInputs;/);
@@ -1384,7 +1384,7 @@ async function testStructuralInvariants() {
   assert.doesNotMatch(backgroundSource, /transaction\.objectStore\(SOURCE_RETRY_STATE_STORE\)\.clear\(\);/);
   assert.match(backgroundSource, /async function resetExtensionState\(options = \{\}\)/);
   assert.match(backgroundSource, /const preserveRecoveryData = options\.preserveRecoveryData !== false;/);
-  assert.match(popupSelectionSource, /const showSummaryPanel = hasLoadedResults;/);
+  assert.match(popupSelectionSource, /const showSummaryPanel = showBrowseTools;/);
   assert.match(itemMutationsSource, /const countSnapshot = buildRenderCountSnapshot\(popupState\.latestRuntimeState, items\);/);
   assert.match(itemMutationsSource, /downloadableBytes: countSnapshot\.downloadableBytes,/);
   assert.match(itemMutationsSource, /const response = await saveBulkRemovedState\(normalizedKeys, removed, \{/);

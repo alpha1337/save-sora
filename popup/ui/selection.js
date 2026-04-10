@@ -400,15 +400,18 @@ export function syncSelectionControls(totalCount, selectedCount, visibleCount = 
   );
   const hasLoadedResults = popupState.latestRenderState.items.length > 0;
   const sourceSelectionState = getSelectionScreenActionState();
+  const isSourceSelectionVisible = sourceSelectionState.visible;
   const showSourceSelectionActions =
-    sourceSelectionState.visible && sourceSelectionState.visibleCount > 0;
+    isSourceSelectionVisible && sourceSelectionState.visibleCount > 0;
   const showDownloadButton =
     hasLoadedResults &&
     selectedCount > 0 &&
     !fetchUiState.isBusy &&
     !fetchUiState.isAnyPaused;
-  const showBrowseTools = hasLoadedResults;
-  const showSummaryPanel = hasLoadedResults;
+  const showBrowseTools =
+    !isSourceSelectionVisible &&
+    (hasLoadedResults || fetchUiState.isFetching || fetchUiState.isFetchPaused);
+  const showSummaryPanel = showBrowseTools;
   const normalizedSelectedCount = Math.max(0, Number(selectedCount) || 0);
   const bulkArchiveCandidateKeys = getBulkArchiveCandidateKeys();
   const bulkArchiveSelectedKeys = getBulkArchiveSelectedKeys();
@@ -477,6 +480,13 @@ export function syncSelectionControls(totalCount, selectedCount, visibleCount = 
   }
   if (dom.pickerToolbar instanceof HTMLElement) {
     dom.pickerToolbar.classList.toggle("hidden", !showBrowseTools);
+  }
+  if (dom.searchInput instanceof HTMLInputElement) {
+    const searchField = dom.searchInput.closest(".search-field");
+    if (searchField instanceof HTMLElement) {
+      searchField.classList.toggle("hidden", !showBrowseTools);
+    }
+    dom.searchInput.disabled = !showBrowseTools;
   }
   if (dom.sourceSelectField instanceof HTMLElement) {
     dom.sourceSelectField.classList.toggle("hidden", showBrowseTools);

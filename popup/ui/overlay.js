@@ -42,8 +42,15 @@ export function updateDownloadOverlay(state) {
   const percent = runTotal > 0
     ? Math.max(0, Math.min(100, Math.round((processed / runTotal) * 100)))
     : 0;
+  const hasDownloadRunEvidence =
+    popupState.downloadOverlayHasStarted ||
+    runTotal > 0 ||
+    completed > 0 ||
+    failed > 0 ||
+    (typeof runMode === "string" && runMode.length > 0);
   const hasSettledDownloadState =
     popupState.downloadOverlaySessionActive &&
+    hasDownloadRunEvidence &&
     (phase === "complete" || phase === "ready" || phase === "paused" || phase === "error");
   const isVisible = phase === "downloading" || popupState.pendingDownloadStart || hasSettledDownloadState;
 

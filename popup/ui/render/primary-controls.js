@@ -30,14 +30,20 @@ export function syncPrimaryControls() {
     !isSourceSelectionVisible ||
     selectionScreenState.totalCount === 0 ||
     selectionScreenState.selectedCount > 0;
-  const isResumeMode = fetchUiState.primaryActionMode === "resume";
   const isResetMode = fetchUiState.primaryActionMode === "reset";
+  const isResumeMode = fetchUiState.primaryActionMode === "resume";
   const isRefreshMode = fetchUiState.primaryActionMode === "refresh";
   const effectivePrimaryMode = isSourceSelectionVisible
     ? "scan"
-    : fetchUiState.primaryActionMode;
-  const effectiveIsResumeMode = effectivePrimaryMode === "resume";
+    : isResumeMode
+      ? "resume"
+      : isResetMode
+        ? "reset"
+        : isRefreshMode || hasResults
+          ? "refresh"
+          : "scan";
   const effectiveIsResetMode = effectivePrimaryMode === "reset";
+  const effectiveIsResumeMode = effectivePrimaryMode === "resume";
   const effectiveIsRefreshMode = effectivePrimaryMode === "refresh";
 
   if (dom.fetchButton) {
@@ -63,15 +69,18 @@ export function syncPrimaryControls() {
       : effectiveIsResumeMode
         ? "Resume Fetch"
         : effectiveIsRefreshMode
-          ? "Check for updates"
+          ? "Find Updates"
         : hasResults
           ? "Start Over"
           : "Fetch Videos";
   }
 
   if (dom.goBackButton instanceof HTMLButtonElement) {
-    dom.goBackButton.classList.remove("hidden");
-    dom.goBackButton.disabled = isBusy;
+    const shouldShowGoBack =
+      !isSourceSelectionVisible &&
+      (hasResults || isFetching || isFetchPaused);
+    dom.goBackButton.classList.toggle("hidden", !shouldShowGoBack);
+    dom.goBackButton.disabled = !shouldShowGoBack || isBusy;
   }
 
   setSourceControlDisabled(dom.sourceSelectButton, dom.sourceSelectInputs, isBusy || isAnyPaused);
