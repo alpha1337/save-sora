@@ -128,31 +128,59 @@ async function runFetchJob(job: FetchJob, signal: AbortSignal): Promise<void> {
   useAppStore.getState().setFetchProgress({ active_label: job.label });
   throwIfFetchCanceled(signal);
 
-  const rows = await collectAllRows(job.source, job, signal);
-  throwIfFetchCanceled(signal);
   const fetchedAt = new Date().toISOString();
-  const normalizedRows = isDraftSource(job.source)
-    ? normalizeDraftRows(job.source, rows, fetchedAt)
-    : normalizePostRows(job.source, rows, fetchedAt);
-  const recoveredRows = await recoverMissingVideoIds(normalizedRows, signal);
-  throwIfFetchCanceled(signal);
+  await streamFetchBatches(job.source, job, signal, async (rows) => {
+    const normalizedRows = isDraftSource(job.source)
+      ? normalizeDraftRows(job.source, rows, fetchedAt)
+      : normalizePostRows(job.source, rows, fetchedAt);
+    const recoveredRows = await recoverMissingVideoIds(normalizedRows, signal);
+    throwIfFetchCanceled(signal);
 
-  const draftResolutionRecords = buildDraftResolutionRecords(rows);
-  if (draftResolutionRecords.length > 0) {
-    await saveDraftResolutionRecords(draftResolutionRecords);
-  }
+    const draftResolutionRecords = buildDraftResolutionRecords(rows);
+    const persistenceTasks: Array<Promise<void>> = [];
 
-  await upsertVideoRows(recoveredRows);
-  useAppStore.getState().upsertVideoRows(recoveredRows);
+    if (draftResolutionRecords.length > 0) {
+      persistenceTasks.push(saveDraftResolutionRecords(draftResolutionRecords));
+    }
+    if (recoveredRows.length > 0) {
+      persistenceTasks.push(upsertVideoRows(recoveredRows));
+    }
+
+    if (persistenceTasks.length > 0) {
+      await Promise.all(persistenceTasks);
+    }
+
+    if (recoveredRows.length > 0) {
+      useAppStore.getState().upsertVideoRows(recoveredRows);
+    }
+
+    return draftResolutionRecords;
+  });
+
   incrementCompletedJobs();
 }
 
 async function collectAllRows(source: LowLevelSourceType, job: FetchJob | { label: string }, signal: AbortSignal): Promise<unknown[]> {
-  const draftResolutionMap = await loadDraftResolutionMap();
   const collectedRows: unknown[] = [];
+  await streamFetchBatches(source, job, signal, async (rows) => {
+    collectedRows.push(...rows);
+    return [];
+  });
+
+  return collectedRows;
+}
+
+async function streamFetchBatches(
+  source: LowLevelSourceType,
+  job: FetchJob | { label: string },
+  signal: AbortSignal,
+  onBatch: (rows: unknown[]) => Promise<DraftResolutionRecord[]>
+): Promise<void> {
+  const draftResolutionMap = await loadDraftResolutionMap();
   let cursor: string | null = null;
   let offset: number | null = null;
   let done = false;
+  let streamedRowCount = 0;
 
   while (!done) {
     throwIfFetchCanceled(signal);
@@ -171,19 +199,21 @@ async function collectAllRows(source: LowLevelSourceType, job: FetchJob | { labe
     });
     throwIfFetchCanceled(signal);
 
-    collectedRows.push(...response.payload.rows);
+    const batchRows = response.payload.rows;
+    const learnedDraftResolutionRecords = batchRows.length > 0 ? await onBatch(batchRows) : [];
+    throwIfFetchCanceled(signal);
+
+    for (const record of learnedDraftResolutionRecords) {
+      draftResolutionMap.set(record.generation_id, record.video_id);
+    }
+
+    streamedRowCount += batchRows.length;
     cursor = response.payload.next_cursor;
     offset = response.payload.next_offset;
     done = response.payload.done;
 
-    useAppStore.getState().setFetchProgress({
-      active_label: `Fetched ${collectedRows.length} rows from ${job.label}`,
-      processed_batches: useAppStore.getState().fetch_progress.processed_batches + 1,
-      processed_rows: useAppStore.getState().fetch_progress.processed_rows + response.payload.rows.length
-    });
+    updateFetchBatchProgress(job.label, streamedRowCount, batchRows.length);
   }
-
-  return collectedRows;
 }
 
 async function recoverMissingVideoIds(rows: VideoRow[], signal: AbortSignal): Promise<VideoRow[]> {
@@ -266,11 +296,24 @@ function buildDraftResolutionRecords(rows: unknown[]): DraftResolutionRecord[] {
 }
 
 function incrementCompletedJobs(): void {
-  const state = useAppStore.getState();
-  state.setFetchProgress({
-    completed_jobs: state.fetch_progress.completed_jobs + 1,
-    active_label: `${state.fetch_progress.completed_jobs + 1} of ${state.fetch_progress.total_jobs} jobs complete`
-  });
+  useAppStore.setState((state) => ({
+    fetch_progress: {
+      ...state.fetch_progress,
+      completed_jobs: state.fetch_progress.completed_jobs + 1,
+      active_label: `${state.fetch_progress.completed_jobs + 1} of ${state.fetch_progress.total_jobs} jobs complete`
+    }
+  }));
+}
+
+function updateFetchBatchProgress(jobLabel: string, streamedRowCount: number, batchRowCount: number): void {
+  useAppStore.setState((state) => ({
+    fetch_progress: {
+      ...state.fetch_progress,
+      active_label: `Fetched ${streamedRowCount} rows from ${jobLabel}`,
+      processed_batches: state.fetch_progress.processed_batches + 1,
+      processed_rows: state.fetch_progress.processed_rows + batchRowCount
+    }
+  }));
 }
 
 function isDraftSource(source: LowLevelSourceType): boolean {
