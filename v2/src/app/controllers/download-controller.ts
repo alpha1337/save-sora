@@ -21,7 +21,7 @@ interface ZipWorkerCompleteMessage {
   type: "complete";
   payload: {
     archive_name: string;
-    bytes: ArrayBuffer;
+    blob: Blob;
   };
 }
 
@@ -60,12 +60,16 @@ export async function downloadSelectedRows(): Promise<void> {
   const archiveBlob = await new Promise<Blob>((resolve, reject) => {
     worker.addEventListener("message", (event: MessageEvent<ZipWorkerProgressMessage | ZipWorkerCompleteMessage | ZipWorkerErrorMessage>) => {
       if (event.data.type === "progress") {
-        state.setDownloadProgress(event.data.payload);
+        const currentCompletedItems = useAppStore.getState().download_progress.completed_items;
+        state.setDownloadProgress({
+          ...event.data.payload,
+          completed_items: Math.max(currentCompletedItems, event.data.payload.completed_items)
+        });
         return;
       }
 
       if (event.data.type === "complete") {
-        resolve(new Blob([event.data.payload.bytes], { type: "application/zip" }));
+        resolve(event.data.payload.blob);
         return;
       }
 

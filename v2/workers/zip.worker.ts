@@ -25,26 +25,27 @@ self.addEventListener("message", (event: MessageEvent<BuildArchiveMessage>) => {
 async function buildArchive(workPlan: ArchiveWorkPlan): Promise<void> {
   const libraryPathByVideoId = new Map(workPlan.organizer_rows.map((row) => [row.video_id, row.library_path]));
   const chunks: Uint8Array[] = [];
+  let completedItems = 0;
   const zip = new Zip((error, chunk, final) => {
     if (error) {
       throw error;
     }
     chunks.push(chunk);
     if (final) {
+      const archiveBlob = new Blob(chunks as unknown as BlobPart[], { type: "application/zip" });
       self.postMessage(
         {
           type: "complete",
           payload: {
             archive_name: workPlan.archive_name,
-            bytes: mergeChunks(chunks).buffer
+            blob: archiveBlob
           }
-        },
-        { transfer: [mergeChunks(chunks).buffer] }
+        }
       );
     }
   });
 
-  await runWithConcurrency(workPlan.rows, ZIP_FETCH_CONCURRENCY, async (row, index) => {
+  await runWithConcurrency(workPlan.rows, ZIP_FETCH_CONCURRENCY, async (row) => {
     const response = await fetch(`https://soravdl.com/api/proxy/video/${encodeURIComponent(row.video_id)}`);
     if (!response.ok) {
       throw new Error(`soraVDL download failed for ${row.video_id} with status ${response.status}.`);
@@ -54,12 +55,13 @@ async function buildArchive(workPlan: ArchiveWorkPlan): Promise<void> {
     const entry = new ZipPassThrough(libraryPathByVideoId.get(row.video_id) ?? `library/${row.video_id}.mp4`);
     zip.add(entry);
     entry.push(bytes, true);
+    completedItems += 1;
 
     self.postMessage({
       type: "progress",
       payload: {
         active_label: `Bundled ${row.title || row.video_id}`,
-        completed_items: index + 1,
+        completed_items: completedItems,
         total_items: workPlan.rows.length
       }
     });
@@ -91,15 +93,4 @@ async function runWithConcurrency<T>(values: T[], concurrency: number, workerFn:
   }
 
   await Promise.all(Array.from({ length: Math.min(concurrency, values.length) }, () => worker()));
-}
-
-function mergeChunks(chunks: Uint8Array[]): Uint8Array {
-  const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
-  const merged = new Uint8Array(totalLength);
-  let offset = 0;
-  for (const chunk of chunks) {
-    merged.set(chunk, offset);
-    offset += chunk.length;
-  }
-  return merged;
 }
