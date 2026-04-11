@@ -177,7 +177,6 @@ export function normalizeCharacterAccounts(rows: unknown[]): CharacterAccount[] 
       profile_picture_url: normalizeAbsoluteUrl(
         pickFirstString([record.profile_picture_url, record.profilePictureUrl, record.avatar_url, record.avatarUrl])
       ) || null,
-      published_count: pickFirstNumber([record.post_count, record.postCount]),
       appearance_count: pickFirstNumber([record.cameo_count, record.cameoCount, record.appearance_count, record.appearanceCount]),
       draft_count: pickFirstNumber([record.draft_count, record.draftCount])
     });

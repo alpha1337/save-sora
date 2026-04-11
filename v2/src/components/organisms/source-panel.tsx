@@ -29,7 +29,8 @@ export function SourcePanel(props: SourcePanelProps) {
         <h2>Sources</h2>
         <p className="ss-muted">
           Pick one or more source groups, then fetch normalized rows into the local session store. Saved creators expand into
-          published plus cameo jobs. Character accounts expand into posts, appearances, and drafts.
+          published plus cameo jobs unless the saved creator is a character, in which case it expands into appearances and drafts.
+          Character accounts expand into appearances and drafts only.
         </p>
       </div>
       <SourceSelector disabled={props.disabled} onToggleSource={props.onToggleSource} sourceSelections={props.sourceSelections} />

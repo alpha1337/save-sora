@@ -52,7 +52,7 @@ export function CreatorProfileManager({
             <div>
               <strong>{profile.display_name}</strong>
               <div className="ss-muted">@{profile.username || profile.user_id}</div>
-              <div className="ss-muted">{formatSourceCounts(profile.published_count, profile.appearance_count, profile.draft_count)}</div>
+              <div className="ss-muted">{formatSourceCounts(profile)}</div>
             </div>
             <Button onClick={() => onRemoveCreatorProfile(profile.profile_id)} tone="ghost" type="button">
               <Trash2 size={16} />
@@ -64,12 +64,17 @@ export function CreatorProfileManager({
   );
 }
 
-function formatSourceCounts(publishedCount: number | null, appearanceCount: number | null, draftCount: number | null): string {
-  const segments = [
-    typeof publishedCount === "number" ? `${formatCount(publishedCount)} published` : "",
-    typeof appearanceCount === "number" ? `${formatCount(appearanceCount)} appearances` : "",
-    typeof draftCount === "number" ? `${formatCount(draftCount)} drafts` : ""
-  ].filter(Boolean);
+function formatSourceCounts(profile: CreatorProfile): string {
+  const segments = profile.is_character_profile
+    ? [
+        typeof profile.appearance_count === "number" ? `${formatCount(profile.appearance_count)} appearances` : "",
+        typeof profile.draft_count === "number" ? `${formatCount(profile.draft_count)} drafts` : ""
+      ].filter(Boolean)
+    : [
+        typeof profile.published_count === "number" ? `${formatCount(profile.published_count)} published` : "",
+        typeof profile.appearance_count === "number" ? `${formatCount(profile.appearance_count)} appearances` : "",
+        typeof profile.draft_count === "number" ? `${formatCount(profile.draft_count)} drafts` : ""
+      ].filter(Boolean);
 
   return segments.join(" · ") || "No source counts available";
 }

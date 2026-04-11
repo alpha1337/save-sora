@@ -18,7 +18,6 @@ export type LowLevelSourceType =
   | "characters"
   | "characterDrafts"
   | "characterProfiles"
-  | "characterAccountPosts"
   | "characterAccountAppearances"
   | "characterAccountDrafts"
   | "creatorProfileLookup"
@@ -63,7 +62,6 @@ export interface CharacterAccount {
   username: string;
   display_name: string;
   profile_picture_url: string | null;
-  published_count: number | null;
   appearance_count: number | null;
   draft_count: number | null;
 }

@@ -127,16 +127,6 @@ async function fetchBatchPayload(request: FetchBatchRequest, cursor: string | nu
     const viewerUserId = await deriveViewerUserId();
     return fetchJson(buildUrl(`/backend/project_y/profile/${encodeURIComponent(viewerUserId)}/characters`, { limit, cursor }).toString());
   }
-  if (request.source === "characterAccountPosts") {
-    const characterId = request.character_id ?? "";
-    return fetchFirstSuccessfulJson([
-      buildUrl(`/backend/project_y/profile/${encodeURIComponent(characterId)}/post_listing/posts`, { limit, cursor }).toString(),
-      buildUrl(`/backend/project_y/profile/${encodeURIComponent(characterId)}/post_listing/profile`, { limit, cursor }).toString(),
-      buildUrl(`/backend/project_y/profile/${encodeURIComponent(characterId)}/post_listing/public`, { limit, cursor }).toString(),
-      buildUrl(`/backend/project_y/profile/${encodeURIComponent(characterId)}/post_listing/published`, { limit, cursor }).toString(),
-      buildUrl(`/backend/project_y/profile_feed/${encodeURIComponent(characterId)}`, { limit, cut: "nf2", cursor }).toString()
-    ]);
-  }
   if (request.source === "characterAccountAppearances") {
     return (
       (await fetchPreferredPayload(
@@ -458,7 +448,6 @@ function getCursorKindForSource(source: FetchBatchRequest["source"]): string {
     source === "profile" ||
     source === "likes" ||
     source === "characters" ||
-    source === "characterAccountPosts" ||
     source === "characterAccountAppearances" ||
     source === "creatorPublished" ||
     source === "creatorCameos"

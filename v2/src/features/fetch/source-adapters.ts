@@ -37,13 +37,6 @@ export function buildFetchJobs(state: AppStoreState): FetchJob[] {
       const account = state.character_accounts.find((entry) => entry.account_id === characterId);
       const labelPrefix = account?.display_name || account?.username || characterId;
       jobs.push({
-        id: `character-account-posts:${characterId}`,
-        label: `${labelPrefix} posts`,
-        source: "characterAccountPosts",
-        expected_total_count: account?.published_count ?? null,
-        character_id: characterId
-      });
-      jobs.push({
         id: `character-account-appearances:${characterId}`,
         label: `${labelPrefix} appearances`,
         source: "characterAccountAppearances",
@@ -77,14 +70,6 @@ function buildCreatorJobs(profile: CreatorProfile): FetchJob[] {
 
   if (profile.is_character_profile && profile.user_id.startsWith("ch_")) {
     return [
-      {
-        id: `creator-character-posts:${profile.profile_id}`,
-        label: `${profile.display_name} posts`,
-        source: "characterAccountPosts",
-        expected_total_count: profile.published_count,
-        character_id: profile.user_id,
-        route_url: profile.permalink
-      },
       {
         id: `creator-character-appearances:${profile.profile_id}`,
         label: `${profile.display_name} appearances`,

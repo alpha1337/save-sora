@@ -59,7 +59,7 @@ describe("buildFetchJobs", () => {
           permalink: "https://sora.chatgpt.com/profile/crystal.party",
           profile_picture_url: null,
           is_character_profile: true,
-          published_count: 0,
+          published_count: null,
           appearance_count: 143852,
           draft_count: null,
           created_at: "2026-04-11T00:00:00.000Z"
@@ -68,11 +68,10 @@ describe("buildFetchJobs", () => {
     );
 
     expect(jobs.map((job) => job.source)).toEqual([
-      "characterAccountPosts",
       "characterAccountAppearances",
       "characterAccountDrafts"
     ]);
-    expect(jobs.map((job) => job.expected_total_count)).toEqual([0, 143852, null]);
+    expect(jobs.map((job) => job.expected_total_count)).toEqual([143852, null]);
   });
 
   it("keeps normal creator profiles on the creator fetch path", () => {

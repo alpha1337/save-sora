@@ -36,7 +36,7 @@ export function CharacterAccountSelector({
               label={account.display_name || account.username || account.account_id}
               onCheckedChange={(checked) => onToggleAccount(account.account_id, checked)}
             />
-            <div className="ss-checkbox-meta ss-muted">{formatSourceCounts(account.published_count, account.appearance_count, account.draft_count)}</div>
+            <div className="ss-checkbox-meta ss-muted">{formatSourceCounts(account.appearance_count, account.draft_count)}</div>
           </div>
         ))}
       </div>
@@ -44,9 +44,8 @@ export function CharacterAccountSelector({
   );
 }
 
-function formatSourceCounts(publishedCount: number | null, appearanceCount: number | null, draftCount: number | null): string {
+function formatSourceCounts(appearanceCount: number | null, draftCount: number | null): string {
   const segments = [
-    typeof publishedCount === "number" ? `${formatCount(publishedCount)} posts` : "",
     typeof appearanceCount === "number" ? `${formatCount(appearanceCount)} appearances` : "",
     typeof draftCount === "number" ? `${formatCount(draftCount)} drafts` : ""
   ].filter(Boolean);

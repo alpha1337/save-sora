@@ -331,7 +331,6 @@ function getPageBudgetForSource(source: LowLevelSourceType): number {
   if (
     source === "creatorPublished" ||
     source === "creatorCameos" ||
-    source === "characterAccountPosts" ||
     source === "characterAccountAppearances" ||
     source === "characterAccountDrafts"
   ) {
