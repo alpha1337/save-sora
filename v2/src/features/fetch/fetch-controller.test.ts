@@ -6,6 +6,7 @@ import {
   buildInitialFetchProgress,
   finalizeFetchJobCheckpoint,
   getNewStoredRowIds,
+  shouldStopForNoGrowthPages,
   shouldStopForStalledCursor
 } from "./fetch-controller";
 
@@ -91,6 +92,26 @@ describe("fetch-controller helpers", () => {
         4,
         100,
         "characterAccountAppearances"
+      )
+    ).toBe(false);
+  });
+
+  it("stops a non-offset crawl after consecutive zero-growth pages even when cursors change", () => {
+    expect(
+      shouldStopForNoGrowthPages(
+        3,
+        100,
+        "characterAccountAppearances"
+      )
+    ).toBe(true);
+  });
+
+  it("does not apply the no-growth stop rule to offset-paginated sources", () => {
+    expect(
+      shouldStopForNoGrowthPages(
+        3,
+        100,
+        "drafts"
       )
     ).toBe(false);
   });

@@ -150,7 +150,21 @@ async function fetchBatchPayload(
     };
   }
 
+  if (request.source === "characterAccountAppearances") {
+    const appearanceCandidate = endpointCandidates.find((candidate) => candidate.key === "character-appearances") ?? null;
+    if (appearanceCandidate) {
+      const appearancePayload = await fetchEndpointCandidate(appearanceCandidate);
+      if (appearancePayload && getPostListingRows(appearancePayload).length > 0) {
+        return {
+          endpointKey: appearanceCandidate.key,
+          payload: appearancePayload
+        };
+      }
+    }
+  }
+
   const preferredCandidate = await resolvePreferredEndpointCandidate(
+    request.source,
     endpointCandidates,
     cursor ?? "",
     getCursorKindForSource(request.source)
@@ -248,6 +262,7 @@ async function enrichDraftRows(
 }
 
 export function selectPreferredEndpointCandidate(
+  source: FetchBatchRequest["source"],
   candidatePayloads: Array<{ key: string; payload: unknown }>,
   requestCursor: string,
   cursorKind: string
@@ -269,6 +284,10 @@ export function selectPreferredEndpointCandidate(
 
     if (!firstSuccessfulPayload) {
       firstSuccessfulPayload = candidatePayload;
+    }
+
+    if (source === "characterAccountAppearances" && candidatePayload.key === "character-appearances" && score > 0) {
+      return candidatePayload;
     }
 
     if (score > bestScore) {
@@ -315,6 +334,7 @@ async function fetchOptionalJson(url: string): Promise<unknown | null> {
 }
 
 async function resolvePreferredEndpointCandidate(
+  source: FetchBatchRequest["source"],
   endpointCandidates: FetchEndpointCandidate[],
   requestCursor: string,
   cursorKind: string
@@ -340,7 +360,7 @@ async function resolvePreferredEndpointCandidate(
     });
   }
 
-  const preferredCandidate = selectPreferredEndpointCandidate(candidatePayloads, requestCursor, cursorKind);
+  const preferredCandidate = selectPreferredEndpointCandidate(source, candidatePayloads, requestCursor, cursorKind);
   if (preferredCandidate) {
     return {
       endpointKey: preferredCandidate.key,

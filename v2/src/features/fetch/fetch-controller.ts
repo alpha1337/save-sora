@@ -26,6 +26,7 @@ const FETCH_PAGE_BUDGET = 3;
 const HIGH_VOLUME_SOURCE_PAGE_BUDGET = 1;
 const FETCH_CONCURRENCY = 3;
 const DETAIL_FALLBACK_CONCURRENCY = 4;
+const NO_GROWTH_PAGE_LIMIT = 3;
 let activeFetchAbortController: AbortController | null = null;
 
 interface BatchProcessResult {
@@ -279,6 +280,7 @@ async function streamFetchBatches(
   let streamedRowCount = checkpoint?.fetched_rows ?? 0;
   let processedBatches = checkpoint?.processed_batches ?? 0;
   const seenSessionRowIds = new Set(useAppStore.getState().video_rows.map((row) => row.row_id));
+  let consecutiveNoGrowthPages = 0;
   let latestCheckpoint = checkpoint;
 
   while (!done) {
@@ -312,6 +314,7 @@ async function streamFetchBatches(
     const newStoredRowIds = getNewStoredRowIds(batchResult.stored_row_ids, seenSessionRowIds);
     streamedRowCount += newStoredRowIds.length;
     processedBatches += 1;
+    consecutiveNoGrowthPages = newStoredRowIds.length === 0 ? consecutiveNoGrowthPages + 1 : 0;
     updateFetchBatchProgress(job, streamedRowCount, newStoredRowIds.length, processedBatches);
 
     for (const record of batchResult.draftResolutionRecords) {
@@ -322,7 +325,8 @@ async function streamFetchBatches(
 
     done =
       response.payload.done ||
-      shouldStopForStalledCursor(requestCursor, response.payload.next_cursor, newStoredRowIds.length, batchRows.length, source);
+      shouldStopForStalledCursor(requestCursor, response.payload.next_cursor, newStoredRowIds.length, batchRows.length, source) ||
+      shouldStopForNoGrowthPages(consecutiveNoGrowthPages, batchRows.length, source);
 
     if ("id" in job) {
       latestCheckpoint = buildFetchJobCheckpoint(job, selectionSignature, latestCheckpoint, {
@@ -637,6 +641,18 @@ export function shouldStopForStalledCursor(
   }
 
   return requestCursor === nextCursor && newStoredRowCount === 0 && batchRowCount > 0;
+}
+
+export function shouldStopForNoGrowthPages(
+  consecutiveNoGrowthPages: number,
+  batchRowCount: number,
+  source: LowLevelSourceType
+): boolean {
+  if (supportsOffsetPagination(source) || batchRowCount === 0) {
+    return false;
+  }
+
+  return consecutiveNoGrowthPages >= NO_GROWTH_PAGE_LIMIT;
 }
 
 function supportsOffsetPagination(source: LowLevelSourceType): boolean {
