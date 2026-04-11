@@ -116,6 +116,16 @@ describe("fetch-controller helpers", () => {
     ).toBe(false);
   });
 
+  it("stops empty cursor pages after consecutive no-growth batches", () => {
+    expect(
+      shouldStopForNoGrowthPages(
+        3,
+        0,
+        "characterAccountAppearances"
+      )
+    ).toBe(true);
+  });
+
   it("ignores stale checkpoints from a different selection signature", () => {
     const jobs: FetchJob[] = [
       {

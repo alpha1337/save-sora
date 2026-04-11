@@ -648,7 +648,7 @@ export function shouldStopForNoGrowthPages(
   batchRowCount: number,
   source: LowLevelSourceType
 ): boolean {
-  if (supportsOffsetPagination(source) || batchRowCount === 0) {
+  if (supportsOffsetPagination(source)) {
     return false;
   }
 

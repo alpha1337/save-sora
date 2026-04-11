@@ -89,9 +89,7 @@ async function runFetchBatch(request: FetchBatchRequest) {
     const nextOffset: number | null = supportsOffsetPagination(request.source)
       ? (nextCursor ? offset : (offset ?? 0) + (request.limit ?? 100))
       : null;
-    const isDone = supportsOffsetPagination(request.source)
-      ? (!nextCursor && !hasMoreRows)
-      : !nextCursor;
+    const isDone = shouldFinishFetchPage(request.source, pageRows.length, nextCursor, hasMoreRows);
 
     previousCursor = cursor;
     cursor = nextCursor;
@@ -693,6 +691,19 @@ function isDraftSource(source: FetchBatchRequest["source"]): boolean {
 
 function supportsOffsetPagination(source: FetchBatchRequest["source"]): boolean {
   return source === "drafts";
+}
+
+export function shouldFinishFetchPage(
+  source: FetchBatchRequest["source"],
+  pageRowCount: number,
+  nextCursor: string | null,
+  hasMoreRows: boolean
+): boolean {
+  if (supportsOffsetPagination(source)) {
+    return !nextCursor && !hasMoreRows;
+  }
+
+  return pageRowCount === 0 || !nextCursor;
 }
 
 function getCursorKindForSource(source: FetchBatchRequest["source"]): string {

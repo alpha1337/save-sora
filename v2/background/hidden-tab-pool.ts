@@ -19,7 +19,17 @@ export class HiddenTabPool {
     const worker = await this.acquireWorker(routeUrl);
 
     try {
-      return await task(worker.tabId);
+      try {
+        return await task(worker.tabId);
+      } catch (error) {
+        if (!shouldRetryWorkerTask(error)) {
+          throw error;
+        }
+
+        worker.injected = false;
+        await ensureTabReady(worker, routeUrl);
+        return await task(worker.tabId);
+      }
     } finally {
       worker.busy = false;
       this.queue.shift()?.();
@@ -51,6 +61,15 @@ export class HiddenTabPool {
       await new Promise<void>((resolve) => this.queue.push(resolve));
     }
   }
+}
+
+export function shouldRetryWorkerTask(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    /Receiving end does not exist/i.test(message) ||
+    /message channel closed before a response was received/i.test(message) ||
+    /The message port closed before a response was received/i.test(message)
+  );
 }
 
 async function ensureTabReady(worker: HiddenWorker, routeUrl: string | undefined): Promise<void> {

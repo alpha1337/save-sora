@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { selectPreferredEndpointCandidate } from "../injected/sources/source-runner";
+import { selectPreferredEndpointCandidate, shouldFinishFetchPage } from "../injected/sources/source-runner";
 
 describe("source endpoint selection", () => {
   it("prefers the candidate that both paginates and returns rows", () => {
@@ -77,5 +77,16 @@ describe("source endpoint selection", () => {
     );
 
     expect(selected?.key).toBe("published");
+  });
+
+  it("treats empty cursor pages as terminal for non-offset sources", () => {
+    expect(
+      shouldFinishFetchPage(
+        "characterAccountAppearances",
+        0,
+        "cursor-2",
+        false
+      )
+    ).toBe(true);
   });
 });
