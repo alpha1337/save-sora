@@ -122,6 +122,7 @@ export function getVideoIdFromValue(value: unknown): string {
   }
 
   const record = value as Record<string, unknown>;
+  const candidateObjects = getCandidateObjects(record);
   const directId = pickFirstString([
     record.shared_post_id,
     record.sharedPostId,
@@ -139,7 +140,38 @@ export function getVideoIdFromValue(value: unknown): string {
     extractPostIdFromUrl(record.share_url),
     extractPostIdFromUrl(record.shareUrl),
     extractPostIdFromUrl(record.url),
-    record.id
+    record.id,
+    ...candidateObjects.flatMap((candidate) => [
+      candidate.shared_post_id,
+      candidate.sharedPostId,
+      candidate.post_id,
+      candidate.postId,
+      candidate.public_id,
+      candidate.publicId,
+      candidate.share_id,
+      candidate.shareId,
+      extractPostIdFromUrl(candidate.permalink),
+      extractPostIdFromUrl(candidate.detail_url),
+      extractPostIdFromUrl(candidate.detailUrl),
+      extractPostIdFromUrl(candidate.public_url),
+      extractPostIdFromUrl(candidate.publicUrl),
+      extractPostIdFromUrl(candidate.share_url),
+      extractPostIdFromUrl(candidate.shareUrl),
+      extractPostIdFromUrl(candidate.url),
+      candidate.id
+    ]),
+    ...getAttachmentObjects(record).flatMap((attachment) => [
+      extractPostIdFromUrl(attachment.permalink),
+      extractPostIdFromUrl(attachment.detail_url),
+      extractPostIdFromUrl(attachment.detailUrl),
+      extractPostIdFromUrl(attachment.public_url),
+      extractPostIdFromUrl(attachment.publicUrl),
+      extractPostIdFromUrl(attachment.share_url),
+      extractPostIdFromUrl(attachment.shareUrl),
+      extractPostIdFromUrl(attachment.downloadable_url),
+      extractPostIdFromUrl(attachment.downloadableUrl),
+      extractPostIdFromUrl(attachment.url)
+    ])
   ]);
 
   return VIDEO_ID_PATTERN.test(directId) ? directId : "";
@@ -174,6 +206,7 @@ export function getRowPostId(value: unknown): string {
   }
 
   const record = value as Record<string, unknown>;
+  const candidateObjects = getCandidateObjects(record);
   return pickFirstString([
     getVideoIdFromValue(record),
     record.id,
@@ -185,8 +218,54 @@ export function getRowPostId(value: unknown): string {
     extractPostIdFromUrl(record.permalink),
     extractPostIdFromUrl(record.detail_url),
     extractPostIdFromUrl(record.detailUrl),
-    extractPostIdFromUrl(record.url)
+    extractPostIdFromUrl(record.url),
+    ...candidateObjects.flatMap((candidate) => [
+      candidate.id,
+      candidate.post_id,
+      candidate.postId,
+      candidate.public_id,
+      candidate.publicId,
+      getDraftGenerationId(candidate),
+      extractPostIdFromUrl(candidate.permalink),
+      extractPostIdFromUrl(candidate.detail_url),
+      extractPostIdFromUrl(candidate.detailUrl),
+      extractPostIdFromUrl(candidate.url)
+    ])
   ]);
+}
+
+function normalizeTimestampValue(value: unknown): string {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return new Date((value > 1e12 ? value : value * 1000)).toISOString();
+  }
+
+  if (typeof value !== "string" || !value.trim()) {
+    return "";
+  }
+
+  const trimmedValue = value.trim();
+  const numericValue = Number(trimmedValue);
+  if (Number.isFinite(numericValue)) {
+    return new Date((numericValue > 1e12 ? numericValue : numericValue * 1000)).toISOString();
+  }
+
+  const parsedValue = Date.parse(trimmedValue);
+  if (Number.isFinite(parsedValue)) {
+    return new Date(parsedValue).toISOString();
+  }
+
+  return trimmedValue;
+}
+
+function pickFirstTimestamp(candidates: unknown[]): string | null {
+  for (const candidate of candidates) {
+    const normalizedTimestamp = normalizeTimestampValue(candidate);
+    if (normalizedTimestamp) {
+      return normalizedTimestamp;
+    }
+  }
+
+  return null;
 }
 
 export function getTextValue(value: unknown, fieldNames: string[]): string {
@@ -343,6 +422,7 @@ export function getDurationSeconds(value: unknown): number | null {
   }
 
   const record = value as Record<string, unknown>;
+  const attachmentObjects = getAttachmentObjects(record);
   return pickFirstNumber([
     record.duration_s,
     record.durationSecs,
@@ -353,6 +433,12 @@ export function getDurationSeconds(value: unknown): number | null {
       candidate.durationSecs,
       candidate.duration_secs,
       candidate.durationSeconds
+    ]),
+    ...attachmentObjects.flatMap((attachment) => [
+      attachment.duration_s,
+      attachment.durationSecs,
+      attachment.duration_secs,
+      attachment.durationSeconds
     ])
   ]);
 }
@@ -363,18 +449,21 @@ export function getDimensions(value: unknown): { height: number | null; width: n
   }
 
   const record = value as Record<string, unknown>;
+  const attachmentObjects = getAttachmentObjects(record);
   return {
     width: pickFirstNumber([
       record.width,
       record.video_width,
       record.videoWidth,
-      ...getCandidateObjects(record).flatMap((candidate) => [candidate.width, candidate.video_width, candidate.videoWidth])
+      ...getCandidateObjects(record).flatMap((candidate) => [candidate.width, candidate.video_width, candidate.videoWidth]),
+      ...attachmentObjects.flatMap((attachment) => [attachment.width, attachment.video_width, attachment.videoWidth])
     ]),
     height: pickFirstNumber([
       record.height,
       record.video_height,
       record.videoHeight,
-      ...getCandidateObjects(record).flatMap((candidate) => [candidate.height, candidate.video_height, candidate.videoHeight])
+      ...getCandidateObjects(record).flatMap((candidate) => [candidate.height, candidate.video_height, candidate.videoHeight]),
+      ...attachmentObjects.flatMap((attachment) => [attachment.height, attachment.video_height, attachment.videoHeight])
     ])
   };
 }
@@ -406,7 +495,7 @@ export function getPublishedAt(value: unknown): string | null {
   }
 
   const record = value as Record<string, unknown>;
-  return pickFirstString([
+  return pickFirstTimestamp([
     record.posted_at,
     record.postedAt,
     record.published_at,
@@ -421,7 +510,7 @@ export function getPublishedAt(value: unknown): string | null {
       candidate.created_at,
       candidate.createdAt
     ])
-  ]) || null;
+  ]);
 }
 
 export function getCreatedAt(value: unknown): string | null {
@@ -430,13 +519,13 @@ export function getCreatedAt(value: unknown): string | null {
   }
 
   const record = value as Record<string, unknown>;
-  return pickFirstString([
+  return pickFirstTimestamp([
     record.created_at,
     record.createdAt,
     record.updated_at,
     record.updatedAt,
     ...getCandidateObjects(record).flatMap((candidate) => [candidate.created_at, candidate.createdAt, candidate.updated_at, candidate.updatedAt])
-  ]) || null;
+  ]);
 }
 
 export function getDetailUrl(value: unknown, fallbackId = ""): string {

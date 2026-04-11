@@ -88,6 +88,52 @@ describe("video-row-normalizer", () => {
     expect(extractVideoIdFromDetailHtml('<a href="/p/s_detail777">Open</a>')).toBe("s_detail777");
   });
 
+  it("normalizes nested post payloads from character appearance feeds", () => {
+    const [row] = normalizePostRows(
+      "characterAccountAppearances",
+      [
+        {
+          post: {
+            id: "s_nested123",
+            discovery_phrase: "wii nostalgia aesthetic",
+            posted_at: 1775636349.345291,
+            permalink: "https://sora.chatgpt.com/p/s_nested123",
+            view_count: 13,
+            attachments: [
+              {
+                id: "s_nested123-attachment-0",
+                duration_s: 9.8,
+                width: 352,
+                height: 640,
+                downloadable_url: "https://videos.openai.com/az/files/00000000-a768-7284-afab-7268d9eb84af/raw"
+              }
+            ]
+          },
+          profile: {
+            display_name: "Muhammad Ali",
+            username: "muhammad_f_ali"
+          }
+        }
+      ],
+      FETCHED_AT
+    );
+
+    expect(row).toMatchObject({
+      row_id: "characterAccountAppearances:s_nested123",
+      video_id: "s_nested123",
+      title: "wii nostalgia aesthetic",
+      creator_name: "Muhammad Ali",
+      creator_username: "muhammad_f_ali",
+      duration_seconds: 9.8,
+      width: 352,
+      height: 640,
+      view_count: 13,
+      is_downloadable: true,
+      skip_reason: ""
+    });
+    expect(row.published_at).toBe(new Date(1775636349.345291 * 1000).toISOString());
+  });
+
   it("preserves character-profile flags when normalizing creator profiles", () => {
     const profile = normalizeCreatorProfile(
       {
