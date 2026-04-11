@@ -244,17 +244,25 @@ async function enrichDraftRows(
         continue;
       }
 
-      const directVideoId = resolveSharedVideoIdFromValue(row);
+      const directVideoId = resolveExistingDraftVideoId(row);
       if (directVideoId) {
         row.resolved_video_id = directVideoId;
         row.resolved_share_url = `${window.location.origin}/p/${directVideoId}`;
         continue;
       }
 
-      const createdReference = await createSharedDraftReference(row, generationId);
-      if (createdReference) {
-        row.resolved_video_id = createdReference.video_id;
-        row.resolved_share_url = createdReference.share_url;
+      if (shouldSkipDraftRow(row)) {
+        continue;
+      }
+
+      try {
+        const createdReference = await createSharedDraftReference(row, generationId);
+        if (createdReference) {
+          row.resolved_video_id = createdReference.video_id;
+          row.resolved_share_url = createdReference.share_url;
+        }
+      } catch (_error) {
+        // Keep unresolved drafts in the batch instead of aborting the entire fetch.
       }
     }
   }
@@ -350,14 +358,27 @@ async function fetchOptionalJson(url: string): Promise<unknown | null> {
 }
 
 async function createSharedDraftReference(row: Record<string, unknown>, generationId: string) {
-  const response = (await fetchJsonWithMethod("/backend/project_y/post", "POST", {
-    attachments_to_create: [{ generation_id: generationId, kind: "sora" }],
-    post_text: resolveDraftShareText(row),
-    destinations: [{ type: "shared_link_unlisted" }]
-  })) as Record<string, unknown>;
-  const videoId = resolveSharedVideoIdFromValue(response);
-  if (videoId) {
-    return { video_id: videoId, share_url: `${window.location.origin}/p/${videoId}`, download_url: buildNoWatermarkProxyUrl(videoId) };
+  const existingVideoId = resolveExistingDraftVideoId(row);
+  if (existingVideoId) {
+    return { video_id: existingVideoId, share_url: `${window.location.origin}/p/${existingVideoId}`, download_url: buildNoWatermarkProxyUrl(existingVideoId) };
+  }
+
+  if (shouldSkipDraftRow(row)) {
+    return null;
+  }
+
+  try {
+    const response = (await fetchJsonWithMethod("/backend/project_y/post", "POST", {
+      attachments_to_create: [{ generation_id: generationId, kind: "sora" }],
+      post_text: resolveDraftShareText(row),
+      destinations: [{ type: "shared_link_unlisted" }]
+    })) as Record<string, unknown>;
+    const videoId = resolveSharedVideoIdFromValue(response);
+    if (videoId) {
+      return { video_id: videoId, share_url: `${window.location.origin}/p/${videoId}`, download_url: buildNoWatermarkProxyUrl(videoId) };
+    }
+  } catch (_error) {
+    // Fall through to detail/feed recovery. A failed create request should not abort draft fetching.
   }
 
   const detailUrl = resolveDraftDetailUrl(row, generationId);
@@ -410,6 +431,35 @@ function resolveDraftShareText(row: Record<string, unknown>): string {
   return String(row.discovery_phrase ?? row.discoveryPhrase ?? row.prompt ?? row.caption ?? "");
 }
 
+export function resolveExistingDraftVideoId(row: Record<string, unknown>): string {
+  return pickFirstString([
+    row.resolved_video_id,
+    row.resolvedVideoId,
+    extractSharedVideoId(row.resolved_share_url),
+    extractSharedVideoId(row.resolvedShareUrl),
+    resolveSharedVideoIdFromValue(row)
+  ]);
+}
+
+export function shouldSkipDraftRow(row: Record<string, unknown> | null | undefined): boolean {
+  if (!row || typeof row !== "object") {
+    return true;
+  }
+
+  const kind = getDraftKind(row);
+  const hasDraftShareCandidate = Boolean(extractDraftGenerationId(row)) || Boolean(resolveExistingDraftVideoId(row));
+  return Boolean(
+    kind === "sora_error" ||
+    hasDraftEditedVersion(row) ||
+    isDraftOutputBlocked(row) ||
+    hasDraftFailureState(row) ||
+    (typeof kind === "string" &&
+      kind !== "sora_draft" &&
+      kind !== "draft" &&
+      !hasDraftShareCandidate)
+  );
+}
+
 function resolveDraftDetailUrl(row: Record<string, unknown>, generationId: string): string {
   const directUrl = typeof row.detail_url === "string"
     ? row.detail_url
@@ -424,6 +474,65 @@ function resolveDraftDetailUrl(row: Record<string, unknown>, generationId: strin
   return `${window.location.origin}/d/${generationId}`;
 }
 
+function getDraftKind(row: Record<string, unknown>): string {
+  return pickFirstString([
+    row.kind,
+    (row.draft as Record<string, unknown> | undefined)?.kind,
+    (row.item as Record<string, unknown> | undefined)?.kind,
+    (row.data as Record<string, unknown> | undefined)?.kind,
+    (row.output as Record<string, unknown> | undefined)?.kind
+  ]);
+}
+
+function hasDraftEditedVersion(row: Record<string, unknown>): boolean {
+  return pickFirstNumber([
+    row.c_version,
+    row.cVersion,
+    (row.draft as Record<string, unknown> | undefined)?.c_version,
+    (row.draft as Record<string, unknown> | undefined)?.cVersion,
+    (row.item as Record<string, unknown> | undefined)?.c_version,
+    (row.item as Record<string, unknown> | undefined)?.cVersion,
+    (row.data as Record<string, unknown> | undefined)?.c_version,
+    (row.data as Record<string, unknown> | undefined)?.cVersion,
+    (row.output as Record<string, unknown> | undefined)?.c_version,
+    (row.output as Record<string, unknown> | undefined)?.cVersion
+  ]) !== null;
+}
+
+function isDraftOutputBlocked(row: Record<string, unknown>): boolean {
+  return pickFirstBoolean([
+    row.output_blocked,
+    row.outputBlocked,
+    (row.output as Record<string, unknown> | undefined)?.output_blocked,
+    (row.output as Record<string, unknown> | undefined)?.outputBlocked,
+    row.content_violation,
+    row.contentViolation,
+    (row.output as Record<string, unknown> | undefined)?.content_violation,
+    (row.output as Record<string, unknown> | undefined)?.contentViolation
+  ]);
+}
+
+function hasDraftFailureState(row: Record<string, unknown>): boolean {
+  const failureText = pickFirstString([
+    row.status,
+    row.state,
+    row.error,
+    row.error_code,
+    row.errorCode,
+    row.error_message,
+    row.errorMessage,
+    (row.output as Record<string, unknown> | undefined)?.status,
+    (row.output as Record<string, unknown> | undefined)?.state,
+    (row.output as Record<string, unknown> | undefined)?.error,
+    (row.output as Record<string, unknown> | undefined)?.error_code,
+    (row.output as Record<string, unknown> | undefined)?.errorCode,
+    (row.output as Record<string, unknown> | undefined)?.error_message,
+    (row.output as Record<string, unknown> | undefined)?.errorMessage
+  ]).toLowerCase();
+
+  return /error|failed|blocked|violation/.test(failureText);
+}
+
 function buildUrl(pathname: string, params: Record<string, string | number | null | undefined>): URL {
   const url = new URL(pathname, window.location.origin);
   for (const [key, value] of Object.entries(params)) {
@@ -433,6 +542,37 @@ function buildUrl(pathname: string, params: Record<string, string | number | nul
     url.searchParams.set(key, String(value));
   }
   return url;
+}
+
+function pickFirstString(candidates: unknown[]): string {
+  for (const candidate of candidates) {
+    if (typeof candidate === "string" && candidate.trim()) {
+      return candidate.trim();
+    }
+  }
+
+  return "";
+}
+
+function pickFirstNumber(candidates: unknown[]): number | null {
+  for (const candidate of candidates) {
+    const numericValue = Number(candidate);
+    if (Number.isFinite(numericValue)) {
+      return numericValue;
+    }
+  }
+
+  return null;
+}
+
+function pickFirstBoolean(candidates: unknown[]): boolean {
+  for (const candidate of candidates) {
+    if (typeof candidate === "boolean") {
+      return candidate;
+    }
+  }
+
+  return false;
 }
 
 function isDraftSource(source: FetchBatchRequest["source"]): boolean {
