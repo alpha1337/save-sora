@@ -340,6 +340,7 @@ export function getCharacterNames(value: unknown): string[] {
   }
 
   const record = value as Record<string, unknown>;
+  const cameoProfiles = getCameoProfileObjects(record);
   const candidates = [
     record.character_account_display_name,
     record.characterAccountDisplayName,
@@ -364,6 +365,12 @@ export function getCharacterNames(value: unknown): string[] {
     );
   }
 
+  for (const profile of cameoProfiles) {
+    candidates.push(
+      pickFirstString([profile.display_name, profile.displayName, profile.name, profile.username])
+    );
+  }
+
   return uniqueStrings(candidates.filter((candidate): candidate is string => typeof candidate === "string").map(compactWhitespace));
 }
 
@@ -383,7 +390,8 @@ export function getCharacterUsername(value: unknown): string {
       candidate.characterAccountUsername,
       candidate.character_username,
       candidate.characterUsername
-    ])
+    ]),
+    ...getCameoProfileObjects(record).flatMap((profile) => [profile.username, profile.user_name, profile.userName, profile.handle])
   ]);
 }
 
@@ -716,4 +724,37 @@ function collectIdentityCandidates(value: unknown): Record<string, unknown>[] {
   ];
 
   return candidates.filter((candidate): candidate is Record<string, unknown> => Boolean(candidate) && typeof candidate === "object");
+}
+
+function getCameoProfileObjects(value: Record<string, unknown>): Record<string, unknown>[] {
+  const cameoProfiles = new Map<string, Record<string, unknown>>();
+  const candidateObjects = [value, ...getCandidateObjects(value)];
+
+  for (const candidate of candidateObjects) {
+    if (!Array.isArray(candidate.cameo_profiles) && !Array.isArray(candidate.cameoProfiles)) {
+      continue;
+    }
+
+    for (const profile of [...pickFirstArray<Record<string, unknown>>([candidate.cameo_profiles]), ...pickFirstArray<Record<string, unknown>>([candidate.cameoProfiles])]) {
+      if (!profile || typeof profile !== "object") {
+        continue;
+      }
+
+      const profileUserId = pickFirstString([profile.user_id, profile.userId]);
+      if (profileUserId && !profileUserId.startsWith("ch_")) {
+        continue;
+      }
+
+      const key = pickFirstString([
+        profileUserId,
+        profile.username,
+        profile.display_name,
+        profile.displayName,
+        JSON.stringify(profile).slice(0, 120)
+      ]);
+      cameoProfiles.set(key, profile);
+    }
+  }
+
+  return [...cameoProfiles.values()];
 }

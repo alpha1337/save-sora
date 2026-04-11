@@ -191,10 +191,31 @@ export function normalizeCreatorProfile(profile: unknown, routeUrl: string): Cre
   }
 
   const record = profile as Record<string, unknown>;
+  const ownerProfile =
+    record.owner_profile && typeof record.owner_profile === "object"
+      ? record.owner_profile as Record<string, unknown>
+      : record.ownerProfile && typeof record.ownerProfile === "object"
+        ? record.ownerProfile as Record<string, unknown>
+        : null;
   const characterUserId = pickFirstString([record.character_user_id, record.characterUserId]);
-  const canonicalUserId = pickFirstString([record.user_id, record.userId, record.ownerUserId]);
+  const canonicalUserId = pickFirstString([
+    record.user_id,
+    record.userId,
+    record.ownerUserId,
+    ownerProfile?.user_id,
+    ownerProfile?.userId
+  ]);
   const userId = characterUserId || canonicalUserId;
-  const username = pickFirstString([record.username, record.user_name, record.userName, record.handle]);
+  const username = pickFirstString([
+    record.username,
+    record.user_name,
+    record.userName,
+    record.handle,
+    ownerProfile?.username,
+    ownerProfile?.user_name,
+    ownerProfile?.userName,
+    ownerProfile?.handle
+  ]);
   const profileId = pickFirstString([record.profile_id, record.profileId, userId, username, routeUrl]);
 
   if (!profileId) {
@@ -216,8 +237,17 @@ export function normalizeCreatorProfile(profile: unknown, routeUrl: string): Cre
       Boolean(characterUserId) ||
       userId.startsWith("ch_"),
     published_count: pickFirstNumber([record.post_count, record.postCount]),
-    appearance_count: pickFirstNumber([record.cameo_count, record.cameoCount, record.appearance_count, record.appearanceCount]),
-    draft_count: pickFirstNumber([record.draft_count, record.draftCount]),
+    appearance_count: pickFirstNumber([
+      record.cameo_count,
+      record.cameoCount,
+      record.appearance_count,
+      record.appearanceCount,
+      ownerProfile?.cameo_count,
+      ownerProfile?.cameoCount,
+      ownerProfile?.appearance_count,
+      ownerProfile?.appearanceCount
+    ]),
+    draft_count: pickFirstNumber([record.draft_count, record.draftCount, ownerProfile?.draft_count, ownerProfile?.draftCount]),
     created_at: new Date().toISOString()
   };
 }

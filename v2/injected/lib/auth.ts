@@ -8,7 +8,17 @@ export interface AuthContext {
   token: string;
 }
 
+const AUTH_CACHE_TTL_MS = 60_000;
+
+let cachedAuthContext: AuthContext | null = null;
+let cachedAuthContextAt = 0;
+let cachedViewerUserId = "";
+
 export async function deriveAuthContext(): Promise<AuthContext> {
+  if (cachedAuthContext && Date.now() - cachedAuthContextAt < AUTH_CACHE_TTL_MS) {
+    return cachedAuthContext;
+  }
+
   const deviceId = getCookieValue("oai-did");
   const language = navigator.language || "en-US";
   const sessionToken = (await trySessionEndpoint("/api/auth/session")) || (await trySessionEndpoint("/auth/session"));
@@ -22,10 +32,17 @@ export async function deriveAuthContext(): Promise<AuthContext> {
     throw new Error("Could not derive a Sora bearer token from the signed-in browser session.");
   }
 
-  return { token: storageToken, deviceId, language };
+  cachedAuthContext = { token: storageToken, deviceId, language };
+  cachedAuthContextAt = Date.now();
+
+  return cachedAuthContext;
 }
 
 export async function deriveViewerUserId(): Promise<string> {
+  if (cachedViewerUserId) {
+    return cachedViewerUserId;
+  }
+
   const authContext = await deriveAuthContext();
   const tokenPayload = decodeJwtPayload(authContext.token);
   const authClaims = tokenPayload?.["https://api.openai.com/auth"] as Record<string, unknown> | undefined;
@@ -37,12 +54,14 @@ export async function deriveViewerUserId(): Promise<string> {
   ]);
 
   if (typeof tokenUserId === "string" && /^user-[A-Za-z0-9_-]+$/.test(tokenUserId)) {
-    return tokenUserId;
+    cachedViewerUserId = tokenUserId;
+    return cachedViewerUserId;
   }
 
   const nextDataUserId = findViewerUserIdFromPayload((window as Window & typeof globalThis & { __NEXT_DATA__?: unknown }).__NEXT_DATA__);
   if (nextDataUserId) {
-    return nextDataUserId;
+    cachedViewerUserId = nextDataUserId;
+    return cachedViewerUserId;
   }
 
   throw new Error("Could not derive the signed-in Sora viewer id.");

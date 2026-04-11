@@ -38,7 +38,8 @@ class FetchCancellationError extends Error {
  * fallback for unresolved rows.
  */
 export async function fetchSelectedSources(): Promise<void> {
-  const state = useAppStore.getState();
+  const refreshedState = await refreshCreatorProfilesForFetch();
+  const state = refreshedState ?? useAppStore.getState();
   const jobs = buildFetchJobs(state);
 
   if (jobs.length === 0) {
@@ -135,6 +136,39 @@ export async function resolveAndAddCreatorProfile(routeInput: string): Promise<v
   useAppStore.getState().addCreatorProfile(profile);
 }
 
+async function refreshCreatorProfilesForFetch() {
+  const state = useAppStore.getState();
+  const profilesNeedingRefresh = state.creator_profiles.filter((profile) => shouldRefreshCreatorProfile(profile));
+  if (profilesNeedingRefresh.length === 0) {
+    return state;
+  }
+
+  const refreshedProfiles = await Promise.all(
+    profilesNeedingRefresh.map(async (profile) => {
+      if (!profile.permalink) {
+        return profile;
+      }
+
+      try {
+        const response = await sendBackgroundRequest<BackgroundResponse>({
+          type: "resolve-creator-profile",
+          route_url: profile.permalink
+        });
+        const refreshedProfile = normalizeCreatorProfile((response as BackgroundResponse & { payload?: unknown }).payload, profile.permalink);
+        return refreshedProfile ? { ...profile, ...refreshedProfile, profile_id: profile.profile_id } : profile;
+      } catch (error) {
+        logger.warn("creator profile refresh failed", error);
+        return profile;
+      }
+    })
+  );
+
+  const refreshedProfileMap = new Map(refreshedProfiles.map((profile) => [profile.profile_id, profile]));
+  const nextProfiles = state.creator_profiles.map((profile) => refreshedProfileMap.get(profile.profile_id) ?? profile);
+  useAppStore.getState().setCreatorProfiles(nextProfiles);
+  return { ...useAppStore.getState(), creator_profiles: nextProfiles };
+}
+
 async function runFetchJob(job: FetchJob, signal: AbortSignal): Promise<void> {
   logger.info("running fetch job", job.id);
   markFetchJobRunning(job);
@@ -229,7 +263,7 @@ async function streamFetchBatches(
     offset = response.payload.next_offset;
     done = response.payload.done;
 
-    updateFetchBatchProgress(job, streamedRowCount, batchRows.length, response.payload.estimated_total_count);
+    updateFetchBatchProgress(job, streamedRowCount, batchRows.length);
   }
 }
 
@@ -347,14 +381,14 @@ function markFetchJobRunning(job: FetchJob): void {
       state.fetch_progress,
       state.fetch_progress.job_progress.map((entry) =>
         entry.job_id === job.id
-          ? { ...entry, status: "running" as const, expected_total_count: getHigherCount(entry.expected_total_count, job.expected_total_count) }
+          ? { ...entry, status: "running" as const, expected_total_count: entry.expected_total_count ?? job.expected_total_count }
           : entry
       )
     )
   }));
 }
 
-function updateFetchBatchProgress(job: FetchJob | { label: string }, streamedRowCount: number, batchRowCount: number, estimatedTotalCount: number | null): void {
+function updateFetchBatchProgress(job: FetchJob | { label: string }, streamedRowCount: number, batchRowCount: number): void {
   useAppStore.setState((state) => {
     if (!("id" in job)) {
       return {
@@ -373,8 +407,7 @@ function updateFetchBatchProgress(job: FetchJob | { label: string }, streamedRow
             ...entry,
             status: "running" as const,
             fetched_rows: streamedRowCount,
-            processed_batches: entry.processed_batches + 1,
-            expected_total_count: getHigherCount(entry.expected_total_count, estimatedTotalCount)
+            processed_batches: entry.processed_batches + 1
           }
         : entry
     );
@@ -390,6 +423,22 @@ function updateFetchBatchProgress(job: FetchJob | { label: string }, streamedRow
 
 function isDraftSource(source: LowLevelSourceType): boolean {
   return source === "drafts" || source === "characterDrafts" || source === "characterAccountDrafts";
+}
+
+function shouldRefreshCreatorProfile(profile: ReturnType<typeof useAppStore.getState>["creator_profiles"][number]): boolean {
+  if (!profile.permalink) {
+    return false;
+  }
+
+  if (!profile.user_id) {
+    return true;
+  }
+
+  if (profile.is_character_profile) {
+    return profile.appearance_count == null;
+  }
+
+  return profile.published_count == null || profile.appearance_count == null;
 }
 
 function throwIfFetchCanceled(signal: AbortSignal): void {
@@ -465,14 +514,4 @@ function buildFetchProgressLabel(
   }
 
   return `${completedJobs} of ${totalJobs} jobs complete`;
-}
-
-function getHigherCount(left: number | null, right: number | null): number | null {
-  if (typeof left !== "number") {
-    return typeof right === "number" ? right : null;
-  }
-  if (typeof right !== "number") {
-    return left;
-  }
-  return Math.max(left, right);
 }

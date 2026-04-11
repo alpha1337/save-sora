@@ -112,7 +112,19 @@ describe("video-row-normalizer", () => {
           profile: {
             display_name: "Muhammad Ali",
             username: "muhammad_f_ali"
-          }
+          },
+          cameo_profiles: [
+            {
+              user_id: "ch_crystal",
+              username: "crystal.party",
+              display_name: "Crystal Sparkle"
+            },
+            {
+              user_id: "user_not_character",
+              username: "ignored-poster",
+              display_name: "Ignored Poster"
+            }
+          ]
         }
       ],
       FETCHED_AT
@@ -124,6 +136,8 @@ describe("video-row-normalizer", () => {
       title: "wii nostalgia aesthetic",
       creator_name: "Muhammad Ali",
       creator_username: "muhammad_f_ali",
+      character_name: "Crystal Sparkle",
+      character_username: "crystal.party",
       duration_seconds: 9.8,
       width: 352,
       height: 640,
@@ -131,6 +145,7 @@ describe("video-row-normalizer", () => {
       is_downloadable: true,
       skip_reason: ""
     });
+    expect(row.character_names).toEqual(["Crystal Sparkle"]);
     expect(row.published_at).toBe(new Date(1775636349.345291 * 1000).toISOString());
   });
 
@@ -226,6 +241,28 @@ describe("video-row-normalizer", () => {
       published_count: 3018,
       appearance_count: 2535,
       draft_count: null
+    });
+  });
+
+  it("reads appearance counts from owner profile payloads", () => {
+    const profile = normalizeCreatorProfile(
+      {
+        user_id: "ch_crystal",
+        username: "crystal.party",
+        display_name: "Crystal Sparkle",
+        owner_profile: {
+          user_id: "user_bobby",
+          username: "notbobbylee",
+          cameo_count: 143852
+        }
+      },
+      "https://sora.chatgpt.com/profile/crystal.party"
+    );
+
+    expect(profile).toMatchObject({
+      user_id: "ch_crystal",
+      appearance_count: 143852,
+      is_character_profile: true
     });
   });
 });

@@ -188,20 +188,15 @@ async function resolveCreatorProfile(routeUrl: string) {
   }
 
   const payload = (await fetchJson(`/backend/project_y/profile/username/${encodeURIComponent(username)}`)) as Record<string, unknown>;
-  const rawUserId = String(payload.user_id ?? payload.userId ?? "");
-  const characterUserId = String(payload.character_user_id ?? payload.characterUserId ?? "");
-  const resolvedCharacterUserId = rawUserId.startsWith("ch_") ? rawUserId : characterUserId;
-  const fallbackProfileId = typeof payload.username === "string" && payload.username ? payload.username : username;
   return {
-    profile_id: String(resolvedCharacterUserId || rawUserId || fallbackProfileId),
-    user_id: String(rawUserId ?? ""),
-    character_user_id: resolvedCharacterUserId,
-    username: String(payload.username ?? payload.user_name ?? payload.userName ?? username),
-    display_name: String(payload.display_name ?? payload.displayName ?? payload.name ?? username),
-    permalink: String(payload.permalink ?? payload.url ?? `${window.location.origin}/profile/${encodeURIComponent(username)}`),
-    profile_picture_url: typeof payload.profile_picture_url === "string" ? payload.profile_picture_url : typeof payload.avatar_url === "string" ? payload.avatar_url : null,
-    is_character_profile: Boolean(resolvedCharacterUserId),
-    created_at: new Date().toISOString()
+    ...payload,
+    username: typeof payload.username === "string" && payload.username ? payload.username : username,
+    permalink:
+      typeof payload.permalink === "string" && payload.permalink
+        ? payload.permalink
+        : typeof payload.url === "string" && payload.url
+          ? payload.url
+          : `${window.location.origin}/profile/${encodeURIComponent(username)}`
   };
 }
 
