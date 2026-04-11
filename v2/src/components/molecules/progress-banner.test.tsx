@@ -59,4 +59,42 @@ describe("ProgressBanner", () => {
     expect(screen.getByText("2 items · Last bundled Beta")).toBeInTheDocument();
     expect(screen.getByText("0 items · Waiting for work")).toBeInTheDocument();
   });
+
+  it("shows waiting copy and expected totals for a running fetch with no streamed rows yet", () => {
+    render(
+      <ProgressBanner
+        phase="fetching"
+        fetchProgress={{
+          active_label: "Fetching Crystal Sparkle appearances · 0 / 140,000 rows",
+          completed_jobs: 1,
+          processed_batches: 0,
+          processed_rows: 0,
+          running_jobs: 1,
+          total_jobs: 2,
+          job_progress: [
+            {
+              job_id: "character-account-appearances:crystal",
+              label: "Crystal Sparkle appearances",
+              source: "characterAccountAppearances",
+              status: "running",
+              fetched_rows: 0,
+              processed_batches: 0,
+              expected_total_count: 140000
+            }
+          ]
+        }}
+        downloadProgress={{
+          active_label: "",
+          completed_items: 0,
+          running_workers: 0,
+          total_items: 0,
+          total_workers: 0,
+          worker_progress: []
+        }}
+      />
+    );
+
+    expect(screen.getByText("Fetching Crystal Sparkle appearances · 0 / 140,000 rows")).toBeInTheDocument();
+    expect(screen.getByText("0 / 140,000 rows · Waiting for first page")).toBeInTheDocument();
+  });
 });

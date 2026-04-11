@@ -36,4 +36,18 @@ describe("shared pagination helpers", () => {
       created_at: 1775500000
     });
   });
+
+  it("ignores cursors that bounce back to the previous page token", () => {
+    expect(
+      getNextCursorForRows(
+        {
+          next_cursor: "cursor-page-1"
+        },
+        [],
+        "cursor-page-2",
+        "",
+        "cursor-page-1"
+      )
+    ).toBeNull();
+  });
 });

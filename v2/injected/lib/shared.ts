@@ -66,21 +66,22 @@ export function getNextCursorForRows(
   payload: unknown,
   rows: unknown[],
   requestCursor = "",
-  cursorKind = ""
+  cursorKind = "",
+  previousCursor = ""
 ): string | null {
   const explicitCursor = normalizeCursorToken(getNextCursor(payload));
   const nestedCursor = normalizeCursorToken(findNestedCursorToken(payload, requestCursor));
 
-  if (explicitCursor && explicitCursor !== requestCursor) {
+  if (explicitCursor && explicitCursor !== requestCursor && explicitCursor !== previousCursor) {
     return explicitCursor;
   }
 
-  if (nestedCursor && nestedCursor !== requestCursor) {
+  if (nestedCursor && nestedCursor !== requestCursor && nestedCursor !== previousCursor) {
     return nestedCursor;
   }
 
   const derivedCursor = normalizeCursorToken(buildCreatedAtCursorFromRows(rows, cursorKind));
-  if (derivedCursor && derivedCursor !== requestCursor) {
+  if (derivedCursor && derivedCursor !== requestCursor && derivedCursor !== previousCursor) {
     return derivedCursor;
   }
 

@@ -51,6 +51,7 @@ export async function runSourceRequest(request: BackgroundRequest): Promise<unkn
 
 async function runFetchBatch(request: FetchBatchRequest) {
   let cursor = request.cursor ?? null;
+  let previousCursor: string | null = null;
   let offset: number | null = request.offset ?? 0;
   let estimatedTotalCount = 0;
   const rows: unknown[] = [];
@@ -69,7 +70,8 @@ async function runFetchBatch(request: FetchBatchRequest) {
       payload,
       pageRows,
       cursor ?? "",
-      getCursorKindForSource(request.source)
+      getCursorKindForSource(request.source),
+      previousCursor ?? ""
     );
     const hasMoreRows = pageRows.length >= (request.limit ?? 100);
     const nextOffset: number | null = supportsOffsetPagination(request.source)
@@ -79,6 +81,7 @@ async function runFetchBatch(request: FetchBatchRequest) {
       ? (!nextCursor && !hasMoreRows)
       : !nextCursor;
 
+    previousCursor = cursor;
     cursor = nextCursor;
     offset = nextOffset;
 

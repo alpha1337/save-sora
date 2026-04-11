@@ -13,6 +13,7 @@ import {
 } from "@lib/db/session-db";
 import { createLogger } from "@lib/logging/logger";
 import { normalizeCreatorProfileInput } from "@lib/utils/creator-profile-input";
+import { formatCount } from "@lib/utils/format-utils";
 import { extractVideoIdFromDetailHtml, normalizeCharacterAccounts, normalizeCreatorProfile, normalizeDraftRows, normalizePostRows } from "@lib/normalize/video-row-normalizer";
 import type { FetchJob } from "./source-adapters";
 import { buildFetchJobs } from "./source-adapters";
@@ -20,7 +21,7 @@ import { buildFetchJobs } from "./source-adapters";
 const logger = createLogger("fetch-controller");
 const FETCH_BATCH_LIMIT = 100;
 const FETCH_PAGE_BUDGET = 3;
-const HIGH_VOLUME_SOURCE_PAGE_BUDGET = 25;
+const HIGH_VOLUME_SOURCE_PAGE_BUDGET = 1;
 const FETCH_CONCURRENCY = 3;
 const DETAIL_FALLBACK_CONCURRENCY = 4;
 let activeFetchAbortController: AbortController | null = null;
@@ -428,7 +429,7 @@ function buildNextFetchProgressState(
   return {
     ...currentProgress,
     ...overrides,
-    active_label: buildFetchProgressLabel(runningJobs, completedJobs, currentProgress.total_jobs, processedRows),
+    active_label: buildFetchProgressLabel(nextJobProgress, runningJobs, completedJobs, currentProgress.total_jobs, processedRows),
     completed_jobs: completedJobs,
     processed_batches: processedBatches,
     processed_rows: processedRows,
@@ -437,7 +438,24 @@ function buildNextFetchProgressState(
   };
 }
 
-function buildFetchProgressLabel(runningJobs: number, completedJobs: number, totalJobs: number, processedRows: number): string {
+function buildFetchProgressLabel(
+  jobProgress: ReturnType<typeof useAppStore.getState>["fetch_progress"]["job_progress"],
+  runningJobs: number,
+  completedJobs: number,
+  totalJobs: number,
+  processedRows: number
+): string {
+  if (runningJobs === 1) {
+    const activeJob = jobProgress.find((entry) => entry.status === "running");
+    if (activeJob) {
+      if (typeof activeJob.expected_total_count === "number" && activeJob.expected_total_count > 0) {
+        return `Fetching ${activeJob.label} · ${formatCount(activeJob.fetched_rows)} / ${formatCount(activeJob.expected_total_count)} rows`;
+      }
+
+      return `Fetching ${activeJob.label} · ${formatCount(activeJob.fetched_rows)} rows`;
+    }
+  }
+
   if (runningJobs > 0) {
     return `Fetching ${runningJobs} active job${runningJobs === 1 ? "" : "s"} · ${processedRows} rows`;
   }

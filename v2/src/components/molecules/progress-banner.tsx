@@ -86,6 +86,14 @@ function buildDownloadSummary(downloadProgress: DownloadProgressState): string {
 }
 
 function getJobStatusLine(job: FetchJobProgress): string {
+  if (job.status === "running" && job.processed_batches === 0) {
+    if (typeof job.expected_total_count === "number" && job.expected_total_count > 0) {
+      return `${formatCount(job.fetched_rows)} / ${formatCount(job.expected_total_count)} rows · Waiting for first page`;
+    }
+
+    return `${formatCount(job.fetched_rows)} rows · Waiting for first page`;
+  }
+
   if (typeof job.expected_total_count === "number" && job.expected_total_count > 0) {
     return `${formatCount(job.fetched_rows)} / ${formatCount(job.expected_total_count)} rows · ${formatJobPercent(job.fetched_rows, job.expected_total_count)} · ${job.processed_batches} batches`;
   }
