@@ -1,5 +1,6 @@
 import type { VideoRow } from "types/domain";
 import { useAppStore } from "@app/store/use-app-store";
+import { loadSessionDbSnapshot } from "@lib/db/session-db";
 import { downloadTextFile } from "@lib/utils/download-utils";
 
 const CSV_COLUMNS = [
@@ -39,7 +40,13 @@ const CSV_COLUMNS = [
  * Produces the fixed-schema CSV export from normalized session rows.
  */
 export function exportSessionRowsToCsv(): void {
-  const { settings, video_rows: rows } = useAppStore.getState();
+  void buildAndDownloadCsv();
+}
+
+async function buildAndDownloadCsv(): Promise<void> {
+  const { settings } = useAppStore.getState();
+  const sessionSnapshot = await loadSessionDbSnapshot();
+  const rows = sessionSnapshot.video_rows;
   const header = CSV_COLUMNS.join(",");
   const csvRows = rows.map((row) =>
     CSV_COLUMNS.map((column) => escapeCsvValue(formatColumnValue(column, row, settings.include_raw_payload_in_csv))).join(",")

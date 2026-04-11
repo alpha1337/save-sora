@@ -14,6 +14,7 @@ import {
 import { createLogger } from "@lib/logging/logger";
 import { normalizeCreatorProfileInput } from "@lib/utils/creator-profile-input";
 import { formatCount } from "@lib/utils/format-utils";
+import { stripRawPayloadFromRows } from "@lib/utils/video-row-utils";
 import { extractVideoIdFromDetailHtml, normalizeCharacterAccounts, normalizeCreatorProfile, normalizeDraftRows, normalizePostRows } from "@lib/normalize/video-row-normalizer";
 import type { FetchJob } from "./source-adapters";
 import { buildFetchJobs } from "./source-adapters";
@@ -49,6 +50,11 @@ export async function fetchSelectedSources(): Promise<void> {
   useAppStore.setState({
     phase: "fetching",
     error_message: "",
+    session_meta: {
+      ...state.session_meta,
+      query: "",
+      last_fetch_at: new Date().toISOString()
+    },
     fetch_progress: {
       active_label: "Starting fetch",
       completed_jobs: 0,
@@ -73,6 +79,7 @@ export async function fetchSelectedSources(): Promise<void> {
   await replaceDownloadQueue([]);
   await saveSessionMeta({
     ...state.session_meta,
+    query: "",
     last_fetch_at: new Date().toISOString()
   });
   useAppStore.getState().replaceVideoRows([]);
@@ -175,38 +182,38 @@ async function runFetchJob(job: FetchJob, signal: AbortSignal): Promise<void> {
   throwIfFetchCanceled(signal);
 
   const fetchedAt = new Date().toISOString();
+  const unresolvedRows: VideoRow[] = [];
   await streamFetchBatches(job.source, job, signal, async (rows) => {
     const normalizedRows = isDraftSource(job.source)
       ? normalizeDraftRows(job.source, rows, fetchedAt)
       : normalizePostRows(job.source, rows, fetchedAt);
     const draftResolutionRecords = buildDraftResolutionRecords(rows);
-    const persistenceTasks: Array<Promise<void>> = [];
 
+    if (normalizedRows.length > 0) {
+      unresolvedRows.push(...getRecoverableRows(normalizedRows));
+      useAppStore.getState().upsertVideoRows(stripRawPayloadFromRows(normalizedRows));
+    }
+
+    const persistenceTasks: Array<Promise<void>> = [];
     if (draftResolutionRecords.length > 0) {
       persistenceTasks.push(saveDraftResolutionRecords(draftResolutionRecords));
     }
     if (normalizedRows.length > 0) {
       persistenceTasks.push(upsertVideoRows(normalizedRows));
     }
-
     if (persistenceTasks.length > 0) {
       await Promise.all(persistenceTasks);
     }
 
-    if (normalizedRows.length > 0) {
-      useAppStore.getState().upsertVideoRows(normalizedRows);
-    }
-
-    const recoveredRows = await recoverMissingVideoIds(normalizedRows, signal);
-    throwIfFetchCanceled(signal);
-
-    if (recoveredRows.length > 0) {
-      await upsertVideoRows(recoveredRows);
-      useAppStore.getState().upsertVideoRows(recoveredRows);
-    }
-
     return draftResolutionRecords;
   });
+
+  const recoveredRows = await recoverMissingVideoIds(unresolvedRows, signal);
+  throwIfFetchCanceled(signal);
+  if (recoveredRows.length > 0) {
+    await upsertVideoRows(recoveredRows);
+    useAppStore.getState().upsertVideoRows(stripRawPayloadFromRows(recoveredRows));
+  }
 
   incrementCompletedJobs(job);
 }
@@ -251,24 +258,24 @@ async function streamFetchBatches(
     throwIfFetchCanceled(signal);
 
     const batchRows = response.payload.rows;
-    const learnedDraftResolutionRecords = batchRows.length > 0 ? await onBatch(batchRows) : [];
-    throwIfFetchCanceled(signal);
-
-    for (const record of learnedDraftResolutionRecords) {
-      draftResolutionMap.set(record.generation_id, record.video_id);
-    }
-
     streamedRowCount += batchRows.length;
     cursor = response.payload.next_cursor;
     offset = response.payload.next_offset;
     done = response.payload.done;
 
     updateFetchBatchProgress(job, streamedRowCount, batchRows.length);
+
+    const learnedDraftResolutionRecords = batchRows.length > 0 ? await onBatch(batchRows) : [];
+    throwIfFetchCanceled(signal);
+
+    for (const record of learnedDraftResolutionRecords) {
+      draftResolutionMap.set(record.generation_id, record.video_id);
+    }
   }
 }
 
 async function recoverMissingVideoIds(rows: VideoRow[], signal: AbortSignal): Promise<VideoRow[]> {
-  const pendingRows = rows.filter((row) => !row.video_id && row.detail_url && row.skip_reason === "missing_video_id");
+  const pendingRows = dedupeRowsById(rows);
   if (pendingRows.length === 0) {
     return [];
   }
@@ -308,6 +315,18 @@ async function recoverMissingVideoIds(rows: VideoRow[], signal: AbortSignal): Pr
   return recoveredRows;
 }
 
+function getRecoverableRows(rows: VideoRow[]): VideoRow[] {
+  return rows.filter((row) => !row.video_id && row.detail_url && row.skip_reason === "missing_video_id");
+}
+
+function dedupeRowsById(rows: VideoRow[]): VideoRow[] {
+  const rowMap = new Map<string, VideoRow>();
+  for (const row of rows) {
+    rowMap.set(row.row_id, row);
+  }
+  return [...rowMap.values()];
+}
+
 /**
  * Requests a cooperative stop for the currently running fetch. The current
  * in-flight batch is allowed to finish, after which the fetch settles cleanly.
@@ -319,7 +338,7 @@ export function cancelActiveFetch(): void {
 
   activeFetchAbortController.abort();
   useAppStore.getState().setFetchProgress({
-    active_label: "Stopping after current batch..."
+    active_label: "Stopping after current page..."
   });
 }
 
@@ -506,7 +525,7 @@ function buildFetchProgressLabel(
   }
 
   if (runningJobs > 0) {
-    return `Fetching ${runningJobs} active job${runningJobs === 1 ? "" : "s"} · ${processedRows} rows`;
+    return `Fetching ${runningJobs} active job${runningJobs === 1 ? "" : "s"} · ${formatCount(processedRows)} rows`;
   }
 
   if (completedJobs >= totalJobs && totalJobs > 0) {

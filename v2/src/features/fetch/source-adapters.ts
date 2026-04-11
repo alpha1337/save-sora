@@ -58,7 +58,7 @@ export function buildFetchJobs(state: AppStoreState): FetchJob[] {
     }
   }
 
-  return jobs;
+  return dedupeFetchJobs(jobs);
 }
 
 function buildCreatorJobs(profile: CreatorProfile): FetchJob[] {
@@ -68,7 +68,7 @@ function buildCreatorJobs(profile: CreatorProfile): FetchJob[] {
     route_url: profile.permalink
   };
 
-  if (profile.is_character_profile && profile.user_id.startsWith("ch_")) {
+  if (profile.is_character_profile) {
     return [
       {
         id: `creator-character-appearances:${profile.profile_id}`,
@@ -105,4 +105,48 @@ function buildCreatorJobs(profile: CreatorProfile): FetchJob[] {
       ...baseJobData
     }
   ];
+}
+
+function dedupeFetchJobs(jobs: FetchJob[]): FetchJob[] {
+  const jobMap = new Map<string, FetchJob>();
+
+  for (const job of jobs) {
+    const signature = buildFetchJobSignature(job);
+    const existingJob = jobMap.get(signature);
+
+    if (!existingJob) {
+      jobMap.set(signature, job);
+      continue;
+    }
+
+    jobMap.set(signature, {
+      ...existingJob,
+      expected_total_count: pickHigherCount(existingJob.expected_total_count, job.expected_total_count)
+    });
+  }
+
+  return [...jobMap.values()];
+}
+
+function buildFetchJobSignature(job: FetchJob): string {
+  if (job.source === "characterAccountAppearances" || job.source === "characterAccountDrafts") {
+    return [job.source, job.character_id ?? ""].join("|");
+  }
+
+  return [
+    job.source,
+    job.creator_user_id ?? "",
+    job.creator_username ?? "",
+    job.route_url ?? ""
+  ].join("|");
+}
+
+function pickHigherCount(left: number | null, right: number | null): number | null {
+  if (typeof left !== "number") {
+    return right;
+  }
+  if (typeof right !== "number") {
+    return left;
+  }
+  return Math.max(left, right);
 }

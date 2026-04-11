@@ -295,32 +295,34 @@ async function fetchPreferredPayload(
   let bestPaginatedScore = -1;
   let lastError: unknown = null;
 
-  for (const candidateUrl of candidateUrls) {
-    try {
-      const payload = await fetchOptionalJson(candidateUrl);
-      if (!payload) {
-        continue;
-      }
+  const settledPayloads = await Promise.allSettled(candidateUrls.map((candidateUrl) => fetchOptionalJson(candidateUrl)));
+  for (const settledPayload of settledPayloads) {
+    if (settledPayload.status === "rejected") {
+      lastError = settledPayload.reason;
+      continue;
+    }
 
-      const rows = getPostListingRows(payload);
-      const nextCursor = getNextCursorForRows(payload, rows, requestCursor, cursorKind);
-      const score = rows.length;
+    const payload = settledPayload.value;
+    if (!payload) {
+      continue;
+    }
 
-      if (!firstSuccessfulPayload) {
-        firstSuccessfulPayload = payload;
-      }
+    const rows = getPostListingRows(payload);
+    const nextCursor = getNextCursorForRows(payload, rows, requestCursor, cursorKind);
+    const score = rows.length;
 
-      if (score > bestScore) {
-        bestScore = score;
-        bestPayload = payload;
-      }
+    if (!firstSuccessfulPayload) {
+      firstSuccessfulPayload = payload;
+    }
 
-      if (nextCursor && score > 0 && score > bestPaginatedScore) {
-        bestPaginatedScore = score;
-        bestPaginatedPayload = payload;
-      }
-    } catch (error) {
-      lastError = error;
+    if (score > bestScore) {
+      bestScore = score;
+      bestPayload = payload;
+    }
+
+    if (nextCursor && score > 0 && score > bestPaginatedScore) {
+      bestPaginatedScore = score;
+      bestPaginatedPayload = payload;
     }
   }
 
