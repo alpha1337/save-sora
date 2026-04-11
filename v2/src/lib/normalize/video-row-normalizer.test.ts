@@ -104,4 +104,21 @@ describe("video-row-normalizer", () => {
       is_character_profile: true
     });
   });
+
+  it("prefers a character user id when creator profile payloads expose both ids", () => {
+    const profile = normalizeCreatorProfile(
+      {
+        user_id: "user_binaryrot",
+        character_user_id: "ch_crystal",
+        username: "crystal.party",
+        display_name: "Crystal Sparkle"
+      },
+      "https://sora.chatgpt.com/profile/crystal.party"
+    );
+
+    expect(profile).toMatchObject({
+      user_id: "ch_crystal",
+      is_character_profile: true
+    });
+  });
 });

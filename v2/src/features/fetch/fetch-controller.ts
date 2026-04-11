@@ -128,20 +128,6 @@ async function runFetchJob(job: FetchJob, signal: AbortSignal): Promise<void> {
   useAppStore.getState().setFetchProgress({ active_label: job.label });
   throwIfFetchCanceled(signal);
 
-  if (job.source === "creatorCharacters") {
-    const rows = await collectAllRows(job.source, job, signal);
-    const accounts = normalizeCharacterAccounts(rows);
-    const dedupedProfiles = accounts.map((account) => ({
-      account_id: account.account_id,
-      display_name: account.display_name,
-      profile_picture_url: account.profile_picture_url,
-      username: account.username
-    }));
-    logger.debug("creator character index discovered", dedupedProfiles.length);
-    incrementCompletedJobs();
-    return;
-  }
-
   const rows = await collectAllRows(job.source, job, signal);
   throwIfFetchCanceled(signal);
   const fetchedAt = new Date().toISOString();

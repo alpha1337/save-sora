@@ -187,8 +187,9 @@ export function normalizeCreatorProfile(profile: unknown, routeUrl: string): Cre
   }
 
   const record = profile as Record<string, unknown>;
-  const userId = pickFirstString([record.user_id, record.userId, record.ownerUserId]);
   const characterUserId = pickFirstString([record.character_user_id, record.characterUserId]);
+  const canonicalUserId = pickFirstString([record.user_id, record.userId, record.ownerUserId]);
+  const userId = characterUserId || canonicalUserId;
   const username = pickFirstString([record.username, record.user_name, record.userName, record.handle]);
   const profileId = pickFirstString([record.profile_id, record.profileId, userId, username, routeUrl]);
 

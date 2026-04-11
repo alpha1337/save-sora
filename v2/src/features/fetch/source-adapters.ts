@@ -107,12 +107,6 @@ function buildCreatorJobs(profile: CreatorProfile): FetchJob[] {
       label: `${profile.display_name} cameos`,
       source: "creatorCameos",
       ...baseJobData
-    },
-    {
-      id: `creator-characters:${profile.profile_id}`,
-      label: `${profile.display_name} characters`,
-      source: "creatorCharacters",
-      ...baseJobData
     }
   ];
 }

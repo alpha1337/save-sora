@@ -87,8 +87,7 @@ describe("buildFetchJobs", () => {
 
     expect(jobs.map((job) => job.source)).toEqual([
       "creatorPublished",
-      "creatorCameos",
-      "creatorCharacters"
+      "creatorCameos"
     ]);
   });
 });

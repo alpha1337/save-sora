@@ -24,7 +24,6 @@ export type LowLevelSourceType =
   | "creatorProfileLookup"
   | "creatorPublished"
   | "creatorCameos"
-  | "creatorCharacters"
   | "detailHtml";
 
 export type SourceBucket =

@@ -55,8 +55,7 @@ async function runFetchBatch(request: FetchBatchRequest) {
   const rows: unknown[] = [];
 
   for (let pageIndex = 0; pageIndex < (request.page_budget ?? 1); pageIndex += 1) {
-    const url = await buildSourceUrl(request, cursor, offset);
-    const payload = await fetchJson(url.toString());
+    const payload = await fetchBatchPayload(request, cursor, offset);
     const pageRows = getPostListingRows(payload);
     const enrichedRows = isDraftSource(request.source)
       ? await enrichDraftRows(pageRows, request.draft_resolution_entries ?? [])
@@ -93,55 +92,80 @@ async function runFetchBatch(request: FetchBatchRequest) {
   };
 }
 
-async function buildSourceUrl(request: FetchBatchRequest, cursor: string | null, offset: number | null): Promise<URL> {
+async function fetchBatchPayload(request: FetchBatchRequest, cursor: string | null, offset: number | null): Promise<unknown> {
   const limit = String(request.limit ?? 100);
 
   if (request.source === "profile") {
-    return buildUrl("/backend/project_y/profile_feed/me", { limit, cut: "nf2", cursor });
+    return fetchJson(buildUrl("/backend/project_y/profile_feed/me", { limit, cut: "nf2", cursor }).toString());
   }
   if (request.source === "drafts") {
-    return buildUrl("/backend/project_y/profile/drafts/v2", { limit, cursor, offset });
+    return fetchJson(buildUrl("/backend/project_y/profile/drafts/v2", { limit, cursor, offset }).toString());
   }
   if (request.source === "likes") {
     const viewerUserId = await deriveViewerUserId();
-    return buildUrl(`/backend/project_y/profile/${encodeURIComponent(viewerUserId)}/post_listing/likes`, { limit, cursor });
+    return fetchJson(
+      buildUrl(`/backend/project_y/profile/${encodeURIComponent(viewerUserId)}/post_listing/likes`, { limit, cursor }).toString()
+    );
   }
   if (request.source === "characters") {
-    return buildUrl("/backend/project_y/profile_feed/me", { limit, cut: "appearances", cursor });
+    return fetchJson(buildUrl("/backend/project_y/profile_feed/me", { limit, cut: "appearances", cursor }).toString());
   }
   if (request.source === "characterDrafts") {
-    return buildUrl("/backend/project_y/profile/drafts/cameos", { limit, cursor });
+    return fetchJson(buildUrl("/backend/project_y/profile/drafts/cameos", { limit, cursor }).toString());
   }
   if (request.source === "characterProfiles") {
     const viewerUserId = await deriveViewerUserId();
-    return buildUrl(`/backend/project_y/profile/${encodeURIComponent(viewerUserId)}/characters`, { limit, cursor });
+    return fetchJson(buildUrl(`/backend/project_y/profile/${encodeURIComponent(viewerUserId)}/characters`, { limit, cursor }).toString());
   }
   if (request.source === "characterAccountPosts") {
-    return buildUrl(`/backend/project_y/profile/${encodeURIComponent(request.character_id ?? "")}/post_listing/posts`, { limit, cursor });
+    const characterId = request.character_id ?? "";
+    return fetchFirstSuccessfulJson([
+      buildUrl(`/backend/project_y/profile/${encodeURIComponent(characterId)}/post_listing/posts`, { limit, cursor }).toString(),
+      buildUrl(`/backend/project_y/profile/${encodeURIComponent(characterId)}/post_listing/profile`, { limit, cursor }).toString(),
+      buildUrl(`/backend/project_y/profile/${encodeURIComponent(characterId)}/post_listing/public`, { limit, cursor }).toString(),
+      buildUrl(`/backend/project_y/profile/${encodeURIComponent(characterId)}/post_listing/published`, { limit, cursor }).toString(),
+      buildUrl(`/backend/project_y/profile_feed/${encodeURIComponent(characterId)}`, { limit, cut: "nf2", cursor }).toString()
+    ]);
   }
   if (request.source === "characterAccountAppearances") {
-    return buildUrl(`/backend/project_y/profile_feed/${encodeURIComponent(request.character_id ?? "")}`, {
-      limit,
-      cut: "appearances",
-      cursor
-    });
+    return (
+      (await fetchOptionalJson(
+        buildUrl(`/backend/project_y/profile_feed/${encodeURIComponent(request.character_id ?? "")}`, {
+          limit,
+          cut: "appearances",
+          cursor
+        }).toString()
+      )) ?? { items: [], next_cursor: null }
+    );
   }
   if (request.source === "characterAccountDrafts") {
-    return buildUrl(`/backend/project_y/profile/drafts/cameos/character/${encodeURIComponent(request.character_id ?? "")}`, { limit, cursor });
+    return (
+      (await fetchOptionalJson(
+        buildUrl(`/backend/project_y/profile/drafts/cameos/character/${encodeURIComponent(request.character_id ?? "")}`, {
+          limit,
+          cursor
+        }).toString()
+      )) ?? { items: [], next_cursor: null }
+    );
   }
   if (request.source === "creatorPublished") {
     const creatorId = await resolveCreatorId(request.creator_user_id ?? "", request.route_url ?? "", request.creator_username ?? "");
-    return buildUrl(`/backend/project_y/profile/${encodeURIComponent(creatorId)}/post_listing/posts`, { limit, cursor });
+    return fetchFirstSuccessfulJson([
+      buildUrl(`/backend/project_y/profile/${encodeURIComponent(creatorId)}/post_listing/posts`, { limit, cursor }).toString(),
+      buildUrl(`/backend/project_y/profile/${encodeURIComponent(creatorId)}/post_listing/profile`, { limit, cursor }).toString(),
+      buildUrl(`/backend/project_y/profile/${encodeURIComponent(creatorId)}/post_listing/public`, { limit, cursor }).toString(),
+      buildUrl(`/backend/project_y/profile/${encodeURIComponent(creatorId)}/post_listing/published`, { limit, cursor }).toString(),
+      buildUrl(`/backend/project_y/profile_feed/${encodeURIComponent(creatorId)}`, { limit, cut: "nf2", cursor }).toString()
+    ]);
   }
   if (request.source === "creatorCameos") {
     const creatorId = await resolveCreatorId(request.creator_user_id ?? "", request.route_url ?? "", request.creator_username ?? "");
-    return buildUrl(`/backend/project_y/profile_feed/${encodeURIComponent(creatorId)}`, { limit, cut: "appearances", cursor });
+    return (
+      (await fetchOptionalJson(
+        buildUrl(`/backend/project_y/profile_feed/${encodeURIComponent(creatorId)}`, { limit, cut: "appearances", cursor }).toString()
+      )) ?? { items: [], next_cursor: null }
+    );
   }
-  if (request.source === "creatorCharacters") {
-    const creatorId = await resolveCreatorId(request.creator_user_id ?? "", request.route_url ?? "", request.creator_username ?? "");
-    return buildUrl(`/backend/project_y/profile/${encodeURIComponent(creatorId)}/characters`, { limit, cursor });
-  }
-
   throw new Error(`Unsupported fetch source: ${request.source}`);
 }
 
@@ -152,14 +176,19 @@ async function resolveCreatorProfile(routeUrl: string) {
   }
 
   const payload = (await fetchJson(`/backend/project_y/profile/username/${encodeURIComponent(username)}`)) as Record<string, unknown>;
+  const rawUserId = String(payload.user_id ?? payload.userId ?? "");
+  const characterUserId = String(payload.character_user_id ?? payload.characterUserId ?? "");
+  const resolvedCharacterUserId = rawUserId.startsWith("ch_") ? rawUserId : characterUserId;
+  const fallbackProfileId = typeof payload.username === "string" && payload.username ? payload.username : username;
   return {
-    profile_id: String(payload.user_id ?? payload.userId ?? payload.username ?? username),
-    user_id: String(payload.user_id ?? payload.userId ?? ""),
+    profile_id: String(resolvedCharacterUserId || rawUserId || fallbackProfileId),
+    user_id: String(rawUserId ?? ""),
+    character_user_id: resolvedCharacterUserId,
     username: String(payload.username ?? payload.user_name ?? payload.userName ?? username),
     display_name: String(payload.display_name ?? payload.displayName ?? payload.name ?? username),
     permalink: String(payload.permalink ?? payload.url ?? `${window.location.origin}/profile/${encodeURIComponent(username)}`),
     profile_picture_url: typeof payload.profile_picture_url === "string" ? payload.profile_picture_url : typeof payload.avatar_url === "string" ? payload.avatar_url : null,
-    is_character_profile: typeof payload.user_id === "string" && payload.user_id.startsWith("ch_"),
+    is_character_profile: Boolean(resolvedCharacterUserId),
     created_at: new Date().toISOString()
   };
 }
@@ -223,6 +252,32 @@ async function enrichDraftRows(
 
   await Promise.all(Array.from({ length: Math.min(DRAFT_RESOLUTION_CONCURRENCY, rows.length) }, () => worker()));
   return rows;
+}
+
+async function fetchFirstSuccessfulJson(candidateUrls: string[]): Promise<unknown> {
+  let lastError: unknown = null;
+
+  for (const candidateUrl of candidateUrls) {
+    try {
+      return await fetchJson(candidateUrl);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error("Sora request failed for all candidate endpoints.");
+}
+
+async function fetchOptionalJson(url: string): Promise<unknown | null> {
+  try {
+    return await fetchJson(url);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/status (400|404)\b/.test(message)) {
+      return null;
+    }
+    throw error;
+  }
 }
 
 async function createSharedDraftReference(row: Record<string, unknown>, generationId: string) {
