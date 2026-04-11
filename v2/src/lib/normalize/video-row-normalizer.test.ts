@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   extractVideoIdFromDetailHtml,
+  normalizeCreatorProfile,
   normalizeDraftRows,
   normalizePostRows
 } from "./video-row-normalizer";
@@ -85,5 +86,22 @@ describe("video-row-normalizer", () => {
 
   it("extracts the final shared id from detail html fallbacks", () => {
     expect(extractVideoIdFromDetailHtml('<a href="/p/s_detail777">Open</a>')).toBe("s_detail777");
+  });
+
+  it("preserves character-profile flags when normalizing creator profiles", () => {
+    const profile = normalizeCreatorProfile(
+      {
+        user_id: "ch_crystal",
+        username: "crystal.party",
+        display_name: "Crystal Sparkle",
+        is_character_profile: true
+      },
+      "https://sora.chatgpt.com/profile/crystal.party"
+    );
+
+    expect(profile).toMatchObject({
+      user_id: "ch_crystal",
+      is_character_profile: true
+    });
   });
 });

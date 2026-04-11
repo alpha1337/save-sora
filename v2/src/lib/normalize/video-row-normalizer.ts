@@ -188,6 +188,7 @@ export function normalizeCreatorProfile(profile: unknown, routeUrl: string): Cre
 
   const record = profile as Record<string, unknown>;
   const userId = pickFirstString([record.user_id, record.userId, record.ownerUserId]);
+  const characterUserId = pickFirstString([record.character_user_id, record.characterUserId]);
   const username = pickFirstString([record.username, record.user_name, record.userName, record.handle]);
   const profileId = pickFirstString([record.profile_id, record.profileId, userId, username, routeUrl]);
 
@@ -205,7 +206,10 @@ export function normalizeCreatorProfile(profile: unknown, routeUrl: string): Cre
       normalizeAbsoluteUrl(
         pickFirstString([record.profile_picture_url, record.profilePictureUrl, record.avatar_url, record.avatarUrl])
       ) || null,
-    is_character_profile: Boolean(record.character_user_id || record.characterUserId),
+    is_character_profile:
+      Boolean(record.is_character_profile) ||
+      Boolean(characterUserId) ||
+      userId.startsWith("ch_"),
     created_at: new Date().toISOString()
   };
 }
