@@ -94,6 +94,67 @@ input {
   justify-content: flex-start;
 }
 
+.ss-progress-banner--detailed {
+  align-items: stretch;
+  flex-direction: column;
+}
+
+.ss-progress-summary,
+.ss-progress-badges,
+.ss-progress-job-header {
+  align-items: center;
+  display: flex;
+  gap: 0.75rem;
+}
+
+.ss-progress-summary,
+.ss-progress-job-header {
+  justify-content: space-between;
+}
+
+.ss-progress-summary {
+  flex-wrap: wrap;
+}
+
+.ss-progress-badges {
+  flex-wrap: wrap;
+}
+
+.ss-progress-job-grid {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.ss-progress-job-card,
+.ss-checkbox-list-item {
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 14px;
+  padding: 0.75rem;
+}
+
+.ss-progress-job-card {
+  background: rgba(255, 255, 255, 0.66);
+}
+
+.ss-progress-job-warning {
+  color: #b45309;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  margin-top: 0.4rem;
+}
+
+.ss-progress-footnote,
+.ss-checkbox-meta {
+  font-size: 0.8125rem;
+}
+
+.ss-checkbox-list-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
 .ss-list,
 .ss-scroll-list {
   display: flex;

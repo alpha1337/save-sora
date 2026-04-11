@@ -23,6 +23,7 @@ import {
   getThumbnailUrl,
   getVideoIdFromValue,
   normalizeAbsoluteUrl,
+  pickFirstNumber,
   pickFirstString,
   resolveSourceBucket,
   stringifyRawPayload
@@ -175,7 +176,10 @@ export function normalizeCharacterAccounts(rows: unknown[]): CharacterAccount[] 
       display_name: pickFirstString([record.display_name, record.displayName, record.name, accountId]),
       profile_picture_url: normalizeAbsoluteUrl(
         pickFirstString([record.profile_picture_url, record.profilePictureUrl, record.avatar_url, record.avatarUrl])
-      ) || null
+      ) || null,
+      published_count: pickFirstNumber([record.post_count, record.postCount]),
+      appearance_count: pickFirstNumber([record.cameo_count, record.cameoCount, record.appearance_count, record.appearanceCount]),
+      draft_count: pickFirstNumber([record.draft_count, record.draftCount])
     });
   }
 
@@ -212,6 +216,9 @@ export function normalizeCreatorProfile(profile: unknown, routeUrl: string): Cre
       Boolean(record.is_character_profile) ||
       Boolean(characterUserId) ||
       userId.startsWith("ch_"),
+    published_count: pickFirstNumber([record.post_count, record.postCount]),
+    appearance_count: pickFirstNumber([record.cameo_count, record.cameoCount, record.appearance_count, record.appearanceCount]),
+    draft_count: pickFirstNumber([record.draft_count, record.draftCount]),
     created_at: new Date().toISOString()
   };
 }

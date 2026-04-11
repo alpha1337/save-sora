@@ -27,7 +27,10 @@ export function SourcePanel(props: SourcePanelProps) {
     <Panel className="ss-stack">
       <div>
         <h2>Sources</h2>
-        <p className="ss-muted">Pick one or more source groups, then fetch normalized rows into the local session store.</p>
+        <p className="ss-muted">
+          Pick one or more source groups, then fetch normalized rows into the local session store. Saved creators expand into
+          published plus cameo jobs. Character accounts expand into posts, appearances, and drafts.
+        </p>
       </div>
       <SourceSelector disabled={props.disabled} onToggleSource={props.onToggleSource} sourceSelections={props.sourceSelections} />
       <div>

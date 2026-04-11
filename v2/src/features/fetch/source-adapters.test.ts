@@ -35,7 +35,9 @@ function createState(creatorProfiles: CreatorProfile[]): AppStoreState {
       completed_jobs: 0,
       processed_batches: 0,
       processed_rows: 0,
-      total_jobs: 0
+      running_jobs: 0,
+      total_jobs: 0,
+      job_progress: []
     },
     download_progress: {
       active_label: "",
@@ -57,6 +59,9 @@ describe("buildFetchJobs", () => {
           permalink: "https://sora.chatgpt.com/profile/crystal.party",
           profile_picture_url: null,
           is_character_profile: true,
+          published_count: 0,
+          appearance_count: 143852,
+          draft_count: null,
           created_at: "2026-04-11T00:00:00.000Z"
         }
       ])
@@ -67,6 +72,7 @@ describe("buildFetchJobs", () => {
       "characterAccountAppearances",
       "characterAccountDrafts"
     ]);
+    expect(jobs.map((job) => job.expected_total_count)).toEqual([0, 143852, null]);
   });
 
   it("keeps normal creator profiles on the creator fetch path", () => {
@@ -80,6 +86,9 @@ describe("buildFetchJobs", () => {
           permalink: "https://sora.chatgpt.com/profile/crystal.party",
           profile_picture_url: null,
           is_character_profile: false,
+          published_count: 1083,
+          appearance_count: 3634,
+          draft_count: null,
           created_at: "2026-04-11T00:00:00.000Z"
         }
       ])
@@ -89,5 +98,6 @@ describe("buildFetchJobs", () => {
       "creatorPublished",
       "creatorCameos"
     ]);
+    expect(jobs.map((job) => job.expected_total_count)).toEqual([1083, 3634]);
   });
 });

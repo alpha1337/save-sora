@@ -52,7 +52,17 @@ export async function fetchSelectedSources(): Promise<void> {
       completed_jobs: 0,
       processed_batches: 0,
       processed_rows: 0,
-      total_jobs: jobs.length
+      running_jobs: 0,
+      total_jobs: jobs.length,
+      job_progress: jobs.map((job) => ({
+        job_id: job.id,
+        label: job.label,
+        source: job.source,
+        status: "pending",
+        fetched_rows: 0,
+        processed_batches: 0,
+        expected_total_count: job.expected_total_count
+      }))
     },
     selected_video_ids: []
   });
@@ -126,7 +136,7 @@ export async function resolveAndAddCreatorProfile(routeInput: string): Promise<v
 
 async function runFetchJob(job: FetchJob, signal: AbortSignal): Promise<void> {
   logger.info("running fetch job", job.id);
-  useAppStore.getState().setFetchProgress({ active_label: job.label });
+  markFetchJobRunning(job);
   throwIfFetchCanceled(signal);
 
   const fetchedAt = new Date().toISOString();
@@ -163,7 +173,7 @@ async function runFetchJob(job: FetchJob, signal: AbortSignal): Promise<void> {
     return draftResolutionRecords;
   });
 
-  incrementCompletedJobs();
+  incrementCompletedJobs(job);
 }
 
 async function collectAllRows(source: LowLevelSourceType, job: FetchJob | { label: string }, signal: AbortSignal): Promise<unknown[]> {
@@ -218,7 +228,7 @@ async function streamFetchBatches(
     offset = response.payload.next_offset;
     done = response.payload.done;
 
-    updateFetchBatchProgress(job.label, streamedRowCount, batchRows.length);
+    updateFetchBatchProgress(job, streamedRowCount, batchRows.length, response.payload.estimated_total_count);
   }
 }
 
@@ -301,13 +311,19 @@ function buildDraftResolutionRecords(rows: unknown[]): DraftResolutionRecord[] {
   });
 }
 
-function incrementCompletedJobs(): void {
+function incrementCompletedJobs(job: FetchJob): void {
   useAppStore.setState((state) => ({
-    fetch_progress: {
-      ...state.fetch_progress,
-      completed_jobs: state.fetch_progress.completed_jobs + 1,
-      active_label: `${state.fetch_progress.completed_jobs + 1} of ${state.fetch_progress.total_jobs} jobs complete`
-    }
+    fetch_progress: buildNextFetchProgressState(
+      state.fetch_progress,
+      state.fetch_progress.job_progress.map((entry) =>
+        entry.job_id === job.id
+          ? { ...entry, status: "completed" as const }
+          : entry
+      ),
+      {
+        completed_jobs: state.fetch_progress.completed_jobs + 1
+      }
+    )
   }));
 }
 
@@ -325,15 +341,51 @@ function getPageBudgetForSource(source: LowLevelSourceType): number {
   return FETCH_PAGE_BUDGET;
 }
 
-function updateFetchBatchProgress(jobLabel: string, streamedRowCount: number, batchRowCount: number): void {
+function markFetchJobRunning(job: FetchJob): void {
   useAppStore.setState((state) => ({
-    fetch_progress: {
-      ...state.fetch_progress,
-      active_label: `Fetched ${streamedRowCount} rows from ${jobLabel}`,
-      processed_batches: state.fetch_progress.processed_batches + 1,
-      processed_rows: state.fetch_progress.processed_rows + batchRowCount
-    }
+    fetch_progress: buildNextFetchProgressState(
+      state.fetch_progress,
+      state.fetch_progress.job_progress.map((entry) =>
+        entry.job_id === job.id
+          ? { ...entry, status: "running" as const, expected_total_count: getHigherCount(entry.expected_total_count, job.expected_total_count) }
+          : entry
+      )
+    )
   }));
+}
+
+function updateFetchBatchProgress(job: FetchJob | { label: string }, streamedRowCount: number, batchRowCount: number, estimatedTotalCount: number | null): void {
+  useAppStore.setState((state) => {
+    if (!("id" in job)) {
+      return {
+        fetch_progress: {
+          ...state.fetch_progress,
+          active_label: `Fetched ${streamedRowCount} rows from ${job.label}`,
+          processed_batches: state.fetch_progress.processed_batches + 1,
+          processed_rows: state.fetch_progress.processed_rows + batchRowCount
+        }
+      };
+    }
+
+    const nextJobProgress = state.fetch_progress.job_progress.map((entry) =>
+      entry.job_id === job.id
+        ? {
+            ...entry,
+            status: "running" as const,
+            fetched_rows: streamedRowCount,
+            processed_batches: entry.processed_batches + 1,
+            expected_total_count: getHigherCount(entry.expected_total_count, estimatedTotalCount)
+          }
+        : entry
+    );
+
+    return {
+      fetch_progress: buildNextFetchProgressState(state.fetch_progress, nextJobProgress, {
+        processed_batches: state.fetch_progress.processed_batches + 1,
+        processed_rows: state.fetch_progress.processed_rows + batchRowCount
+      })
+    };
+  });
 }
 
 function isDraftSource(source: LowLevelSourceType): boolean {
@@ -362,4 +414,48 @@ async function runWithConcurrency<T>(values: T[], concurrency: number, workerFn:
   }
 
   await Promise.all(Array.from({ length: Math.min(concurrency, values.length) }, () => worker()));
+}
+
+function buildNextFetchProgressState(
+  currentProgress: ReturnType<typeof useAppStore.getState>["fetch_progress"],
+  nextJobProgress: ReturnType<typeof useAppStore.getState>["fetch_progress"]["job_progress"],
+  overrides: Partial<ReturnType<typeof useAppStore.getState>["fetch_progress"]> = {}
+) {
+  const runningJobs = nextJobProgress.filter((entry) => entry.status === "running").length;
+  const completedJobs = overrides.completed_jobs ?? currentProgress.completed_jobs;
+  const processedBatches = overrides.processed_batches ?? currentProgress.processed_batches;
+  const processedRows = overrides.processed_rows ?? currentProgress.processed_rows;
+
+  return {
+    ...currentProgress,
+    ...overrides,
+    active_label: buildFetchProgressLabel(runningJobs, completedJobs, currentProgress.total_jobs, processedRows),
+    completed_jobs: completedJobs,
+    processed_batches: processedBatches,
+    processed_rows: processedRows,
+    running_jobs: runningJobs,
+    job_progress: nextJobProgress
+  };
+}
+
+function buildFetchProgressLabel(runningJobs: number, completedJobs: number, totalJobs: number, processedRows: number): string {
+  if (runningJobs > 0) {
+    return `Fetching ${runningJobs} active job${runningJobs === 1 ? "" : "s"} · ${processedRows} rows`;
+  }
+
+  if (completedJobs >= totalJobs && totalJobs > 0) {
+    return "Fetch complete";
+  }
+
+  return `${completedJobs} of ${totalJobs} jobs complete`;
+}
+
+function getHigherCount(left: number | null, right: number | null): number | null {
+  if (typeof left !== "number") {
+    return typeof right === "number" ? right : null;
+  }
+  if (typeof right !== "number") {
+    return left;
+  }
+  return Math.max(left, right);
 }

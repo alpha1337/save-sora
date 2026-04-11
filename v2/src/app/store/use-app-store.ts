@@ -24,6 +24,18 @@ const defaultSessionMeta: SessionMeta = {
   last_fetch_at: null
 };
 
+function createDefaultFetchProgress() {
+  return {
+    active_label: "",
+    completed_jobs: 0,
+    processed_batches: 0,
+    processed_rows: 0,
+    running_jobs: 0,
+    total_jobs: 0,
+    job_progress: []
+  };
+}
+
 function mergeRows(existingRows: VideoRow[], incomingRows: VideoRow[]): VideoRow[] {
   const rowMap = new Map(existingRows.map((row) => [row.row_id, row]));
   for (const row of incomingRows) {
@@ -43,13 +55,7 @@ export const useAppStore = create<AppStore>((set) => ({
   video_rows: [],
   selected_video_ids: [],
   download_history_ids: [],
-  fetch_progress: {
-    active_label: "",
-    completed_jobs: 0,
-    processed_batches: 0,
-    processed_rows: 0,
-    total_jobs: 0
-  },
+  fetch_progress: createDefaultFetchProgress(),
   download_progress: {
     active_label: "",
     completed_items: 0,
@@ -123,13 +129,7 @@ export const useAppStore = create<AppStore>((set) => ({
       },
       video_rows: [],
       selected_video_ids: [],
-      fetch_progress: {
-        active_label: "",
-        completed_jobs: 0,
-        processed_batches: 0,
-        processed_rows: 0,
-        total_jobs: 0
-      },
+      fetch_progress: createDefaultFetchProgress(),
       download_progress: {
         active_label: "",
         completed_items: 0,

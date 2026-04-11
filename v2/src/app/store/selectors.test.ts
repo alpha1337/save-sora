@@ -72,7 +72,9 @@ function createState(sortKey: VideoSortKey, rows: VideoRow[]): AppStoreState {
       completed_jobs: 0,
       processed_batches: 0,
       processed_rows: 0,
-      total_jobs: 0
+      running_jobs: 0,
+      total_jobs: 0,
+      job_progress: []
     },
     download_progress: {
       active_label: "",

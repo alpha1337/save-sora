@@ -1,6 +1,7 @@
 import type { CharacterAccount } from "types/domain";
 import { Button } from "@components/atoms/button";
 import { Checkbox } from "@components/atoms/checkbox";
+import { formatCount } from "@lib/utils/format-utils";
 
 interface CharacterAccountSelectorProps {
   accounts: CharacterAccount[];
@@ -27,16 +28,28 @@ export function CharacterAccountSelector({
       </Button>
       <div className="ss-scroll-list">
         {accounts.map((account) => (
-          <Checkbox
-            checked={selectedAccountIds.includes(account.account_id)}
-            disabled={disabled}
-            id={`character-account-${account.account_id}`}
-            key={account.account_id}
-            label={account.display_name || account.username || account.account_id}
-            onCheckedChange={(checked) => onToggleAccount(account.account_id, checked)}
-          />
+          <div className="ss-checkbox-list-item" key={account.account_id}>
+            <Checkbox
+              checked={selectedAccountIds.includes(account.account_id)}
+              disabled={disabled}
+              id={`character-account-${account.account_id}`}
+              label={account.display_name || account.username || account.account_id}
+              onCheckedChange={(checked) => onToggleAccount(account.account_id, checked)}
+            />
+            <div className="ss-checkbox-meta ss-muted">{formatSourceCounts(account.published_count, account.appearance_count, account.draft_count)}</div>
+          </div>
         ))}
       </div>
     </div>
   );
+}
+
+function formatSourceCounts(publishedCount: number | null, appearanceCount: number | null, draftCount: number | null): string {
+  const segments = [
+    typeof publishedCount === "number" ? `${formatCount(publishedCount)} posts` : "",
+    typeof appearanceCount === "number" ? `${formatCount(appearanceCount)} appearances` : "",
+    typeof draftCount === "number" ? `${formatCount(draftCount)} drafts` : ""
+  ].filter(Boolean);
+
+  return segments.join(" · ") || "No source counts available";
 }

@@ -52,6 +52,9 @@ export interface CreatorProfile {
   permalink: string;
   profile_picture_url: string | null;
   is_character_profile: boolean;
+  published_count: number | null;
+  appearance_count: number | null;
+  draft_count: number | null;
   created_at: string;
 }
 
@@ -60,6 +63,9 @@ export interface CharacterAccount {
   username: string;
   display_name: string;
   profile_picture_url: string | null;
+  published_count: number | null;
+  appearance_count: number | null;
+  draft_count: number | null;
 }
 
 export interface AppSettings {
@@ -141,12 +147,26 @@ export interface ArchiveWorkPlan {
   archive_name: string;
 }
 
+export type FetchJobStatus = "pending" | "running" | "completed";
+
+export interface FetchJobProgress {
+  job_id: string;
+  label: string;
+  source: LowLevelSourceType;
+  status: FetchJobStatus;
+  fetched_rows: number;
+  processed_batches: number;
+  expected_total_count: number | null;
+}
+
 export interface FetchProgressState {
   active_label: string;
   completed_jobs: number;
   processed_batches: number;
   processed_rows: number;
+  running_jobs: number;
   total_jobs: number;
+  job_progress: FetchJobProgress[];
 }
 
 export interface DownloadProgressState {

@@ -187,7 +187,9 @@ describe("video-row-normalizer", () => {
 
     expect(profile).toMatchObject({
       user_id: "ch_crystal",
-      is_character_profile: true
+      is_character_profile: true,
+      published_count: null,
+      appearance_count: null
     });
   });
 
@@ -205,6 +207,25 @@ describe("video-row-normalizer", () => {
     expect(profile).toMatchObject({
       user_id: "ch_crystal",
       is_character_profile: true
+    });
+  });
+
+  it("preserves profile count metrics for progress estimation", () => {
+    const profile = normalizeCreatorProfile(
+      {
+        user_id: "user_binaryrot",
+        username: "binaryrot",
+        display_name: "Binary Rot",
+        post_count: 3018,
+        cameo_count: 2535
+      },
+      "https://sora.chatgpt.com/profile/binaryrot"
+    );
+
+    expect(profile).toMatchObject({
+      published_count: 3018,
+      appearance_count: 2535,
+      draft_count: null
     });
   });
 });

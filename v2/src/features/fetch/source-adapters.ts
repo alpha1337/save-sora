@@ -5,6 +5,7 @@ export interface FetchJob {
   id: string;
   label: string;
   source: LowLevelSourceType;
+  expected_total_count: number | null;
   route_url?: string;
   creator_user_id?: string;
   creator_username?: string;
@@ -19,36 +20,41 @@ export function buildFetchJobs(state: AppStoreState): FetchJob[] {
   const selectedSources = state.session_meta.active_sources;
 
   if (selectedSources.profile) {
-    jobs.push({ id: "profile", label: "Published posts", source: "profile" });
+    jobs.push({ id: "profile", label: "Published posts", source: "profile", expected_total_count: null });
   }
   if (selectedSources.drafts) {
-    jobs.push({ id: "drafts", label: "Drafts", source: "drafts" });
+    jobs.push({ id: "drafts", label: "Drafts", source: "drafts", expected_total_count: null });
   }
   if (selectedSources.likes) {
-    jobs.push({ id: "likes", label: "Liked posts", source: "likes" });
+    jobs.push({ id: "likes", label: "Liked posts", source: "likes", expected_total_count: null });
   }
   if (selectedSources.characters) {
-    jobs.push({ id: "characters-posts", label: "Character appearances", source: "characters" });
-    jobs.push({ id: "characters-drafts", label: "Character drafts", source: "characterDrafts" });
+    jobs.push({ id: "characters-posts", label: "Character appearances", source: "characters", expected_total_count: null });
+    jobs.push({ id: "characters-drafts", label: "Character drafts", source: "characterDrafts", expected_total_count: null });
   }
   if (selectedSources.characterAccounts) {
     for (const characterId of state.session_meta.selected_character_account_ids) {
+      const account = state.character_accounts.find((entry) => entry.account_id === characterId);
+      const labelPrefix = account?.display_name || account?.username || characterId;
       jobs.push({
         id: `character-account-posts:${characterId}`,
-        label: `Character posts ${characterId}`,
+        label: `${labelPrefix} posts`,
         source: "characterAccountPosts",
+        expected_total_count: account?.published_count ?? null,
         character_id: characterId
       });
       jobs.push({
         id: `character-account-appearances:${characterId}`,
-        label: `Character appearances ${characterId}`,
+        label: `${labelPrefix} appearances`,
         source: "characterAccountAppearances",
+        expected_total_count: account?.appearance_count ?? null,
         character_id: characterId
       });
       jobs.push({
         id: `character-account-drafts:${characterId}`,
-        label: `Character drafts ${characterId}`,
+        label: `${labelPrefix} drafts`,
         source: "characterAccountDrafts",
+        expected_total_count: account?.draft_count ?? null,
         character_id: characterId
       });
     }
@@ -75,6 +81,7 @@ function buildCreatorJobs(profile: CreatorProfile): FetchJob[] {
         id: `creator-character-posts:${profile.profile_id}`,
         label: `${profile.display_name} posts`,
         source: "characterAccountPosts",
+        expected_total_count: profile.published_count,
         character_id: profile.user_id,
         route_url: profile.permalink
       },
@@ -82,6 +89,7 @@ function buildCreatorJobs(profile: CreatorProfile): FetchJob[] {
         id: `creator-character-appearances:${profile.profile_id}`,
         label: `${profile.display_name} appearances`,
         source: "characterAccountAppearances",
+        expected_total_count: profile.appearance_count,
         character_id: profile.user_id,
         route_url: profile.permalink
       },
@@ -89,6 +97,7 @@ function buildCreatorJobs(profile: CreatorProfile): FetchJob[] {
         id: `creator-character-drafts:${profile.profile_id}`,
         label: `${profile.display_name} drafts`,
         source: "characterAccountDrafts",
+        expected_total_count: profile.draft_count,
         character_id: profile.user_id,
         route_url: profile.permalink
       }
@@ -100,12 +109,14 @@ function buildCreatorJobs(profile: CreatorProfile): FetchJob[] {
       id: `creator-published:${profile.profile_id}`,
       label: `${profile.display_name} published`,
       source: "creatorPublished",
+      expected_total_count: profile.published_count,
       ...baseJobData
     },
     {
       id: `creator-cameos:${profile.profile_id}`,
       label: `${profile.display_name} cameos`,
       source: "creatorCameos",
+      expected_total_count: profile.appearance_count,
       ...baseJobData
     }
   ];
