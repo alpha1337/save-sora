@@ -6,6 +6,7 @@ import { Input } from "@components/atoms/input";
 import { Panel } from "@components/atoms/panel";
 
 interface SettingsPanelProps {
+  disabled?: boolean;
   settings: AppSettings;
   onArchiveNameTemplateChange: (value: string) => void;
   onClearDownloadHistory: () => void;
@@ -15,7 +16,13 @@ interface SettingsPanelProps {
 /**
  * Settings surface with the only permanent-history destructive action.
  */
-export function SettingsPanel({ onArchiveNameTemplateChange, onClearDownloadHistory, onResetSession, settings }: SettingsPanelProps) {
+export function SettingsPanel({
+  disabled = false,
+  onArchiveNameTemplateChange,
+  onClearDownloadHistory,
+  onResetSession,
+  settings
+}: SettingsPanelProps) {
   return (
     <Panel className="ss-stack">
       <div>
@@ -27,16 +34,20 @@ export function SettingsPanel({ onArchiveNameTemplateChange, onClearDownloadHist
       </div>
       <label className="ss-stack">
         <span>Archive name template</span>
-        <Input onChange={(event) => onArchiveNameTemplateChange(event.target.value)} value={settings.archive_name_template} />
+        <Input
+          disabled={disabled}
+          onChange={(event) => onArchiveNameTemplateChange(event.target.value)}
+          value={settings.archive_name_template}
+        />
       </label>
       <div className="ss-inline-actions">
-        <Button onClick={onResetSession} tone="secondary" type="button">
+        <Button disabled={disabled} onClick={onResetSession} tone="secondary" type="button">
           <RotateCcw size={16} />
           Reset Session
         </Button>
         <Dialog.Root>
           <Dialog.Trigger asChild>
-            <Button tone="danger" type="button">
+            <Button disabled={disabled} tone="danger" type="button">
               <Trash2 size={16} />
               Clear Download History
             </Button>

@@ -22,6 +22,14 @@ const FETCH_BATCH_LIMIT = 100;
 const FETCH_PAGE_BUDGET = 3;
 const FETCH_CONCURRENCY = 3;
 const DETAIL_FALLBACK_CONCURRENCY = 4;
+let activeFetchAbortController: AbortController | null = null;
+
+class FetchCancellationError extends Error {
+  constructor() {
+    super("Fetch canceled.");
+    this.name = "FetchCancellationError";
+  }
+}
 
 /**
  * Orchestrates end-to-end fetch execution, incremental persistence, and detail
@@ -56,19 +64,42 @@ export async function fetchSelectedSources(): Promise<void> {
   });
   useAppStore.getState().replaceVideoRows([]);
 
-  await runWithConcurrency(jobs, FETCH_CONCURRENCY, runFetchJob);
+  const abortController = new AbortController();
+  activeFetchAbortController = abortController;
 
-  useAppStore.setState({
-    phase: "ready",
-    fetch_progress: {
-      ...useAppStore.getState().fetch_progress,
-      active_label: "Fetch complete"
+  try {
+    await runWithConcurrency(jobs, FETCH_CONCURRENCY, (job) => runFetchJob(job, abortController.signal));
+
+    useAppStore.setState({
+      phase: "ready",
+      fetch_progress: {
+        ...useAppStore.getState().fetch_progress,
+        active_label: "Fetch complete"
+      }
+    });
+  } catch (error) {
+    if (isFetchCancellationError(error)) {
+      const nextState = useAppStore.getState();
+      useAppStore.setState({
+        phase: nextState.video_rows.length > 0 ? "ready" : "idle",
+        fetch_progress: {
+          ...nextState.fetch_progress,
+          active_label: "Fetch canceled"
+        }
+      });
+      return;
     }
-  });
+
+    throw error;
+  } finally {
+    if (activeFetchAbortController === abortController) {
+      activeFetchAbortController = null;
+    }
+  }
 }
 
 export async function loadCharacterAccountsIntoState(): Promise<void> {
-  const rows = await collectAllRows("characterProfiles", { label: "Character accounts" });
+  const rows = await collectAllRows("characterProfiles", { label: "Character accounts" }, new AbortController().signal);
   const accounts = normalizeCharacterAccounts(rows);
   useAppStore.getState().setCharacterAccounts(accounts);
 }
@@ -92,12 +123,13 @@ export async function resolveAndAddCreatorProfile(routeInput: string): Promise<v
   useAppStore.getState().addCreatorProfile(profile);
 }
 
-async function runFetchJob(job: FetchJob): Promise<void> {
+async function runFetchJob(job: FetchJob, signal: AbortSignal): Promise<void> {
   logger.info("running fetch job", job.id);
   useAppStore.getState().setFetchProgress({ active_label: job.label });
+  throwIfFetchCanceled(signal);
 
   if (job.source === "creatorCharacters") {
-    const rows = await collectAllRows(job.source, job);
+    const rows = await collectAllRows(job.source, job, signal);
     const accounts = normalizeCharacterAccounts(rows);
     const dedupedProfiles = accounts.map((account) => ({
       account_id: account.account_id,
@@ -110,12 +142,14 @@ async function runFetchJob(job: FetchJob): Promise<void> {
     return;
   }
 
-  const rows = await collectAllRows(job.source, job);
+  const rows = await collectAllRows(job.source, job, signal);
+  throwIfFetchCanceled(signal);
   const fetchedAt = new Date().toISOString();
   const normalizedRows = isDraftSource(job.source)
     ? normalizeDraftRows(job.source, rows, fetchedAt)
     : normalizePostRows(job.source, rows, fetchedAt);
-  const recoveredRows = await recoverMissingVideoIds(normalizedRows);
+  const recoveredRows = await recoverMissingVideoIds(normalizedRows, signal);
+  throwIfFetchCanceled(signal);
 
   const draftResolutionRecords = buildDraftResolutionRecords(rows);
   if (draftResolutionRecords.length > 0) {
@@ -127,7 +161,7 @@ async function runFetchJob(job: FetchJob): Promise<void> {
   incrementCompletedJobs();
 }
 
-async function collectAllRows(source: LowLevelSourceType, job: FetchJob | { label: string }): Promise<unknown[]> {
+async function collectAllRows(source: LowLevelSourceType, job: FetchJob | { label: string }, signal: AbortSignal): Promise<unknown[]> {
   const draftResolutionMap = await loadDraftResolutionMap();
   const collectedRows: unknown[] = [];
   let cursor: string | null = null;
@@ -135,6 +169,7 @@ async function collectAllRows(source: LowLevelSourceType, job: FetchJob | { labe
   let done = false;
 
   while (!done) {
+    throwIfFetchCanceled(signal);
     const response: FetchBatchResponse = await sendBackgroundRequest({
       type: "fetch-batch",
       source,
@@ -148,6 +183,7 @@ async function collectAllRows(source: LowLevelSourceType, job: FetchJob | { labe
       character_id: "character_id" in job ? job.character_id : undefined,
       draft_resolution_entries: [...draftResolutionMap.entries()].map(([generation_id, video_id]) => ({ generation_id, video_id }))
     });
+    throwIfFetchCanceled(signal);
 
     collectedRows.push(...response.payload.rows);
     cursor = response.payload.next_cursor;
@@ -164,7 +200,7 @@ async function collectAllRows(source: LowLevelSourceType, job: FetchJob | { labe
   return collectedRows;
 }
 
-async function recoverMissingVideoIds(rows: VideoRow[]): Promise<VideoRow[]> {
+async function recoverMissingVideoIds(rows: VideoRow[], signal: AbortSignal): Promise<VideoRow[]> {
   const pendingRows = rows.filter((row) => !row.video_id && row.detail_url && row.skip_reason === "missing_video_id");
   if (pendingRows.length === 0) {
     return rows;
@@ -175,6 +211,7 @@ async function recoverMissingVideoIds(rows: VideoRow[]): Promise<VideoRow[]> {
 
   async function worker() {
     while (currentIndex < pendingRows.length) {
+      throwIfFetchCanceled(signal);
       const row = pendingRows[currentIndex];
       currentIndex += 1;
 
@@ -202,6 +239,21 @@ async function recoverMissingVideoIds(rows: VideoRow[]): Promise<VideoRow[]> {
 
   await Promise.all(Array.from({ length: Math.min(DETAIL_FALLBACK_CONCURRENCY, pendingRows.length) }, () => worker()));
   return [...updatedRowMap.values()];
+}
+
+/**
+ * Requests a cooperative stop for the currently running fetch. The current
+ * in-flight batch is allowed to finish, after which the fetch settles cleanly.
+ */
+export function cancelActiveFetch(): void {
+  if (!activeFetchAbortController || activeFetchAbortController.signal.aborted) {
+    return;
+  }
+
+  activeFetchAbortController.abort();
+  useAppStore.getState().setFetchProgress({
+    active_label: "Stopping after current batch..."
+  });
 }
 
 function buildDraftResolutionRecords(rows: unknown[]): DraftResolutionRecord[] {
@@ -237,6 +289,16 @@ function incrementCompletedJobs(): void {
 
 function isDraftSource(source: LowLevelSourceType): boolean {
   return source === "drafts" || source === "characterDrafts" || source === "characterAccountDrafts";
+}
+
+function throwIfFetchCanceled(signal: AbortSignal): void {
+  if (signal.aborted) {
+    throw new FetchCancellationError();
+  }
+}
+
+function isFetchCancellationError(error: unknown): error is FetchCancellationError {
+  return error instanceof FetchCancellationError;
 }
 
 async function runWithConcurrency<T>(values: T[], concurrency: number, workerFn: (value: T) => Promise<void>): Promise<void> {

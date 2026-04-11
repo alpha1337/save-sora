@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Download, RefreshCcw } from "lucide-react";
+import { Download, RefreshCcw, Square } from "lucide-react";
 import { useAppStore } from "@app/store/use-app-store";
 import { selectFilteredVideoRows } from "@app/store/selectors";
 import { bootstrapAppState } from "@app/controllers/bootstrap-controller";
@@ -15,7 +15,7 @@ import { SourcePanel } from "@components/organisms/source-panel";
 import { AppShellTemplate } from "@components/templates/app-shell-template";
 import { createLogger } from "@lib/logging/logger";
 import { clearWorkingSessionData, replaceDownloadQueue, saveSessionMeta } from "@lib/db/session-db";
-import { fetchSelectedSources, loadCharacterAccountsIntoState, resolveAndAddCreatorProfile } from "@features/fetch/fetch-controller";
+import { cancelActiveFetch, fetchSelectedSources, loadCharacterAccountsIntoState, resolveAndAddCreatorProfile } from "@features/fetch/fetch-controller";
 
 const logger = createLogger("app");
 
@@ -25,15 +25,25 @@ const logger = createLogger("app");
 export function App() {
   const state = useAppStore();
   const filteredRows = useMemo(() => selectFilteredVideoRows(state), [state]);
+  const downloadableVideoIdSet = useMemo(
+    () => new Set(state.video_rows.filter((row) => row.is_downloadable && row.video_id).map((row) => row.video_id)),
+    [state.video_rows]
+  );
   const visibleDownloadableIds = useMemo(
     () => filteredRows.filter((row) => row.is_downloadable && row.video_id).map((row) => row.video_id),
     [filteredRows]
+  );
+  const downloadableRowsCount = downloadableVideoIdSet.size;
+  const selectedDownloadableRowCount = useMemo(
+    () => state.selected_video_ids.filter((videoId) => downloadableVideoIdSet.has(videoId)).length,
+    [downloadableVideoIdSet, state.selected_video_ids]
   );
   const selectedVisibleRowCount = useMemo(
     () => visibleDownloadableIds.filter((videoId) => state.selected_video_ids.includes(videoId)).length,
     [state.selected_video_ids, visibleDownloadableIds]
   );
   const allVisibleSelected = visibleDownloadableIds.length > 0 && selectedVisibleRowCount === visibleDownloadableIds.length;
+  const isBusy = state.phase === "fetching" || state.phase === "downloading";
   const [creatorRouteInput, setCreatorRouteInput] = useState("");
 
   useEffect(() => {
@@ -117,7 +127,13 @@ export function App() {
               <RefreshCcw size={16} />
               Fetch Videos
             </Button>
-            <Button disabled={state.phase === "fetching" || state.phase === "downloading"} onClick={handleDownload} type="button">
+            {state.phase === "fetching" ? (
+              <Button onClick={cancelActiveFetch} tone="danger" type="button">
+                <Square size={16} />
+                Cancel Fetch
+              </Button>
+            ) : null}
+            <Button disabled={isBusy || downloadableRowsCount === 0} onClick={handleDownload} type="button">
               <Download size={16} />
               Build ZIP
             </Button>
@@ -126,6 +142,7 @@ export function App() {
       }
       settings={
         <SettingsPanel
+          disabled={isBusy}
           onArchiveNameTemplateChange={(value) => void updateSettings({ ...state.settings, archive_name_template: value })}
           onClearDownloadHistory={() => void clearDownloadHistoryFromSettings()}
           onResetSession={() => void handleResetSession()}
@@ -159,6 +176,10 @@ export function App() {
         {state.error_message ? <Panel className="ss-error-panel">{state.error_message}</Panel> : null}
         <ResultsPanel
           allVisibleSelected={allVisibleSelected}
+          downloadableRowCount={downloadableRowsCount}
+          downloadDisabled={isBusy || downloadableRowsCount === 0}
+          exportDisabled={isBusy || state.video_rows.length === 0}
+          hasRows={state.video_rows.length > 0}
           onDownload={() => void handleDownload()}
           onExportCsv={exportSessionRowsToCsv}
           onQueryChange={(value) => state.setFilters({ query: value })}
@@ -168,6 +189,7 @@ export function App() {
           query={state.session_meta.query}
           rows={filteredRows}
           selectableRowCount={visibleDownloadableIds.length}
+          selectedDownloadableRowCount={selectedDownloadableRowCount}
           selectedVideoIds={state.selected_video_ids}
           selectedVisibleRowCount={selectedVisibleRowCount}
           sortKey={state.session_meta.sort_key}

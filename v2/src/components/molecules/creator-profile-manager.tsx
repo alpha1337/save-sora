@@ -25,18 +25,26 @@ export function CreatorProfileManager({
 }: CreatorProfileManagerProps) {
   return (
     <div className="ss-stack">
-      <div className="ss-inline-form">
+      <form
+        className="ss-inline-form"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (!disabled && creatorRouteInput.trim()) {
+            onAddCreatorProfile();
+          }
+        }}
+      >
         <Input
           disabled={disabled}
           onChange={(event) => onCreatorRouteInputChange(event.target.value)}
           placeholder="@creator, crystal.party, or https://sora.chatgpt.com/profile/creator"
           value={creatorRouteInput}
         />
-        <Button disabled={disabled || !creatorRouteInput.trim()} onClick={onAddCreatorProfile} type="button">
+        <Button disabled={disabled || !creatorRouteInput.trim()} type="submit">
           <UserPlus size={16} />
           Add Creator
         </Button>
-      </div>
+      </form>
       <ul className="ss-list">
         {creatorProfiles.map((profile) => (
           <li className="ss-list-row" key={profile.profile_id}>

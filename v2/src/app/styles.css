@@ -81,10 +81,12 @@ input {
 
 .ss-inline-form {
   justify-content: flex-start;
+  flex-wrap: wrap;
 }
 
 .ss-toolbar {
   justify-content: flex-start;
+  flex-wrap: wrap;
 }
 
 .ss-progress-banner,
@@ -227,6 +229,17 @@ input {
 
 .ss-table-shell {
   overflow: auto;
+}
+
+.ss-empty-state {
+  align-items: flex-start;
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px dashed rgba(148, 163, 184, 0.35);
+  border-radius: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 1rem;
 }
 
 .ss-table {
