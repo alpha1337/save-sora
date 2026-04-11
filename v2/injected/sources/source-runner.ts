@@ -5,9 +5,10 @@ import {
   extractDraftGenerationId,
   extractSharedVideoId,
   fetchJson,
+  getNextCursor,
+  getNextCursorForRows,
   fetchText,
   getEstimatedTotalCount,
-  getNextCursor,
   getPostListingRows,
   getUsernameFromRouteUrl,
   resolveSharedVideoIdFromValue
@@ -50,7 +51,7 @@ export async function runSourceRequest(request: BackgroundRequest): Promise<unkn
 
 async function runFetchBatch(request: FetchBatchRequest) {
   let cursor = request.cursor ?? null;
-  let offset = request.offset ?? 0;
+  let offset: number | null = request.offset ?? 0;
   let estimatedTotalCount = 0;
   const rows: unknown[] = [];
 
@@ -64,10 +65,19 @@ async function runFetchBatch(request: FetchBatchRequest) {
     rows.push(...enrichedRows);
     estimatedTotalCount = Math.max(estimatedTotalCount, getEstimatedTotalCount(payload, rows.length));
 
-    const nextCursor = getNextCursor(payload);
+    const nextCursor = getNextCursorForRows(
+      payload,
+      pageRows,
+      cursor ?? "",
+      getCursorKindForSource(request.source)
+    );
     const hasMoreRows = pageRows.length >= (request.limit ?? 100);
-    const nextOffset = nextCursor ? offset : offset + (request.limit ?? 100);
-    const isDone = !nextCursor && !hasMoreRows;
+    const nextOffset: number | null = supportsOffsetPagination(request.source)
+      ? (nextCursor ? offset : (offset ?? 0) + (request.limit ?? 100))
+      : null;
+    const isDone = supportsOffsetPagination(request.source)
+      ? (!nextCursor && !hasMoreRows)
+      : !nextCursor;
 
     cursor = nextCursor;
     offset = nextOffset;
@@ -129,12 +139,21 @@ async function fetchBatchPayload(request: FetchBatchRequest, cursor: string | nu
   }
   if (request.source === "characterAccountAppearances") {
     return (
-      (await fetchOptionalJson(
-        buildUrl(`/backend/project_y/profile_feed/${encodeURIComponent(request.character_id ?? "")}`, {
-          limit,
-          cut: "appearances",
-          cursor
-        }).toString()
+      (await fetchPreferredPayload(
+        [
+          buildUrl(`/backend/project_y/profile_feed/${encodeURIComponent(request.character_id ?? "")}`, {
+            limit,
+            cut: "appearances",
+            cursor
+          }).toString(),
+          buildUrl(`/backend/project_y/profile_feed/${encodeURIComponent(request.character_id ?? "")}`, {
+            limit,
+            cut: "nf2",
+            cursor
+          }).toString()
+        ],
+        cursor ?? "",
+        getCursorKindForSource(request.source)
       )) ?? { items: [], next_cursor: null }
     );
   }
@@ -268,6 +287,66 @@ async function fetchFirstSuccessfulJson(candidateUrls: string[]): Promise<unknow
   throw lastError instanceof Error ? lastError : new Error("Sora request failed for all candidate endpoints.");
 }
 
+async function fetchPreferredPayload(
+  candidateUrls: string[],
+  requestCursor: string,
+  cursorKind: string
+): Promise<unknown | null> {
+  let firstSuccessfulPayload: unknown | null = null;
+  let bestPayload: unknown | null = null;
+  let bestScore = -1;
+  let bestPaginatedPayload: unknown | null = null;
+  let bestPaginatedScore = -1;
+  let lastError: unknown = null;
+
+  for (const candidateUrl of candidateUrls) {
+    try {
+      const payload = await fetchOptionalJson(candidateUrl);
+      if (!payload) {
+        continue;
+      }
+
+      const rows = getPostListingRows(payload);
+      const nextCursor = getNextCursorForRows(payload, rows, requestCursor, cursorKind);
+      const score = rows.length;
+
+      if (!firstSuccessfulPayload) {
+        firstSuccessfulPayload = payload;
+      }
+
+      if (score > bestScore) {
+        bestScore = score;
+        bestPayload = payload;
+      }
+
+      if (nextCursor && score > 0 && score > bestPaginatedScore) {
+        bestPaginatedScore = score;
+        bestPaginatedPayload = payload;
+      }
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  if (bestPaginatedPayload) {
+    return bestPaginatedPayload;
+  }
+
+  if (bestPayload) {
+    return bestPayload;
+  }
+
+  if (firstSuccessfulPayload) {
+    return firstSuccessfulPayload;
+  }
+
+  if (lastError) {
+    throw lastError;
+  }
+
+  return null;
+}
+
 async function fetchOptionalJson(url: string): Promise<unknown | null> {
   try {
     return await fetchJson(url);
@@ -368,4 +447,24 @@ function buildUrl(pathname: string, params: Record<string, string | number | nul
 
 function isDraftSource(source: FetchBatchRequest["source"]): boolean {
   return source === "drafts" || source === "characterDrafts" || source === "characterAccountDrafts";
+}
+
+function supportsOffsetPagination(source: FetchBatchRequest["source"]): boolean {
+  return source === "drafts";
+}
+
+function getCursorKindForSource(source: FetchBatchRequest["source"]): string {
+  if (
+    source === "profile" ||
+    source === "likes" ||
+    source === "characters" ||
+    source === "characterAccountPosts" ||
+    source === "characterAccountAppearances" ||
+    source === "creatorPublished" ||
+    source === "creatorCameos"
+  ) {
+    return "sv2_created_at";
+  }
+
+  return "";
 }

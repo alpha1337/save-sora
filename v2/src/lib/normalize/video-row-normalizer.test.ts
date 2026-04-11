@@ -134,6 +134,46 @@ describe("video-row-normalizer", () => {
     expect(row.published_at).toBe(new Date(1775636349.345291 * 1000).toISOString());
   });
 
+  it("uses nested post text as the title fallback when discovery phrase is missing", () => {
+    const [row] = normalizePostRows(
+      "creatorPublished",
+      [
+        {
+          post: {
+            id: "s_prompt123",
+            text: "Nested post title",
+            attachments: [{ downloadable_url: "https://videos.openai.com/raw.mp4" }]
+          }
+        }
+      ],
+      FETCHED_AT
+    );
+
+    expect(row.title).toBe("Nested post title");
+    expect(row.prompt).toBe("Nested post title");
+  });
+
+  it("prefers caption before description when both are present", () => {
+    const [row] = normalizePostRows(
+      "creatorPublished",
+      [
+        {
+          post: {
+            id: "s_caption123",
+            caption: "Caption title",
+            description: "Description title",
+            attachments: [{ downloadable_url: "https://videos.openai.com/raw.mp4" }]
+          }
+        }
+      ],
+      FETCHED_AT
+    );
+
+    expect(row.title).toBe("Caption title");
+    expect(row.caption).toBe("Caption title");
+    expect(row.description).toBe("Description title");
+  });
+
   it("preserves character-profile flags when normalizing creator profiles", () => {
     const profile = normalizeCreatorProfile(
       {

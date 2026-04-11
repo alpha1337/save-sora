@@ -62,6 +62,31 @@ export function getNextCursor(payload: unknown): string | null {
   ]) || null;
 }
 
+export function getNextCursorForRows(
+  payload: unknown,
+  rows: unknown[],
+  requestCursor = "",
+  cursorKind = ""
+): string | null {
+  const explicitCursor = normalizeCursorToken(getNextCursor(payload));
+  const nestedCursor = normalizeCursorToken(findNestedCursorToken(payload, requestCursor));
+
+  if (explicitCursor && explicitCursor !== requestCursor) {
+    return explicitCursor;
+  }
+
+  if (nestedCursor && nestedCursor !== requestCursor) {
+    return nestedCursor;
+  }
+
+  const derivedCursor = normalizeCursorToken(buildCreatedAtCursorFromRows(rows, cursorKind));
+  if (derivedCursor && derivedCursor !== requestCursor) {
+    return derivedCursor;
+  }
+
+  return null;
+}
+
 export function getEstimatedTotalCount(payload: unknown, observedCount: number): number {
   if (!payload || typeof payload !== "object") {
     return observedCount;
@@ -236,5 +261,137 @@ function pickFirstNumber(candidates: unknown[]): number | null {
       return numericValue;
     }
   }
+  return null;
+}
+
+function isLikelyCursorKey(value: string): boolean {
+  return /(?:^|_|[A-Z])cursor|page.*token|continuation/i.test(value);
+}
+
+function findNestedCursorToken(payload: unknown, requestCursor = "", keyName = "", depth = 0): string | null {
+  if (depth > 6 || payload == null) {
+    return null;
+  }
+
+  if (typeof payload === "string") {
+    if (isLikelyCursorKey(keyName) && payload && payload !== requestCursor && payload.length < 2048) {
+      return payload;
+    }
+
+    return null;
+  }
+
+  if (Array.isArray(payload)) {
+    for (const entry of payload) {
+      const match = findNestedCursorToken(entry, requestCursor, keyName, depth + 1);
+      if (match) {
+        return match;
+      }
+    }
+
+    return null;
+  }
+
+  if (typeof payload !== "object") {
+    return null;
+  }
+
+  const record = payload as Record<string, unknown>;
+  const priorityKeys = ["next_cursor", "nextCursor", "end_cursor", "endCursor", "cursor", "page_cursor", "pageCursor"];
+
+  for (const candidateKey of priorityKeys) {
+    if (!(candidateKey in record)) {
+      continue;
+    }
+
+    const match = findNestedCursorToken(record[candidateKey], requestCursor, candidateKey, depth + 1);
+    if (match) {
+      return match;
+    }
+  }
+
+  for (const [entryKey, entryValue] of Object.entries(record)) {
+    if (priorityKeys.includes(entryKey) || (!isLikelyCursorKey(entryKey) && depth > 2)) {
+      continue;
+    }
+
+    const match = findNestedCursorToken(entryValue, requestCursor, entryKey, depth + 1);
+    if (match) {
+      return match;
+    }
+  }
+
+  return null;
+}
+
+function normalizeCursorToken(value: string | null): string {
+  return typeof value === "string" && value ? value : "";
+}
+
+function normalizeCursorTimestamp(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === "string" && value.trim()) {
+    const numericValue = Number(value);
+    if (Number.isFinite(numericValue)) {
+      return numericValue;
+    }
+
+    const parsedDateValue = Date.parse(value);
+    if (Number.isFinite(parsedDateValue)) {
+      return parsedDateValue / 1000;
+    }
+  }
+
+  return null;
+}
+
+function encodeCursorPayload(payload: Record<string, unknown>): string | null {
+  try {
+    return btoa(JSON.stringify(payload));
+  } catch (_error) {
+    return null;
+  }
+}
+
+function buildCreatedAtCursorFromRows(rows: unknown[], cursorKind = ""): string | null {
+  if (!cursorKind) {
+    return null;
+  }
+
+  const sourceRows = Array.isArray(rows) ? rows : [];
+  for (let index = sourceRows.length - 1; index >= 0; index -= 1) {
+    const row = sourceRows[index];
+    const rowRecord = row && typeof row === "object" ? row as Record<string, unknown> : null;
+    const postRecord = rowRecord?.post && typeof rowRecord.post === "object"
+      ? rowRecord.post as Record<string, unknown>
+      : null;
+
+    const candidates = [
+      rowRecord?.created_at,
+      rowRecord?.createdAt,
+      postRecord?.created_at,
+      postRecord?.createdAt,
+      postRecord?.posted_at,
+      postRecord?.postedAt,
+      postRecord?.updated_at,
+      postRecord?.updatedAt
+    ];
+
+    for (const candidate of candidates) {
+      const createdAt = normalizeCursorTimestamp(candidate);
+      if (createdAt == null) {
+        continue;
+      }
+
+      return encodeCursorPayload({
+        kind: cursorKind,
+        created_at: createdAt
+      });
+    }
+  }
+
   return null;
 }

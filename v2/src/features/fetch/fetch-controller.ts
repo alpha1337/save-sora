@@ -20,7 +20,7 @@ import { buildFetchJobs } from "./source-adapters";
 const logger = createLogger("fetch-controller");
 const FETCH_BATCH_LIMIT = 100;
 const FETCH_PAGE_BUDGET = 3;
-const HIGH_VOLUME_SOURCE_PAGE_BUDGET = 10;
+const HIGH_VOLUME_SOURCE_PAGE_BUDGET = 25;
 const FETCH_CONCURRENCY = 3;
 const DETAIL_FALLBACK_CONCURRENCY = 4;
 let activeFetchAbortController: AbortController | null = null;

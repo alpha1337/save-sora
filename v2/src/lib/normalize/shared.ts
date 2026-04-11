@@ -274,12 +274,17 @@ export function getTextValue(value: unknown, fieldNames: string[]): string {
   }
 
   const record = value as Record<string, unknown>;
+  const candidateObjects = getCandidateObjects(record);
+  const nestedCandidateObjects = candidateObjects.flatMap((candidate) => getCandidateObjects(candidate));
+  const attachmentObjects = getAttachmentObjects(record);
   const candidates = fieldNames.flatMap((fieldName) => [
     record[fieldName],
-    getCandidateObjects(record).map((candidate) => candidate[fieldName])
+    ...candidateObjects.map((candidate) => candidate[fieldName]),
+    ...nestedCandidateObjects.map((candidate) => candidate[fieldName]),
+    ...attachmentObjects.map((attachment) => attachment[fieldName])
   ]);
 
-  return compactWhitespace(pickFirstString(candidates.flat()));
+  return compactWhitespace(pickFirstString(candidates));
 }
 
 export function getDescription(value: unknown): string {
@@ -291,7 +296,7 @@ export function getCaption(value: unknown): string {
 }
 
 export function getPrompt(value: unknown): string {
-  return getTextValue(value, ["prompt"]);
+  return getTextValue(value, ["prompt", "text"]);
 }
 
 export function getDiscoveryPhrase(value: unknown): string {
@@ -618,8 +623,8 @@ export function getRowTitle(value: unknown, fallbackId: string): string {
     pickFirstString([
       getDiscoveryPhrase(value),
       getPrompt(value),
-      getDescription(value),
       getCaption(value),
+      getDescription(value),
       fallbackId
     ])
   );
