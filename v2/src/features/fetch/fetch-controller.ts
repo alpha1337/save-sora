@@ -133,24 +133,29 @@ async function runFetchJob(job: FetchJob, signal: AbortSignal): Promise<void> {
     const normalizedRows = isDraftSource(job.source)
       ? normalizeDraftRows(job.source, rows, fetchedAt)
       : normalizePostRows(job.source, rows, fetchedAt);
-    const recoveredRows = await recoverMissingVideoIds(normalizedRows, signal);
-    throwIfFetchCanceled(signal);
-
     const draftResolutionRecords = buildDraftResolutionRecords(rows);
     const persistenceTasks: Array<Promise<void>> = [];
 
     if (draftResolutionRecords.length > 0) {
       persistenceTasks.push(saveDraftResolutionRecords(draftResolutionRecords));
     }
-    if (recoveredRows.length > 0) {
-      persistenceTasks.push(upsertVideoRows(recoveredRows));
+    if (normalizedRows.length > 0) {
+      persistenceTasks.push(upsertVideoRows(normalizedRows));
     }
 
     if (persistenceTasks.length > 0) {
       await Promise.all(persistenceTasks);
     }
 
+    if (normalizedRows.length > 0) {
+      useAppStore.getState().upsertVideoRows(normalizedRows);
+    }
+
+    const recoveredRows = await recoverMissingVideoIds(normalizedRows, signal);
+    throwIfFetchCanceled(signal);
+
     if (recoveredRows.length > 0) {
+      await upsertVideoRows(recoveredRows);
       useAppStore.getState().upsertVideoRows(recoveredRows);
     }
 
@@ -190,7 +195,7 @@ async function streamFetchBatches(
       cursor,
       offset,
       limit: FETCH_BATCH_LIMIT,
-      page_budget: FETCH_PAGE_BUDGET,
+      page_budget: getPageBudgetForSource(source),
       route_url: "route_url" in job ? job.route_url : undefined,
       creator_user_id: "creator_user_id" in job ? job.creator_user_id : undefined,
       creator_username: "creator_username" in job ? job.creator_username : undefined,
@@ -219,10 +224,10 @@ async function streamFetchBatches(
 async function recoverMissingVideoIds(rows: VideoRow[], signal: AbortSignal): Promise<VideoRow[]> {
   const pendingRows = rows.filter((row) => !row.video_id && row.detail_url && row.skip_reason === "missing_video_id");
   if (pendingRows.length === 0) {
-    return rows;
+    return [];
   }
 
-  const updatedRowMap = new Map(rows.map((row) => [row.row_id, row]));
+  const recoveredRows: VideoRow[] = [];
   let currentIndex = 0;
 
   async function worker() {
@@ -241,7 +246,7 @@ async function recoverMissingVideoIds(rows: VideoRow[], signal: AbortSignal): Pr
           continue;
         }
 
-        updatedRowMap.set(row.row_id, {
+        recoveredRows.push({
           ...row,
           video_id: videoId,
           is_downloadable: true,
@@ -254,7 +259,7 @@ async function recoverMissingVideoIds(rows: VideoRow[], signal: AbortSignal): Pr
   }
 
   await Promise.all(Array.from({ length: Math.min(DETAIL_FALLBACK_CONCURRENCY, pendingRows.length) }, () => worker()));
-  return [...updatedRowMap.values()];
+  return recoveredRows;
 }
 
 /**
@@ -303,6 +308,20 @@ function incrementCompletedJobs(): void {
       active_label: `${state.fetch_progress.completed_jobs + 1} of ${state.fetch_progress.total_jobs} jobs complete`
     }
   }));
+}
+
+function getPageBudgetForSource(source: LowLevelSourceType): number {
+  if (
+    source === "creatorPublished" ||
+    source === "creatorCameos" ||
+    source === "characterAccountPosts" ||
+    source === "characterAccountAppearances" ||
+    source === "characterAccountDrafts"
+  ) {
+    return 1;
+  }
+
+  return FETCH_PAGE_BUDGET;
 }
 
 function updateFetchBatchProgress(jobLabel: string, streamedRowCount: number, batchRowCount: number): void {
