@@ -6,7 +6,7 @@ import { buildShipCommitSubject, requirePublicReleaseSummary } from "./release-s
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "..");
-const manifestPath = path.join(repoRoot, "manifest.json");
+const manifestPath = path.join(repoRoot, "v2", "manifest.json");
 const bumpMode = normalizeBumpMode(process.argv[2] || "patch");
 const customMessage = process.argv.slice(3).join(" ").trim();
 
@@ -26,6 +26,7 @@ function main() {
 
   execNode(["scripts/bump-version.mjs", bumpMode]);
   const releaseVersion = readVersionFromManifest();
+  execNode(["v2/scripts/build-v2.mjs"]);
   execNode(["scripts/build-dist.mjs"]);
   runGit(["add", "-A"]);
 
@@ -62,7 +63,7 @@ function hasStagedChanges() {
   try {
     execFileSync("git", ["diff", "--cached", "--quiet"], {
       cwd: repoRoot,
-      stdio: "ignore",
+      stdio: "ignore"
     });
     return false;
   } catch (error) {
@@ -77,13 +78,13 @@ function runGit(args) {
   return execFileSync("git", args, {
     cwd: repoRoot,
     encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: ["ignore", "pipe", "pipe"]
   });
 }
 
 function execNode(args) {
-  execFileSync("node", args, {
+  execFileSync(process.execPath, args, {
     cwd: repoRoot,
-    stdio: "inherit",
+    stdio: "inherit"
   });
 }

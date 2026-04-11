@@ -1,6 +1,11 @@
 .DS_Store
 .idea/
+.playwright-cli/
+.local-dev/
+node_modules/
+coverage/
 *.crx
 *.pem
 *.zip
 dist/
+v2/.build/

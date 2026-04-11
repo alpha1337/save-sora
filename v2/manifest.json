@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Save Sora: Sora Bulk Downloader",
   "version": "2.0.0",
-  "description": "Bulk download your published Sora posts, drafts, liked videos, and cameo appearances.",
+  "description": "Bulk download Sora videos with a fullscreen library, CSV export, and cross-platform organizer archive output.",
   "icons": {
     "16": "assets/icon-16.png",
     "32": "assets/icon-32.png",
@@ -10,37 +10,28 @@
     "128": "assets/icon-128.png"
   },
   "permissions": [
-    "alarms",
     "downloads",
-    "offscreen",
-    "power",
     "scripting",
     "storage",
     "tabs",
     "unlimitedStorage"
   ],
   "host_permissions": [
-    "https://api.github.com/*",
-    "https://github.com/*",
-    "https://objects.githubusercontent.com/*",
-    "https://*.githubusercontent.com/*",
     "https://sora.chatgpt.com/*",
     "https://videos.openai.com/*",
-    "https://ogimg.chatgpt.com/*"
+    "https://ogimg.chatgpt.com/*",
+    "https://soravdl.com/*"
   ],
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "background/service-worker.js",
+    "type": "module"
   },
   "action": {
-    "default_popup": "popup.html",
     "default_title": "Save Sora: Sora Bulk Downloader",
     "default_icon": {
       "16": "assets/icon-16.png",
       "32": "assets/icon-32.png",
       "48": "assets/icon-48.png"
     }
-  },
-  "content_security_policy": {
-    "extension_pages": "script-src 'self'; object-src 'self'; frame-src https://ko-fi.com https://*.ko-fi.com;"
   }
 }
