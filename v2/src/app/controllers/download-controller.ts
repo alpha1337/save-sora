@@ -5,16 +5,13 @@ import { downloadBlob } from "@lib/utils/download-utils";
 import { replaceDownloadQueue } from "@lib/db/session-db";
 import { selectSelectedVideoRows } from "@app/store/selectors";
 import { createLogger } from "@lib/logging/logger";
+import type { DownloadProgressState } from "types/domain";
 
 const logger = createLogger("download-controller");
 
 interface ZipWorkerProgressMessage {
   type: "progress";
-  payload: {
-    active_label: string;
-    completed_items: number;
-    total_items: number;
-  };
+  payload: DownloadProgressState;
 }
 
 interface ZipWorkerCompleteMessage {
@@ -50,7 +47,10 @@ export async function downloadSelectedRows(): Promise<void> {
   state.setDownloadProgress({
     active_label: "Preparing archive",
     completed_items: 0,
-    total_items: targetRows.length
+    running_workers: 0,
+    total_items: targetRows.length,
+    total_workers: 0,
+    worker_progress: []
   });
   await replaceDownloadQueue(targetRows.map((row) => row.video_id));
 
@@ -93,6 +93,7 @@ export async function downloadSelectedRows(): Promise<void> {
   state.setDownloadProgress({
     active_label: "Archive ready",
     completed_items: targetRows.length,
+    running_workers: 0,
     total_items: targetRows.length
   });
   logger.info("archive built", { rowCount: targetRows.length });

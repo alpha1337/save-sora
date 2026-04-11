@@ -42,7 +42,10 @@ function createState(creatorProfiles: CreatorProfile[]): AppStoreState {
     download_progress: {
       active_label: "",
       completed_items: 0,
-      total_items: 0
+      running_workers: 0,
+      total_items: 0,
+      total_workers: 0,
+      worker_progress: []
     }
   } as AppStoreState;
 }

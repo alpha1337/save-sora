@@ -145,16 +145,25 @@ export interface ArchiveWorkPlan {
   archive_name: string;
 }
 
-export type FetchJobStatus = "pending" | "running" | "completed";
+export type ProgressStatus = "pending" | "running" | "completed";
 
 export interface FetchJobProgress {
   job_id: string;
   label: string;
   source: LowLevelSourceType;
-  status: FetchJobStatus;
+  status: ProgressStatus;
   fetched_rows: number;
   processed_batches: number;
   expected_total_count: number | null;
+}
+
+export interface DownloadWorkerProgress {
+  worker_id: string;
+  label: string;
+  status: ProgressStatus;
+  completed_items: number;
+  active_item_label: string;
+  last_completed_item_label: string;
 }
 
 export interface FetchProgressState {
@@ -170,7 +179,10 @@ export interface FetchProgressState {
 export interface DownloadProgressState {
   active_label: string;
   completed_items: number;
+  running_workers: number;
+  total_workers: number;
   total_items: number;
+  worker_progress: DownloadWorkerProgress[];
 }
 
 export type VideoSortKey =

@@ -1,6 +1,6 @@
 /// <reference lib="webworker" />
 import { Zip, ZipPassThrough, strToU8 } from "fflate";
-import type { ArchiveWorkPlan } from "../src/types/domain";
+import type { ArchiveWorkPlan, DownloadProgressState, DownloadWorkerProgress } from "../src/types/domain";
 
 interface BuildArchiveMessage {
   type: "build-archive";
@@ -25,7 +25,10 @@ self.addEventListener("message", (event: MessageEvent<BuildArchiveMessage>) => {
 async function buildArchive(workPlan: ArchiveWorkPlan): Promise<void> {
   const libraryPathByVideoId = new Map(workPlan.organizer_rows.map((row) => [row.video_id, row.library_path]));
   const chunks: Uint8Array[] = [];
+  const totalWorkers = Math.min(ZIP_FETCH_CONCURRENCY, workPlan.rows.length);
+  const workerProgress = createWorkerProgress(totalWorkers);
   let completedItems = 0;
+  let activeLabel = "Preparing archive";
   const zip = new Zip((error, chunk, final) => {
     if (error) {
       throw error;
@@ -33,39 +36,71 @@ async function buildArchive(workPlan: ArchiveWorkPlan): Promise<void> {
     chunks.push(chunk);
     if (final) {
       const archiveBlob = new Blob(chunks as unknown as BlobPart[], { type: "application/zip" });
-      self.postMessage(
-        {
-          type: "complete",
-          payload: {
-            archive_name: workPlan.archive_name,
-            blob: archiveBlob
-          }
+      self.postMessage({
+        type: "complete",
+        payload: {
+          archive_name: workPlan.archive_name,
+          blob: archiveBlob
         }
-      );
+      });
     }
   });
 
-  await runWithConcurrency(workPlan.rows, ZIP_FETCH_CONCURRENCY, async (row) => {
-    const response = await fetch(`https://soravdl.com/api/proxy/video/${encodeURIComponent(row.video_id)}`);
-    if (!response.ok) {
-      throw new Error(`soraVDL download failed for ${row.video_id} with status ${response.status}.`);
-    }
-
-    const bytes = new Uint8Array(await response.arrayBuffer());
-    const entry = new ZipPassThrough(libraryPathByVideoId.get(row.video_id) ?? `library/${row.video_id}.mp4`);
-    zip.add(entry);
-    entry.push(bytes, true);
-    completedItems += 1;
+  const publishProgress = () => {
+    const payload: DownloadProgressState = {
+      active_label: activeLabel,
+      completed_items: completedItems,
+      running_workers: workerProgress.filter((worker) => worker.status === "running").length,
+      total_items: workPlan.rows.length,
+      total_workers: workerProgress.length,
+      worker_progress: workerProgress.map((worker) => ({ ...worker }))
+    };
 
     self.postMessage({
       type: "progress",
-      payload: {
-        active_label: `Bundled ${row.title || row.video_id}`,
-        completed_items: completedItems,
-        total_items: workPlan.rows.length
-      }
+      payload
     });
-  });
+  };
+
+  publishProgress();
+
+  await runWithConcurrency(
+    workPlan.rows,
+    totalWorkers,
+    async (row, _index, workerIndex) => {
+      const worker = workerProgress[workerIndex];
+      const itemLabel = row.title || row.video_id;
+      worker.status = "running";
+      worker.active_item_label = itemLabel;
+      activeLabel = `Bundling ${itemLabel}`;
+      publishProgress();
+
+      const response = await fetch(`https://soravdl.com/api/proxy/video/${encodeURIComponent(row.video_id)}`);
+      if (!response.ok) {
+        throw new Error(`soraVDL download failed for ${row.video_id} with status ${response.status}.`);
+      }
+
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      const entry = new ZipPassThrough(libraryPathByVideoId.get(row.video_id) ?? `library/${row.video_id}.mp4`);
+      zip.add(entry);
+      entry.push(bytes, true);
+
+      completedItems += 1;
+      worker.completed_items += 1;
+      worker.active_item_label = "";
+      worker.last_completed_item_label = itemLabel;
+      publishProgress();
+    },
+    (workerIndex) => {
+      const worker = workerProgress[workerIndex];
+      worker.active_item_label = "";
+      worker.status = "completed";
+      publishProgress();
+    }
+  );
+
+  activeLabel = "Finalizing archive";
+  publishProgress();
 
   for (const supplementalEntry of workPlan.supplemental_entries) {
     const entry = new ZipPassThrough(supplementalEntry.archive_path);
@@ -80,17 +115,35 @@ async function buildArchive(workPlan: ArchiveWorkPlan): Promise<void> {
   zip.end();
 }
 
-async function runWithConcurrency<T>(values: T[], concurrency: number, workerFn: (value: T, index: number) => Promise<void>): Promise<void> {
+function createWorkerProgress(totalWorkers: number): DownloadWorkerProgress[] {
+  return Array.from({ length: totalWorkers }, (_value, index) => ({
+    worker_id: `zip-worker-${index + 1}`,
+    label: `Worker ${index + 1}`,
+    status: "pending",
+    completed_items: 0,
+    active_item_label: "",
+    last_completed_item_label: ""
+  }));
+}
+
+async function runWithConcurrency<T>(
+  values: T[],
+  concurrency: number,
+  workerFn: (value: T, index: number, workerIndex: number) => Promise<void>,
+  onWorkerComplete: (workerIndex: number) => Promise<void> | void
+): Promise<void> {
   let currentIndex = 0;
 
-  async function worker() {
+  async function worker(workerIndex: number) {
     while (currentIndex < values.length) {
       const index = currentIndex;
       const value = values[index];
       currentIndex += 1;
-      await workerFn(value, index);
+      await workerFn(value, index, workerIndex);
     }
+
+    await onWorkerComplete(workerIndex);
   }
 
-  await Promise.all(Array.from({ length: Math.min(concurrency, values.length) }, () => worker()));
+  await Promise.all(Array.from({ length: Math.min(concurrency, values.length) }, (_value, workerIndex) => worker(workerIndex)));
 }

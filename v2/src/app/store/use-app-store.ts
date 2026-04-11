@@ -36,6 +36,17 @@ function createDefaultFetchProgress() {
   };
 }
 
+function createDefaultDownloadProgress() {
+  return {
+    active_label: "",
+    completed_items: 0,
+    running_workers: 0,
+    total_items: 0,
+    total_workers: 0,
+    worker_progress: []
+  };
+}
+
 function mergeRows(existingRows: VideoRow[], incomingRows: VideoRow[]): VideoRow[] {
   const rowMap = new Map(existingRows.map((row) => [row.row_id, row]));
   for (const row of incomingRows) {
@@ -56,11 +67,7 @@ export const useAppStore = create<AppStore>((set) => ({
   selected_video_ids: [],
   download_history_ids: [],
   fetch_progress: createDefaultFetchProgress(),
-  download_progress: {
-    active_label: "",
-    completed_items: 0,
-    total_items: 0
-  },
+  download_progress: createDefaultDownloadProgress(),
   setPhase: (phase) => set({ phase }),
   setErrorMessage: (errorMessage) => set({ error_message: errorMessage }),
   hydrateState: (payload) => set((state) => ({ ...state, ...payload })),
@@ -130,11 +137,7 @@ export const useAppStore = create<AppStore>((set) => ({
       video_rows: [],
       selected_video_ids: [],
       fetch_progress: createDefaultFetchProgress(),
-      download_progress: {
-        active_label: "",
-        completed_items: 0,
-        total_items: 0
-      }
+      download_progress: createDefaultDownloadProgress()
     }))
 }));
 
