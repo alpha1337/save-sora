@@ -4,6 +4,7 @@ import { Badge } from "@components/atoms/badge";
 import { Button } from "@components/atoms/button";
 import { Checkbox } from "@components/atoms/checkbox";
 import { Panel } from "@components/atoms/panel";
+import { SummaryStat } from "@components/atoms/summary-stat";
 import { ResultsToolbar } from "@components/molecules/results-toolbar";
 import { formatCount, formatDate, formatDuration } from "@lib/utils/format-utils";
 
@@ -11,11 +12,14 @@ interface ResultsPanelProps {
   allVisibleSelected: boolean;
   downloadableRowCount: number;
   hasRows: boolean;
+  hasQuery: boolean;
+  nonDownloadableRowCount: number;
   rows: VideoRow[];
   selectableRowCount: number;
   selectedDownloadableRowCount: number;
   selectedVideoIds: string[];
   selectedVisibleRowCount: number;
+  totalRowCount: number;
   query: string;
   sortKey: VideoSortKey;
   downloadDisabled?: boolean;
@@ -37,6 +41,8 @@ export function ResultsPanel({
   downloadDisabled = false,
   exportDisabled = false,
   hasRows,
+  hasQuery,
+  nonDownloadableRowCount,
   onDownload,
   onExportCsv,
   onQueryChange,
@@ -49,32 +55,47 @@ export function ResultsPanel({
   selectedDownloadableRowCount,
   selectedVideoIds,
   selectedVisibleRowCount,
+  totalRowCount,
   sortKey
 }: ResultsPanelProps) {
   const downloadCountLabel = selectedDownloadableRowCount > 0 ? selectedDownloadableRowCount : downloadableRowCount;
+  const visibleRowCount = rows.length;
+  const sessionSummary = hasRows
+    ? hasQuery
+      ? `${formatCount(totalRowCount)} rows in session · ${formatCount(visibleRowCount)} visible after search`
+      : `${formatCount(totalRowCount)} rows in session`
+    : "Normalized video rows with queueable s_* ids only.";
 
   return (
     <Panel className="ss-stack ss-panel--stretch">
       <div className="ss-section-heading">
         <div>
           <h2>Session Results</h2>
-          <p className="ss-muted">
-            {hasRows
-              ? `${rows.length} visible rows · ${downloadableRowCount} downloadable · ${selectedDownloadableRowCount} selected`
-              : "Normalized video rows with queueable `s_*` ids only."}
-          </p>
+          <p className="ss-muted">{sessionSummary}</p>
+          {hasRows ? <p className="ss-results-caption ss-muted">Search only changes what is visible here. It does not remove fetched rows from the local session.</p> : null}
         </div>
         <div className="ss-inline-actions">
           <Button disabled={exportDisabled} onClick={onExportCsv} tone="secondary" type="button">
-            <FileSpreadsheet size={16} />
+            <FileSpreadsheet aria-hidden="true" size={16} />
             Export CSV
           </Button>
           <Button disabled={downloadDisabled} onClick={onDownload} type="button">
-            <Download size={16} />
+            <Download aria-hidden="true" size={16} />
             {downloadCountLabel > 0 ? `Build ZIP (${downloadCountLabel})` : "Build ZIP"}
           </Button>
         </div>
       </div>
+      {hasRows ? (
+        <div className="ss-summary-stat-grid">
+          <SummaryStat hint="All fetched rows stored locally" label="In Session" value={formatCount(totalRowCount)} />
+          <SummaryStat hint="Rows currently shown in the table" label="Visible" value={formatCount(visibleRowCount)} />
+          <SummaryStat hint="Rows that can be bundled right now" label="ZIP-Ready" tone="success" value={formatCount(downloadableRowCount)} />
+          <SummaryStat hint="Current ZIP selection" label="Selected" value={formatCount(selectedDownloadableRowCount)} />
+          {nonDownloadableRowCount > 0 ? (
+            <SummaryStat hint="Rows still missing final ZIP ids" label="Not ZIP-Ready" tone="warning" value={formatCount(nonDownloadableRowCount)} />
+          ) : null}
+        </div>
+      ) : null}
       <ResultsToolbar
         allVisibleSelected={allVisibleSelected}
         onQueryChange={onQueryChange}
@@ -91,7 +112,7 @@ export function ResultsPanel({
             <strong>{query.trim() ? "No rows match your search." : "No rows in this session yet."}</strong>
             <div className="ss-muted">
               {query.trim()
-                ? "Clear or change the search text to see more results."
+                ? `Clear or change the search text to see the other ${formatCount(totalRowCount)} rows already stored in this session.`
                 : "Choose sources, fetch results, and downloadable rows will appear here."}
             </div>
           </div>
@@ -118,6 +139,7 @@ export function ResultsPanel({
                       disabled={!row.is_downloadable || !row.video_id}
                       id={`row-${row.row_id}`}
                       label=""
+                      ariaLabel={`Select ${row.title || row.video_id || row.row_id}`}
                       onCheckedChange={() => onToggleSelectedVideoId(row.video_id)}
                     />
                   </td>

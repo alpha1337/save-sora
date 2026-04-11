@@ -176,6 +176,20 @@ export interface FetchProgressState {
   job_progress: FetchJobProgress[];
 }
 
+export interface FetchJobCheckpoint {
+  job_id: string;
+  selection_signature: string;
+  source: LowLevelSourceType;
+  status: ProgressStatus;
+  fetched_rows: number;
+  processed_batches: number;
+  cursor: string | null;
+  previous_cursor: string | null;
+  offset: number | null;
+  endpoint_key: string | null;
+  updated_at: string;
+}
+
 export interface DownloadProgressState {
   active_label: string;
   completed_items: number;

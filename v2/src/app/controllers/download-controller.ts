@@ -45,7 +45,7 @@ export async function downloadSelectedRows(): Promise<void> {
 
   state.setPhase("downloading");
   state.setDownloadProgress({
-    active_label: "Preparing archive",
+    active_label: "Preparing Archive…",
     completed_items: 0,
     running_workers: 0,
     total_items: targetRows.length,
@@ -91,7 +91,7 @@ export async function downloadSelectedRows(): Promise<void> {
 
   state.setPhase("ready");
   state.setDownloadProgress({
-    active_label: "Archive ready",
+    active_label: "Archive Ready",
     completed_items: targetRows.length,
     running_workers: 0,
     total_items: targetRows.length

@@ -1,12 +1,13 @@
 import type { BackgroundResponse, FetchBatchResponse, FetchDetailHtmlResponse } from "types/background";
-import type { DraftResolutionRecord, LowLevelSourceType, VideoRow } from "types/domain";
+import type { DraftResolutionRecord, FetchJobCheckpoint, LowLevelSourceType, VideoRow } from "types/domain";
 import { useAppStore } from "@app/store/use-app-store";
 import { sendBackgroundRequest } from "@lib/background/client";
 import {
   clearWorkingSessionData,
+  loadFetchJobCheckpoints,
   loadDraftResolutionMap,
   replaceDownloadQueue,
-  replaceVideoRows,
+  saveFetchJobCheckpoint,
   saveDraftResolutionRecords,
   saveSessionMeta,
   upsertVideoRows
@@ -27,6 +28,18 @@ const FETCH_CONCURRENCY = 3;
 const DETAIL_FALLBACK_CONCURRENCY = 4;
 let activeFetchAbortController: AbortController | null = null;
 
+interface BatchProcessResult {
+  draftResolutionRecords: DraftResolutionRecord[];
+  persistencePromise: Promise<void>;
+  stored_row_ids: string[];
+}
+
+interface FetchResumeState {
+  checkpointByJobId: Map<string, FetchJobCheckpoint>;
+  selectionSignature: string;
+  shouldResume: boolean;
+}
+
 class FetchCancellationError extends Error {
   constructor() {
     super("Fetch canceled.");
@@ -42,9 +55,23 @@ export async function fetchSelectedSources(): Promise<void> {
   const refreshedState = await refreshCreatorProfilesForFetch();
   const state = refreshedState ?? useAppStore.getState();
   const jobs = buildFetchJobs(state);
+  const resumeState = await resolveFetchResumeState(jobs);
+  const lastFetchAt = new Date().toISOString();
+  const jobsToRun = jobs.filter((job) => resumeState.checkpointByJobId.get(job.id)?.status !== "completed");
 
   if (jobs.length === 0) {
     throw new Error("Select at least one source, creator, or character account before fetching.");
+  }
+
+  if (!resumeState.shouldResume) {
+    await clearWorkingSessionData();
+    await replaceDownloadQueue([]);
+    await saveSessionMeta({
+      ...state.session_meta,
+      query: "",
+      last_fetch_at: lastFetchAt
+    });
+    useAppStore.getState().replaceVideoRows([]);
   }
 
   useAppStore.setState({
@@ -53,42 +80,24 @@ export async function fetchSelectedSources(): Promise<void> {
     session_meta: {
       ...state.session_meta,
       query: "",
-      last_fetch_at: new Date().toISOString()
+      last_fetch_at: lastFetchAt
     },
-    fetch_progress: {
-      active_label: "Starting fetch",
-      completed_jobs: 0,
-      processed_batches: 0,
-      processed_rows: 0,
-      running_jobs: 0,
-      total_jobs: jobs.length,
-      job_progress: jobs.map((job) => ({
-        job_id: job.id,
-        label: job.label,
-        source: job.source,
-        status: "pending",
-        fetched_rows: 0,
-        processed_batches: 0,
-        expected_total_count: job.expected_total_count
-      }))
-    },
+    fetch_progress: buildInitialFetchProgress(jobs, resumeState.checkpointByJobId, resumeState.shouldResume),
     selected_video_ids: []
   });
-
-  await clearWorkingSessionData();
-  await replaceDownloadQueue([]);
   await saveSessionMeta({
     ...state.session_meta,
     query: "",
-    last_fetch_at: new Date().toISOString()
+    last_fetch_at: lastFetchAt
   });
-  useAppStore.getState().replaceVideoRows([]);
 
   const abortController = new AbortController();
   activeFetchAbortController = abortController;
 
   try {
-    await runWithConcurrency(jobs, FETCH_CONCURRENCY, (job) => runFetchJob(job, abortController.signal));
+    await runWithConcurrency(jobsToRun, FETCH_CONCURRENCY, (job) =>
+      runFetchJob(job, abortController.signal, resumeState.selectionSignature, resumeState.checkpointByJobId.get(job.id) ?? null)
+    );
 
     useAppStore.setState({
       phase: "ready",
@@ -176,22 +185,39 @@ async function refreshCreatorProfilesForFetch() {
   return { ...useAppStore.getState(), creator_profiles: nextProfiles };
 }
 
-async function runFetchJob(job: FetchJob, signal: AbortSignal): Promise<void> {
+async function runFetchJob(
+  job: FetchJob,
+  signal: AbortSignal,
+  selectionSignature: string,
+  checkpoint: FetchJobCheckpoint | null
+): Promise<void> {
   logger.info("running fetch job", job.id);
-  markFetchJobRunning(job);
+  markFetchJobRunning(job, checkpoint);
   throwIfFetchCanceled(signal);
 
   const fetchedAt = new Date().toISOString();
-  const unresolvedRows: VideoRow[] = [];
-  await streamFetchBatches(job.source, job, signal, async (rows) => {
+  const recoveryTasks: Array<Promise<void>> = [];
+  const finalCheckpoint = await streamFetchBatches(job.source, job, signal, checkpoint, selectionSignature, async (rows) => {
     const normalizedRows = isDraftSource(job.source)
       ? normalizeDraftRows(job.source, rows, fetchedAt)
       : normalizePostRows(job.source, rows, fetchedAt);
     const draftResolutionRecords = buildDraftResolutionRecords(rows);
 
     if (normalizedRows.length > 0) {
-      unresolvedRows.push(...getRecoverableRows(normalizedRows));
       useAppStore.getState().upsertVideoRows(stripRawPayloadFromRows(normalizedRows));
+    }
+
+    const recoverableRows = getRecoverableRows(normalizedRows);
+    if (recoverableRows.length > 0) {
+      recoveryTasks.push(
+        recoverMissingVideoIds(recoverableRows, signal).then(async (recoveredRows) => {
+          if (recoveredRows.length === 0) {
+            return;
+          }
+          await upsertVideoRows(recoveredRows);
+          useAppStore.getState().upsertVideoRows(stripRawPayloadFromRows(recoveredRows));
+        })
+      );
     }
 
     const persistenceTasks: Array<Promise<void>> = [];
@@ -201,28 +227,37 @@ async function runFetchJob(job: FetchJob, signal: AbortSignal): Promise<void> {
     if (normalizedRows.length > 0) {
       persistenceTasks.push(upsertVideoRows(normalizedRows));
     }
-    if (persistenceTasks.length > 0) {
-      await Promise.all(persistenceTasks);
-    }
 
-    return draftResolutionRecords;
+    return {
+      draftResolutionRecords,
+      persistencePromise: persistenceTasks.length > 0 ? Promise.all(persistenceTasks).then(() => undefined) : Promise.resolve(),
+      stored_row_ids: normalizedRows.map((row) => row.row_id)
+    };
   });
 
-  const recoveredRows = await recoverMissingVideoIds(unresolvedRows, signal);
+  await Promise.all(recoveryTasks);
   throwIfFetchCanceled(signal);
-  if (recoveredRows.length > 0) {
-    await upsertVideoRows(recoveredRows);
-    useAppStore.getState().upsertVideoRows(stripRawPayloadFromRows(recoveredRows));
-  }
+
+  await saveFetchJobCheckpoint(
+    finalizeFetchJobCheckpoint(job, selectionSignature, finalCheckpoint ?? checkpoint, {
+      fetched_rows: useAppStore.getState().fetch_progress.job_progress.find((entry) => entry.job_id === job.id)?.fetched_rows ?? 0,
+      processed_batches: useAppStore.getState().fetch_progress.job_progress.find((entry) => entry.job_id === job.id)?.processed_batches ?? 0,
+      status: "completed"
+    })
+  );
 
   incrementCompletedJobs(job);
 }
 
 async function collectAllRows(source: LowLevelSourceType, job: FetchJob | { label: string }, signal: AbortSignal): Promise<unknown[]> {
   const collectedRows: unknown[] = [];
-  await streamFetchBatches(source, job, signal, async (rows) => {
+  await streamFetchBatches(source, job, signal, null, "", async (rows) => {
     collectedRows.push(...rows);
-    return [];
+    return {
+      draftResolutionRecords: [],
+      persistencePromise: Promise.resolve(),
+      stored_row_ids: []
+    };
   });
 
   return collectedRows;
@@ -232,16 +267,23 @@ async function streamFetchBatches(
   source: LowLevelSourceType,
   job: FetchJob | { label: string },
   signal: AbortSignal,
-  onBatch: (rows: unknown[]) => Promise<DraftResolutionRecord[]>
-): Promise<void> {
+  checkpoint: FetchJobCheckpoint | null,
+  selectionSignature: string,
+  onBatch: (rows: unknown[]) => Promise<BatchProcessResult>
+): Promise<FetchJobCheckpoint | null> {
   const draftResolutionMap = await loadDraftResolutionMap();
-  let cursor: string | null = null;
-  let offset: number | null = null;
+  let cursor: string | null = checkpoint?.cursor ?? null;
+  let offset: number | null = checkpoint?.offset ?? null;
+  let endpointKey: string | null = checkpoint?.endpoint_key ?? null;
   let done = false;
-  let streamedRowCount = 0;
+  let streamedRowCount = checkpoint?.fetched_rows ?? 0;
+  let processedBatches = checkpoint?.processed_batches ?? 0;
+  const seenSessionRowIds = new Set(useAppStore.getState().video_rows.map((row) => row.row_id));
+  let latestCheckpoint = checkpoint;
 
   while (!done) {
     throwIfFetchCanceled(signal);
+    const requestCursor = cursor;
     const response: FetchBatchResponse = await sendBackgroundRequest({
       type: "fetch-batch",
       source,
@@ -249,6 +291,7 @@ async function streamFetchBatches(
       offset,
       limit: FETCH_BATCH_LIMIT,
       page_budget: getPageBudgetForSource(source),
+      endpoint_key: endpointKey,
       route_url: "route_url" in job ? job.route_url : undefined,
       creator_user_id: "creator_user_id" in job ? job.creator_user_id : undefined,
       creator_username: "creator_username" in job ? job.creator_username : undefined,
@@ -258,20 +301,44 @@ async function streamFetchBatches(
     throwIfFetchCanceled(signal);
 
     const batchRows = response.payload.rows;
-    streamedRowCount += batchRows.length;
+    endpointKey = response.payload.endpoint_key;
     cursor = response.payload.next_cursor;
     offset = response.payload.next_offset;
-    done = response.payload.done;
-
-    updateFetchBatchProgress(job, streamedRowCount, batchRows.length);
-
-    const learnedDraftResolutionRecords = batchRows.length > 0 ? await onBatch(batchRows) : [];
+    const batchResult = batchRows.length > 0
+      ? await onBatch(batchRows)
+      : { draftResolutionRecords: [], persistencePromise: Promise.resolve(), stored_row_ids: [] };
     throwIfFetchCanceled(signal);
 
-    for (const record of learnedDraftResolutionRecords) {
+    const newStoredRowIds = getNewStoredRowIds(batchResult.stored_row_ids, seenSessionRowIds);
+    streamedRowCount += newStoredRowIds.length;
+    processedBatches += 1;
+    updateFetchBatchProgress(job, streamedRowCount, newStoredRowIds.length, processedBatches);
+
+    for (const record of batchResult.draftResolutionRecords) {
       draftResolutionMap.set(record.generation_id, record.video_id);
     }
+
+    await batchResult.persistencePromise;
+
+    done =
+      response.payload.done ||
+      shouldStopForStalledCursor(requestCursor, response.payload.next_cursor, newStoredRowIds.length, batchRows.length, source);
+
+    if ("id" in job) {
+      latestCheckpoint = buildFetchJobCheckpoint(job, selectionSignature, latestCheckpoint, {
+        cursor,
+        previous_cursor: requestCursor,
+        offset,
+        endpoint_key: endpointKey,
+        fetched_rows: streamedRowCount,
+        processed_batches: processedBatches,
+        status: "running"
+      });
+      await saveFetchJobCheckpoint(latestCheckpoint);
+    }
   }
+
+  return latestCheckpoint;
 }
 
 async function recoverMissingVideoIds(rows: VideoRow[], signal: AbortSignal): Promise<VideoRow[]> {
@@ -394,20 +461,31 @@ function getPageBudgetForSource(source: LowLevelSourceType): number {
   return FETCH_PAGE_BUDGET;
 }
 
-function markFetchJobRunning(job: FetchJob): void {
+function markFetchJobRunning(job: FetchJob, checkpoint: FetchJobCheckpoint | null): void {
   useAppStore.setState((state) => ({
     fetch_progress: buildNextFetchProgressState(
       state.fetch_progress,
       state.fetch_progress.job_progress.map((entry) =>
         entry.job_id === job.id
-          ? { ...entry, status: "running" as const, expected_total_count: entry.expected_total_count ?? job.expected_total_count }
+          ? {
+              ...entry,
+              status: "running" as const,
+              fetched_rows: checkpoint?.fetched_rows ?? entry.fetched_rows,
+              processed_batches: checkpoint?.processed_batches ?? entry.processed_batches,
+              expected_total_count: entry.expected_total_count ?? job.expected_total_count
+            }
           : entry
       )
     )
   }));
 }
 
-function updateFetchBatchProgress(job: FetchJob | { label: string }, streamedRowCount: number, batchRowCount: number): void {
+function updateFetchBatchProgress(
+  job: FetchJob | { label: string },
+  streamedRowCount: number,
+  batchRowCount: number,
+  processedBatchCount: number
+): void {
   useAppStore.setState((state) => {
     if (!("id" in job)) {
       return {
@@ -426,7 +504,7 @@ function updateFetchBatchProgress(job: FetchJob | { label: string }, streamedRow
             ...entry,
             status: "running" as const,
             fetched_rows: streamedRowCount,
-            processed_batches: entry.processed_batches + 1
+            processed_batches: processedBatchCount
           }
         : entry
     );
@@ -438,6 +516,131 @@ function updateFetchBatchProgress(job: FetchJob | { label: string }, streamedRow
       })
     };
   });
+}
+
+export function buildInitialFetchProgress(
+  jobs: FetchJob[],
+  checkpointByJobId: Map<string, FetchJobCheckpoint>,
+  shouldResume: boolean
+) {
+  const jobProgress = jobs.map((job) => {
+    const checkpoint = checkpointByJobId.get(job.id);
+    return {
+      job_id: job.id,
+      label: job.label,
+      source: job.source,
+      status: checkpoint?.status === "completed" ? "completed" as const : "pending" as const,
+      fetched_rows: checkpoint?.fetched_rows ?? 0,
+      processed_batches: checkpoint?.processed_batches ?? 0,
+      expected_total_count: job.expected_total_count
+    };
+  });
+  const completedJobs = jobProgress.filter((entry) => entry.status === "completed").length;
+  const processedRows = jobProgress.reduce((sum, entry) => sum + entry.fetched_rows, 0);
+  const processedBatches = jobProgress.reduce((sum, entry) => sum + entry.processed_batches, 0);
+
+  return {
+    active_label: shouldResume ? "Resuming Fetch…" : "Starting Fetch…",
+    completed_jobs: completedJobs,
+    processed_batches: processedBatches,
+    processed_rows: processedRows,
+    running_jobs: 0,
+    total_jobs: jobs.length,
+    job_progress: jobProgress
+  };
+}
+
+async function resolveFetchResumeState(jobs: FetchJob[]): Promise<FetchResumeState> {
+  const checkpoints = await loadFetchJobCheckpoints();
+  return buildFetchResumeStateFromCheckpoints(jobs, checkpoints);
+}
+
+function buildFetchSelectionSignature(jobs: FetchJob[]): string {
+  return jobs
+    .map((job) => [job.source, job.character_id ?? "", job.creator_user_id ?? "", job.creator_username ?? "", job.route_url ?? ""].join("|"))
+    .sort()
+    .join("::");
+}
+
+export function buildFetchResumeStateFromCheckpoints(jobs: FetchJob[], checkpoints: FetchJobCheckpoint[]): FetchResumeState {
+  const selectionSignature = buildFetchSelectionSignature(jobs);
+  const matchingCheckpoints = checkpoints.filter((checkpoint) => checkpoint.selection_signature === selectionSignature);
+  const shouldResume = matchingCheckpoints.some((checkpoint) => checkpoint.status !== "completed");
+
+  return {
+    checkpointByJobId: shouldResume
+      ? new Map(matchingCheckpoints.map((checkpoint) => [checkpoint.job_id, checkpoint]))
+      : new Map(),
+    selectionSignature,
+    shouldResume
+  };
+}
+
+function buildFetchJobCheckpoint(
+  job: FetchJob,
+  selectionSignature: string,
+  previousCheckpoint: FetchJobCheckpoint | null,
+  patch: Omit<FetchJobCheckpoint, "job_id" | "selection_signature" | "source" | "updated_at">
+): FetchJobCheckpoint {
+  return {
+    ...previousCheckpoint,
+    job_id: job.id,
+    selection_signature: selectionSignature,
+    source: job.source,
+    ...patch,
+    updated_at: new Date().toISOString()
+  };
+}
+
+export function finalizeFetchJobCheckpoint(
+  job: FetchJob,
+  selectionSignature: string,
+  checkpoint: FetchJobCheckpoint | null,
+  patch: Pick<FetchJobCheckpoint, "fetched_rows" | "processed_batches" | "status">
+): FetchJobCheckpoint {
+  return buildFetchJobCheckpoint(job, selectionSignature, checkpoint, {
+    cursor: checkpoint?.cursor ?? null,
+    previous_cursor: checkpoint?.previous_cursor ?? null,
+    offset: checkpoint?.offset ?? null,
+    endpoint_key: checkpoint?.endpoint_key ?? null,
+    ...patch
+  });
+}
+
+export function getNewStoredRowIds(rowIds: string[], knownSessionRowIds: Set<string>): string[] {
+  const newStoredRowIds: string[] = [];
+
+  for (const rowId of rowIds) {
+    if (!rowId || knownSessionRowIds.has(rowId)) {
+      continue;
+    }
+    knownSessionRowIds.add(rowId);
+    newStoredRowIds.push(rowId);
+  }
+
+  return newStoredRowIds;
+}
+
+export function shouldStopForStalledCursor(
+  requestCursor: string | null,
+  nextCursor: string | null,
+  newStoredRowCount: number,
+  batchRowCount: number,
+  source: LowLevelSourceType
+): boolean {
+  if (supportsOffsetPagination(source)) {
+    return false;
+  }
+
+  if (!requestCursor || !nextCursor) {
+    return false;
+  }
+
+  return requestCursor === nextCursor && newStoredRowCount === 0 && batchRowCount > 0;
+}
+
+function supportsOffsetPagination(source: LowLevelSourceType): boolean {
+  return source === "drafts";
 }
 
 function isDraftSource(source: LowLevelSourceType): boolean {

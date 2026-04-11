@@ -6,7 +6,9 @@ import type { CharacterAccount, CreatorProfile, LowLevelSourceType } from "./dom
  */
 export interface RawBatchResponse {
   rows: unknown[];
+  row_keys: string[];
   estimated_total_count: number;
+  endpoint_key: string | null;
   next_cursor: string | null;
   next_offset: number | null;
   done: boolean;
@@ -19,6 +21,7 @@ export interface FetchBatchRequest {
   offset?: number | null;
   limit?: number;
   page_budget?: number;
+  endpoint_key?: string | null;
   route_url?: string;
   creator_user_id?: string;
   creator_username?: string;

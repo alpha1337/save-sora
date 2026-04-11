@@ -49,11 +49,17 @@ describe("ProgressBanner", () => {
             }
           ]
         }}
+        sessionSummary={{
+          downloadableRows: 8,
+          totalRows: 10
+        }}
       />
     );
 
     expect(screen.getByText("Bundling Alpha")).toBeInTheDocument();
     expect(screen.getByText("4/10 bundled")).toBeInTheDocument();
+    expect(screen.getByText("In Session")).toBeInTheDocument();
+    expect(screen.getByText("ZIP-Ready")).toBeInTheDocument();
     expect(screen.getByText("Worker 1")).toBeInTheDocument();
     expect(screen.getByText("2 items · Bundling Alpha")).toBeInTheDocument();
     expect(screen.getByText("2 items · Last bundled Beta")).toBeInTheDocument();
@@ -65,7 +71,7 @@ describe("ProgressBanner", () => {
       <ProgressBanner
         phase="fetching"
         fetchProgress={{
-          active_label: "Fetching Crystal Sparkle appearances · 0 / 140,000 rows",
+          active_label: "Fetching Crystal Sparkle appearances",
           completed_jobs: 1,
           processed_batches: 0,
           processed_rows: 0,
@@ -91,10 +97,15 @@ describe("ProgressBanner", () => {
           total_workers: 0,
           worker_progress: []
         }}
+        sessionSummary={{
+          downloadableRows: 0,
+          totalRows: 0
+        }}
       />
     );
 
-    expect(screen.getByText("Fetching Crystal Sparkle appearances · 0 / 140,000 rows")).toBeInTheDocument();
-    expect(screen.getByText("0 / 140,000 rows · Waiting for first page")).toBeInTheDocument();
+    expect(screen.getByText("Fetching Crystal Sparkle appearances")).toBeInTheDocument();
+    expect(screen.getByText("0 of 140,000 reported rows · Waiting for first page")).toBeInTheDocument();
+    expect(screen.getByText("Fetched")).toBeInTheDocument();
   });
 });

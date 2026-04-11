@@ -33,7 +33,38 @@ describe("shared pagination helpers", () => {
     expect(derivedCursor).toBeTruthy();
     expect(JSON.parse(atob(derivedCursor as string))).toEqual({
       kind: "sv2_created_at",
-      created_at: 1775500000
+      created_at: 1775500000,
+      last_item_id: "s_beta"
+    });
+  });
+
+  it("keeps advancing when adjacent pages share the same timestamp but end on different ids", () => {
+    const requestCursor = btoa(
+      JSON.stringify({
+        kind: "sv2_created_at",
+        created_at: 1775500000,
+        last_item_id: "s_alpha"
+      })
+    );
+
+    const derivedCursor = getNextCursorForRows(
+      {
+        items: [
+          { post: { id: "s_beta", posted_at: 1775500000 } }
+        ]
+      },
+      [
+        { post: { id: "s_beta", posted_at: 1775500000 } }
+      ],
+      requestCursor,
+      "sv2_created_at"
+    );
+
+    expect(derivedCursor).toBeTruthy();
+    expect(JSON.parse(atob(derivedCursor as string))).toEqual({
+      kind: "sv2_created_at",
+      created_at: 1775500000,
+      last_item_id: "s_beta"
     });
   });
 

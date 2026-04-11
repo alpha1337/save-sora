@@ -1,32 +1,42 @@
 import type { DownloadProgressState, DownloadWorkerProgress, FetchJobProgress, FetchProgressState } from "types/domain";
 import { Badge } from "@components/atoms/badge";
+import { SummaryStat } from "@components/atoms/summary-stat";
 import { ProgressCardGrid, type ProgressCardItem } from "@components/molecules/progress-card-grid";
 import { formatCount } from "@lib/utils/format-utils";
+
+interface SessionProgressSummary {
+  downloadableRows: number;
+  totalRows: number;
+}
 
 interface ProgressBannerProps {
   downloadProgress: DownloadProgressState;
   fetchProgress: FetchProgressState;
   phase: string;
+  sessionSummary: SessionProgressSummary;
 }
 
 /**
  * Runtime fetch and download progress with source-aware status details.
  */
-export function ProgressBanner({ downloadProgress, fetchProgress, phase }: ProgressBannerProps) {
+export function ProgressBanner({ downloadProgress, fetchProgress, phase, sessionSummary }: ProgressBannerProps) {
   const isFetching = phase === "fetching";
   const isDownloading = phase === "downloading";
   const laggingJobs = isFetching ? fetchProgress.job_progress.filter((job) => isBelowExpectedCount(job)) : [];
+  const nonDownloadableRows = Math.max(sessionSummary.totalRows - sessionSummary.downloadableRows, 0);
   const primaryLabel = isFetching ? fetchProgress.active_label : downloadProgress.active_label;
   const progressCards = isFetching ? buildFetchCards(fetchProgress) : isDownloading ? buildDownloadCards(downloadProgress) : [];
   const secondaryLabel = isFetching
-    ? `${fetchProgress.completed_jobs}/${fetchProgress.total_jobs} complete · ${fetchProgress.running_jobs} active · ${formatCount(fetchProgress.processed_rows)} rows`
+    ? buildFetchSummary(fetchProgress)
     : buildDownloadSummary(downloadProgress);
+  const statusTone = phase === "error" ? "warning" : phase === "ready" ? "success" : "default";
+  const liveMode = isFetching || isDownloading ? "polite" : undefined;
 
   return (
-    <div className="ss-progress-banner ss-progress-banner--detailed">
+    <div aria-atomic="true" aria-live={liveMode} className="ss-progress-banner ss-progress-banner--detailed" role={liveMode ? "status" : undefined}>
       <div className="ss-progress-summary">
         <div className="ss-progress-badges">
-          <Badge tone={phase === "error" ? "warning" : phase === "ready" ? "success" : "default"}>{phase}</Badge>
+          <Badge tone={statusTone}>{getPhaseLabel(phase)}</Badge>
           {isFetching ? <Badge tone="default">{fetchProgress.running_jobs} active</Badge> : null}
           {isFetching ? <Badge tone="default">{fetchProgress.completed_jobs}/{fetchProgress.total_jobs} complete</Badge> : null}
           {isDownloading && downloadProgress.total_workers > 0 ? <Badge tone="default">{downloadProgress.running_workers} active</Badge> : null}
@@ -39,10 +49,24 @@ export function ProgressBanner({ downloadProgress, fetchProgress, phase }: Progr
           <div className="ss-muted">{secondaryLabel}</div>
         </div>
       </div>
+      <div className="ss-summary-stat-grid">
+        {isFetching ? (
+          <SummaryStat hint="New unique rows added to this session during fetch" label="Fetched" value={formatCount(fetchProgress.processed_rows)} />
+        ) : null}
+        {isDownloading ? (
+          <SummaryStat hint="Finished ZIP entries" label="Bundled" value={formatCount(downloadProgress.completed_items)} />
+        ) : null}
+        {isDownloading ? <SummaryStat hint="Rows queued for this ZIP" label="Queued" value={formatCount(downloadProgress.total_items)} /> : null}
+        <SummaryStat hint="Unique rows stored in this session" label="In Session" value={formatCount(sessionSummary.totalRows)} />
+        <SummaryStat hint="Rows with final s_* ids now" label="ZIP-Ready" tone="success" value={formatCount(sessionSummary.downloadableRows)} />
+        {nonDownloadableRows > 0 ? (
+          <SummaryStat hint="Rows still missing final ZIP ids" label="Not ZIP-Ready" tone="warning" value={formatCount(nonDownloadableRows)} />
+        ) : null}
+      </div>
       <ProgressCardGrid items={progressCards} />
       {laggingJobs.length > 0 ? (
         <div className="ss-progress-footnote ss-muted">
-          Completed below expected count: {laggingJobs.slice(0, 3).map((job) => job.label).join(", ")}
+          Finished below the profile&apos;s reported total: {laggingJobs.slice(0, 3).map((job) => job.label).join(", ")}
           {laggingJobs.length > 3 ? ` + ${laggingJobs.length - 3} more` : ""}
         </div>
       ) : null}
@@ -76,7 +100,7 @@ function buildDownloadCards(downloadProgress: DownloadProgressState): ProgressCa
 }
 
 function buildDownloadSummary(downloadProgress: DownloadProgressState): string {
-  const itemSummary = `${downloadProgress.completed_items}/${downloadProgress.total_items} items`;
+  const itemSummary = `${formatCount(downloadProgress.completed_items)}/${formatCount(downloadProgress.total_items)} items`;
 
   if (downloadProgress.total_workers > 0) {
     return `${itemSummary} · ${downloadProgress.running_workers} active · ${downloadProgress.total_workers} workers`;
@@ -85,17 +109,37 @@ function buildDownloadSummary(downloadProgress: DownloadProgressState): string {
   return itemSummary;
 }
 
+function buildFetchSummary(fetchProgress: FetchProgressState): string {
+  return `${fetchProgress.completed_jobs}/${fetchProgress.total_jobs} complete · ${fetchProgress.running_jobs} active · ${formatCount(fetchProgress.processed_batches)} batches`;
+}
+
+function getPhaseLabel(phase: string): string {
+  if (phase === "ready") {
+    return "Ready";
+  }
+  if (phase === "error") {
+    return "Error";
+  }
+  if (phase === "fetching") {
+    return "Fetching";
+  }
+  if (phase === "downloading") {
+    return "Downloading";
+  }
+  return "Idle";
+}
+
 function getJobStatusLine(job: FetchJobProgress): string {
   if (job.status === "running" && job.processed_batches === 0) {
     if (typeof job.expected_total_count === "number" && job.expected_total_count > 0) {
-      return `${formatCount(job.fetched_rows)} / ${formatCount(job.expected_total_count)} rows · Waiting for first page`;
+      return `${formatCount(job.fetched_rows)} of ${formatCount(job.expected_total_count)} reported rows · Waiting for first page`;
     }
 
     return `${formatCount(job.fetched_rows)} rows · Waiting for first page`;
   }
 
   if (typeof job.expected_total_count === "number" && job.expected_total_count > 0) {
-    return `${formatCount(job.fetched_rows)} / ${formatCount(job.expected_total_count)} rows · ${formatJobPercent(job.fetched_rows, job.expected_total_count)} · ${job.processed_batches} batches`;
+    return `${formatCount(job.fetched_rows)} of ${formatCount(job.expected_total_count)} reported rows · ${formatJobPercent(job.fetched_rows, job.expected_total_count)} · ${job.processed_batches} batches`;
   }
 
   return `${formatCount(job.fetched_rows)} rows · ${job.processed_batches} batches`;

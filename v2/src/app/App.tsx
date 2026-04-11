@@ -34,6 +34,7 @@ export function App() {
     [filteredRows]
   );
   const downloadableRowsCount = downloadableVideoIdSet.size;
+  const nonDownloadableRowsCount = Math.max(state.video_rows.length - downloadableRowsCount, 0);
   const selectedDownloadableRowCount = useMemo(
     () => state.selected_video_ids.filter((videoId) => downloadableVideoIdSet.has(videoId)).length,
     [downloadableVideoIdSet, state.selected_video_ids]
@@ -172,7 +173,15 @@ export function App() {
       }
     >
       <div className="ss-stack ss-stack--stretch">
-        <ProgressBanner downloadProgress={state.download_progress} fetchProgress={state.fetch_progress} phase={state.phase} />
+        <ProgressBanner
+          downloadProgress={state.download_progress}
+          fetchProgress={state.fetch_progress}
+          phase={state.phase}
+          sessionSummary={{
+            downloadableRows: downloadableRowsCount,
+            totalRows: state.video_rows.length
+          }}
+        />
         {state.error_message ? <Panel className="ss-error-panel">{state.error_message}</Panel> : null}
         <ResultsPanel
           allVisibleSelected={allVisibleSelected}
@@ -180,6 +189,8 @@ export function App() {
           downloadDisabled={isBusy || downloadableRowsCount === 0}
           exportDisabled={isBusy || state.video_rows.length === 0}
           hasRows={state.video_rows.length > 0}
+          hasQuery={state.session_meta.query.trim().length > 0}
+          nonDownloadableRowCount={nonDownloadableRowsCount}
           onDownload={() => void handleDownload()}
           onExportCsv={exportSessionRowsToCsv}
           onQueryChange={(value) => state.setFilters({ query: value })}
@@ -193,6 +204,7 @@ export function App() {
           selectedVideoIds={state.selected_video_ids}
           selectedVisibleRowCount={selectedVisibleRowCount}
           sortKey={state.session_meta.sort_key}
+          totalRowCount={state.video_rows.length}
         />
       </div>
     </AppShellTemplate>

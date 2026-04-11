@@ -126,6 +126,49 @@ input {
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
 }
 
+.ss-summary-stat-grid {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
+.ss-summary-stat {
+  background: rgba(255, 255, 255, 0.66);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  min-width: 0;
+  padding: 0.75rem;
+}
+
+.ss-summary-stat--success {
+  background: rgba(240, 253, 244, 0.9);
+}
+
+.ss-summary-stat--warning {
+  background: rgba(255, 251, 235, 0.9);
+}
+
+.ss-summary-stat-label,
+.ss-summary-stat-hint {
+  font-size: 0.8125rem;
+}
+
+.ss-summary-stat-label {
+  color: #475569;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.ss-summary-stat-value {
+  font-size: 1.1rem;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+
 .ss-progress-job-card,
 .ss-checkbox-list-item {
   border: 1px solid rgba(148, 163, 184, 0.18);
@@ -135,6 +178,7 @@ input {
 
 .ss-progress-job-card {
   background: rgba(255, 255, 255, 0.66);
+  min-width: 0;
 }
 
 .ss-progress-job-warning {
@@ -186,6 +230,7 @@ input {
   justify-content: center;
   min-height: 2.75rem;
   padding: 0.65rem 1rem;
+  touch-action: manipulation;
   transition: transform 120ms ease, opacity 120ms ease;
 }
 
@@ -221,6 +266,15 @@ input {
   border-radius: 14px;
   min-height: 2.75rem;
   padding: 0.65rem 0.9rem;
+}
+
+.ss-button:focus-visible,
+.ss-checkbox:focus-visible,
+.ss-input:focus-visible,
+.ss-select-trigger:focus-visible,
+.ss-tab-trigger:focus-visible {
+  outline: 3px solid rgba(29, 78, 216, 0.25);
+  outline-offset: 2px;
 }
 
 .ss-input {
@@ -265,6 +319,7 @@ input {
 .ss-badge {
   border-radius: 999px;
   font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
   font-weight: 600;
   padding: 0.2rem 0.6rem;
 }
@@ -316,8 +371,20 @@ input {
   vertical-align: top;
 }
 
+.ss-results-caption {
+  margin: 0.35rem 0 0;
+}
+
 .ss-video-title {
   font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.ss-progress-job-header strong,
+.ss-table td,
+.ss-table th {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .ss-error-panel {

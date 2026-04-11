@@ -7,6 +7,7 @@ interface SelectOption {
 }
 
 interface SelectProps {
+  "aria-label"?: string;
   options: SelectOption[];
   value: string;
   onValueChange: (value: string) => void;
@@ -15,13 +16,13 @@ interface SelectProps {
 /**
  * Shared select primitive backed by Radix.
  */
-export function Select({ onValueChange, options, value }: SelectProps) {
+export function Select({ "aria-label": ariaLabel, onValueChange, options, value }: SelectProps) {
   return (
     <SelectPrimitive.Root onValueChange={onValueChange} value={value}>
-      <SelectPrimitive.Trigger className="ss-select-trigger">
+      <SelectPrimitive.Trigger aria-label={ariaLabel} className="ss-select-trigger">
         <SelectPrimitive.Value />
         <SelectPrimitive.Icon>
-          <ChevronDown size={14} />
+          <ChevronDown aria-hidden="true" size={14} />
         </SelectPrimitive.Icon>
       </SelectPrimitive.Trigger>
       <SelectPrimitive.Portal>
@@ -31,7 +32,7 @@ export function Select({ onValueChange, options, value }: SelectProps) {
               <SelectPrimitive.Item className="ss-select-item" key={option.value} value={option.value}>
                 <SelectPrimitive.ItemText>{option.label}</SelectPrimitive.ItemText>
                 <SelectPrimitive.ItemIndicator>
-                  <Check size={14} />
+                  <Check aria-hidden="true" size={14} />
                 </SelectPrimitive.ItemIndicator>
               </SelectPrimitive.Item>
             ))}

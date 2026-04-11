@@ -1,8 +1,8 @@
 import { openDB } from "idb";
-import type { AppSettings, DraftResolutionRecord, SessionMeta, VideoRow } from "types/domain";
+import type { AppSettings, DraftResolutionRecord, FetchJobCheckpoint, SessionMeta, VideoRow } from "types/domain";
 
 const SESSION_DB_NAME = "save-sora-v2-session";
-const SESSION_DB_VERSION = 1;
+const SESSION_DB_VERSION = 2;
 
 export interface SessionDbSnapshot {
   settings: AppSettings | null;
@@ -10,6 +10,7 @@ export interface SessionDbSnapshot {
   video_rows: VideoRow[];
   download_queue: string[];
   draft_resolution_records: DraftResolutionRecord[];
+  fetch_job_checkpoints: FetchJobCheckpoint[];
 }
 
 /**
@@ -33,18 +34,22 @@ export async function openSessionDb() {
       if (!database.objectStoreNames.contains("draft_resolution_cache")) {
         database.createObjectStore("draft_resolution_cache", { keyPath: "generation_id" });
       }
+      if (!database.objectStoreNames.contains("fetch_job_checkpoints")) {
+        database.createObjectStore("fetch_job_checkpoints", { keyPath: "job_id" });
+      }
     }
   });
 }
 
 export async function loadSessionDbSnapshot(): Promise<SessionDbSnapshot> {
   const database = await openSessionDb();
-  const [settings, sessionMeta, videoRows, queueRows, draftResolutionRows] = await Promise.all([
+  const [settings, sessionMeta, videoRows, queueRows, draftResolutionRows, fetchJobCheckpoints] = await Promise.all([
     database.get("settings", "settings"),
     database.get("session_meta", "session_meta"),
     database.getAll("video_rows"),
     database.getAll("download_queue"),
-    database.getAll("draft_resolution_cache")
+    database.getAll("draft_resolution_cache"),
+    database.getAll("fetch_job_checkpoints")
   ]);
 
   return {
@@ -52,7 +57,8 @@ export async function loadSessionDbSnapshot(): Promise<SessionDbSnapshot> {
     session_meta: sessionMeta ?? null,
     video_rows: videoRows,
     download_queue: queueRows.map((entry) => entry.video_id),
-    draft_resolution_records: draftResolutionRows
+    draft_resolution_records: draftResolutionRows,
+    fetch_job_checkpoints: fetchJobCheckpoints
   };
 }
 
@@ -110,15 +116,31 @@ export async function saveDraftResolutionRecords(records: DraftResolutionRecord[
   await transaction.done;
 }
 
+export async function loadFetchJobCheckpoints(): Promise<FetchJobCheckpoint[]> {
+  const database = await openSessionDb();
+  return database.getAll("fetch_job_checkpoints");
+}
+
+export async function saveFetchJobCheckpoint(checkpoint: FetchJobCheckpoint): Promise<void> {
+  const database = await openSessionDb();
+  await database.put("fetch_job_checkpoints", checkpoint);
+}
+
+export async function clearFetchJobCheckpoints(): Promise<void> {
+  const database = await openSessionDb();
+  await database.clear("fetch_job_checkpoints");
+}
+
 export async function clearWorkingSessionData(): Promise<void> {
   const database = await openSessionDb();
   const transaction = database.transaction(
-    ["session_meta", "video_rows", "download_queue", "draft_resolution_cache"],
+    ["session_meta", "video_rows", "download_queue", "draft_resolution_cache", "fetch_job_checkpoints"],
     "readwrite"
   );
   await transaction.objectStore("session_meta").clear();
   await transaction.objectStore("video_rows").clear();
   await transaction.objectStore("download_queue").clear();
   await transaction.objectStore("draft_resolution_cache").clear();
+  await transaction.objectStore("fetch_job_checkpoints").clear();
   await transaction.done;
 }

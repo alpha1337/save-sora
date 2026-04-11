@@ -32,7 +32,15 @@ export function ResultsToolbar({
 
   return (
     <div className="ss-toolbar">
-      <Input onChange={(event) => onQueryChange(event.target.value)} placeholder="Search prompt, title, creator, character" value={query} />
+      <Input
+        aria-label="Search Session Results"
+        autoComplete="off"
+        name="results-search"
+        onChange={(event) => onQueryChange(event.target.value)}
+        placeholder="Search title, prompt, creator, character…"
+        spellCheck={false}
+        value={query}
+      />
       <Checkbox
         checked={checkboxState}
         disabled={selectableRowCount === 0}
@@ -41,6 +49,7 @@ export function ResultsToolbar({
         onCheckedChange={onSelectAllToggle}
       />
       <Select
+        aria-label="Sort Session Results"
         onValueChange={(value) => onSortKeyChange(value as VideoSortKey)}
         options={[
           { label: "Published date", value: "published_at" },

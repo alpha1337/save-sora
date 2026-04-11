@@ -387,12 +387,53 @@ function buildCreatedAtCursorFromRows(rows: unknown[], cursorKind = ""): string 
         continue;
       }
 
+      const lastItemId = getRowIdentityForCursor(rowRecord);
       return encodeCursorPayload({
         kind: cursorKind,
-        created_at: createdAt
+        created_at: createdAt,
+        ...(lastItemId ? { last_item_id: lastItemId } : {})
       });
     }
   }
 
   return null;
+}
+
+export function getRawRowKey(row: unknown): string {
+  if (!row || typeof row !== "object") {
+    return "";
+  }
+
+  const record = row as Record<string, unknown>;
+  return pickFirstString([
+    resolveSharedVideoIdFromValue(record),
+    extractDraftGenerationId(record),
+    record.post_id,
+    record.postId,
+    record.public_id,
+    record.publicId,
+    record.id,
+    extractSharedVideoId(record.permalink),
+    extractSharedVideoId(record.detail_url),
+    extractSharedVideoId(record.detailUrl),
+    extractSharedVideoId(record.url),
+    pickFirstString([
+      typeof record.url === "string" ? record.url : "",
+      typeof record.detail_url === "string" ? record.detail_url : "",
+      typeof record.detailUrl === "string" ? record.detailUrl : ""
+    ])
+  ]);
+}
+
+function getRowIdentityForCursor(row: Record<string, unknown> | null): string {
+  if (!row) {
+    return "";
+  }
+
+  return pickFirstString([
+    getRawRowKey(row),
+    getRawRowKey(row.post),
+    getRawRowKey(row.item),
+    getRawRowKey(row.data)
+  ]);
 }
