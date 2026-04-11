@@ -25,6 +25,15 @@ const logger = createLogger("app");
 export function App() {
   const state = useAppStore();
   const filteredRows = useMemo(() => selectFilteredVideoRows(state), [state]);
+  const visibleDownloadableIds = useMemo(
+    () => filteredRows.filter((row) => row.is_downloadable && row.video_id).map((row) => row.video_id),
+    [filteredRows]
+  );
+  const selectedVisibleRowCount = useMemo(
+    () => visibleDownloadableIds.filter((videoId) => state.selected_video_ids.includes(videoId)).length,
+    [state.selected_video_ids, visibleDownloadableIds]
+  );
+  const allVisibleSelected = visibleDownloadableIds.length > 0 && selectedVisibleRowCount === visibleDownloadableIds.length;
   const [creatorRouteInput, setCreatorRouteInput] = useState("");
 
   useEffect(() => {
@@ -85,6 +94,16 @@ export function App() {
     useAppStore.getState().clearWorkingSessionState();
   }
 
+  function handleToggleSelectAllVisibleRows(checked: boolean): void {
+    if (checked) {
+      state.setSelectedVideoIds([...new Set([...state.selected_video_ids, ...visibleDownloadableIds])]);
+      return;
+    }
+
+    const visibleIdSet = new Set(visibleDownloadableIds);
+    state.setSelectedVideoIds(state.selected_video_ids.filter((videoId) => !visibleIdSet.has(videoId)));
+  }
+
   return (
     <AppShellTemplate
       header={
@@ -139,14 +158,18 @@ export function App() {
         <ProgressBanner downloadProgress={state.download_progress} fetchProgress={state.fetch_progress} phase={state.phase} />
         {state.error_message ? <Panel className="ss-error-panel">{state.error_message}</Panel> : null}
         <ResultsPanel
+          allVisibleSelected={allVisibleSelected}
           onDownload={() => void handleDownload()}
           onExportCsv={exportSessionRowsToCsv}
           onQueryChange={(value) => state.setFilters({ query: value })}
+          onSelectAllToggle={handleToggleSelectAllVisibleRows}
           onSortKeyChange={(value) => state.setFilters({ sort_key: value })}
           onToggleSelectedVideoId={(videoId) => state.toggleSelectedVideoId(videoId)}
           query={state.session_meta.query}
           rows={filteredRows}
+          selectableRowCount={visibleDownloadableIds.length}
           selectedVideoIds={state.selected_video_ids}
+          selectedVisibleRowCount={selectedVisibleRowCount}
           sortKey={state.session_meta.sort_key}
         />
       </div>

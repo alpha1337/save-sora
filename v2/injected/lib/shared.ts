@@ -84,6 +84,11 @@ export function getEstimatedTotalCount(payload: unknown, observedCount: number):
 }
 
 export function getUsernameFromRouteUrl(routeUrl: string): string {
+  const normalizedRouteUrl = routeUrl.trim();
+  if (/^@?[A-Za-z0-9._-]+$/.test(normalizedRouteUrl)) {
+    return normalizedRouteUrl.replace(/^@+/, "");
+  }
+
   try {
     const pathname = new URL(routeUrl, window.location.origin).pathname;
     const segments = pathname.split("/").filter(Boolean);

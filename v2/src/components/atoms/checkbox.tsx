@@ -1,9 +1,10 @@
 import * as CheckboxPrimitive from "@radix-ui/react-checkbox";
 import * as Label from "@radix-ui/react-label";
 import { Check } from "lucide-react";
+import type { CheckedState } from "@radix-ui/react-checkbox";
 
 interface CheckboxProps {
-  checked: boolean;
+  checked: CheckedState;
   disabled?: boolean;
   id: string;
   label: string;

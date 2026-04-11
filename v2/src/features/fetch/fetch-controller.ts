@@ -12,6 +12,7 @@ import {
   upsertVideoRows
 } from "@lib/db/session-db";
 import { createLogger } from "@lib/logging/logger";
+import { normalizeCreatorProfileInput } from "@lib/utils/creator-profile-input";
 import { extractVideoIdFromDetailHtml, normalizeCharacterAccounts, normalizeCreatorProfile, normalizeDraftRows, normalizePostRows } from "@lib/normalize/video-row-normalizer";
 import type { FetchJob } from "./source-adapters";
 import { buildFetchJobs } from "./source-adapters";
@@ -72,7 +73,8 @@ export async function loadCharacterAccountsIntoState(): Promise<void> {
   useAppStore.getState().setCharacterAccounts(accounts);
 }
 
-export async function resolveAndAddCreatorProfile(routeUrl: string): Promise<void> {
+export async function resolveAndAddCreatorProfile(routeInput: string): Promise<void> {
+  const routeUrl = normalizeCreatorProfileInput(routeInput);
   const response = await sendBackgroundRequest<BackgroundResponse>({
     type: "resolve-creator-profile",
     route_url: routeUrl

@@ -8,13 +8,17 @@ import { ResultsToolbar } from "@components/molecules/results-toolbar";
 import { formatCount, formatDate, formatDuration } from "@lib/utils/format-utils";
 
 interface ResultsPanelProps {
+  allVisibleSelected: boolean;
   rows: VideoRow[];
+  selectableRowCount: number;
   selectedVideoIds: string[];
+  selectedVisibleRowCount: number;
   query: string;
   sortKey: VideoSortKey;
   onDownload: () => void;
   onExportCsv: () => void;
   onQueryChange: (value: string) => void;
+  onSelectAllToggle: (checked: boolean) => void;
   onSortKeyChange: (value: VideoSortKey) => void;
   onToggleSelectedVideoId: (videoId: string) => void;
 }
@@ -23,14 +27,18 @@ interface ResultsPanelProps {
  * Main results surface, rendered from normalized rows only.
  */
 export function ResultsPanel({
+  allVisibleSelected,
   onDownload,
   onExportCsv,
   onQueryChange,
+  onSelectAllToggle,
   onSortKeyChange,
   onToggleSelectedVideoId,
   query,
   rows,
+  selectableRowCount,
   selectedVideoIds,
+  selectedVisibleRowCount,
   sortKey
 }: ResultsPanelProps) {
   return (
@@ -51,7 +59,16 @@ export function ResultsPanel({
           </Button>
         </div>
       </div>
-      <ResultsToolbar onQueryChange={onQueryChange} onSortKeyChange={onSortKeyChange} query={query} sortKey={sortKey} />
+      <ResultsToolbar
+        allVisibleSelected={allVisibleSelected}
+        onQueryChange={onQueryChange}
+        onSelectAllToggle={onSelectAllToggle}
+        onSortKeyChange={onSortKeyChange}
+        query={query}
+        selectableRowCount={selectableRowCount}
+        selectedVisibleRowCount={selectedVisibleRowCount}
+        sortKey={sortKey}
+      />
       <div className="ss-table-shell">
         <table className="ss-table">
           <thead>

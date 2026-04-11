@@ -156,7 +156,17 @@ export interface DownloadProgressState {
   total_items: number;
 }
 
-export type VideoSortKey = "created_at" | "published_at" | "title";
+export type VideoSortKey =
+  | "created_at"
+  | "published_at"
+  | "fetched_at"
+  | "title"
+  | "creator_name"
+  | "character_name"
+  | "source_type"
+  | "view_count"
+  | "like_count"
+  | "duration_seconds";
 
 export interface VideoFilterState {
   query: string;
