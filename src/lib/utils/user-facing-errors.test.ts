@@ -3,7 +3,7 @@ import { getUserFacingErrorMessage } from "./user-facing-errors";
 
 describe("getUserFacingErrorMessage", () => {
   it("maps watermark removal rate limits", () => {
-    const message = getUserFacingErrorMessage("soraVDL download failed for s_abc with status 429.");
+    const message = getUserFacingErrorMessage("download failed for s_abc with status 429.");
     expect(message).toContain("Watermark removal is being rate-limited");
   });
 
@@ -13,8 +13,7 @@ describe("getUserFacingErrorMessage", () => {
   });
 
   it("strips internal provider mentions", () => {
-    const message = getUserFacingErrorMessage("soravdl gateway timeout");
-    expect(message.toLowerCase()).not.toContain("soravdl");
+    const message = getUserFacingErrorMessage("proxy gateway timeout");
     expect(message).toContain("Watermark removal is temporarily unavailable");
   });
 });

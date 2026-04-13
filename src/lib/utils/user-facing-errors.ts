@@ -1,4 +1,4 @@
-const WATERMARK_PROVIDER_PATTERN = /soravdl/i;
+const WATERMARK_PROVIDER_PATTERN = /watermark|proxy\/video|download failed|gateway timeout/i;
 
 export function getUserFacingErrorMessage(error: unknown): string {
   const rawMessage = error instanceof Error ? error.message : String(error || "");
@@ -8,7 +8,7 @@ export function getUserFacingErrorMessage(error: unknown): string {
     return "Something went wrong. Please try again.";
   }
 
-  const watermarkStatusMatch = message.match(/soraVDL download failed.*status\s+(\d{3})/i);
+  const watermarkStatusMatch = message.match(/download failed.*status\s+(\d{3})/i);
   if (watermarkStatusMatch) {
     return mapWatermarkRemovalStatus(Number(watermarkStatusMatch[1]));
   }
