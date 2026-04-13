@@ -7,8 +7,12 @@ interface BuildArchiveMessage {
   payload: ArchiveWorkPlan;
 }
 
-const ZIP_FETCH_CONCURRENCY = 4;
-const WATERMARK_FETCH_RETRY_DELAYS_MS = [800, 2000, 4000];
+const ZIP_FETCH_CONCURRENCY = 3;
+const WATERMARK_FETCH_MAX_ATTEMPTS = 6;
+const WATERMARK_FETCH_BASE_RETRY_MS = 1200;
+const WATERMARK_FETCH_MAX_RETRY_MS = 20000;
+let globalRateLimitCooldownUntilMs = 0;
+let watermarkRateLimitStreak = 0;
 
 self.addEventListener("message", (event: MessageEvent<BuildArchiveMessage>) => {
   if (event.data.type !== "build-archive") {
@@ -146,16 +150,21 @@ async function runWithConcurrency<T>(
 }
 
 async function fetchWatermarkFreeVideoBytes(videoId: string): Promise<Uint8Array> {
-  for (let attempt = 0; attempt <= WATERMARK_FETCH_RETRY_DELAYS_MS.length; attempt += 1) {
+  for (let attempt = 0; attempt < WATERMARK_FETCH_MAX_ATTEMPTS; attempt += 1) {
+    await waitForGlobalRateLimitCooldown();
     const response = await fetch(`https://soravdl.com/api/proxy/video/${encodeURIComponent(videoId)}`);
 
     if (response.ok) {
+      watermarkRateLimitStreak = 0;
       return new Uint8Array(await response.arrayBuffer());
     }
 
     const status = response.status;
-    if (status === 429 && attempt < WATERMARK_FETCH_RETRY_DELAYS_MS.length) {
-      await sleep(WATERMARK_FETCH_RETRY_DELAYS_MS[attempt]);
+    if (status === 429 && attempt + 1 < WATERMARK_FETCH_MAX_ATTEMPTS) {
+      watermarkRateLimitStreak += 1;
+      const retryDelayMs = resolveRetryDelayMs(response, attempt, watermarkRateLimitStreak);
+      globalRateLimitCooldownUntilMs = Date.now() + retryDelayMs;
+      await sleep(retryDelayMs);
       continue;
     }
 
@@ -183,4 +192,30 @@ function buildWatermarkRemovalErrorMessage(status: number): string {
 
 function sleep(durationMs: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, durationMs));
+}
+
+function resolveRetryDelayMs(response: Response, attempt: number, rateLimitStreak: number): number {
+  const retryAfterSeconds = Number(response.headers.get("retry-after"));
+  if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0) {
+    return clampRetryMs(retryAfterSeconds * 1000 + jitterMs(400));
+  }
+
+  const exponentialMultiplier = Math.max(1, Math.min(6, attempt + 1 + rateLimitStreak));
+  const backoffMs = WATERMARK_FETCH_BASE_RETRY_MS * exponentialMultiplier;
+  return clampRetryMs(backoffMs + jitterMs(500));
+}
+
+function clampRetryMs(value: number): number {
+  return Math.min(WATERMARK_FETCH_MAX_RETRY_MS, Math.max(800, Math.round(value)));
+}
+
+function jitterMs(maxJitterMs: number): number {
+  return Math.floor(Math.random() * maxJitterMs);
+}
+
+async function waitForGlobalRateLimitCooldown(): Promise<void> {
+  const remainingMs = globalRateLimitCooldownUntilMs - Date.now();
+  if (remainingMs > 0) {
+    await sleep(remainingMs);
+  }
 }
