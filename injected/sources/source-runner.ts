@@ -15,6 +15,11 @@ import {
   getUsernameFromRouteUrl,
   resolveSharedVideoIdFromValue
 } from "../lib/shared";
+import {
+  filterRowsByTimeWindow,
+  filterRowsForCharacterAccountDrafts,
+  reachedOlderThanSinceBoundary
+} from "./fetch-batch-filters";
 
 const APPEARANCE_FEED_PAGE_LIMIT = 100;
 
@@ -78,7 +83,10 @@ async function runFetchBatch(request: FetchBatchRequest) {
     const batchPayload = await fetchBatchPayload(request, cursor, offset, endpointKey);
     const payload = batchPayload.payload;
     const pageRows = getPostListingRows(payload);
-    const inRangeRows = filterRowsByTimeWindow(pageRows, request.since_ms, request.until_ms);
+    const scopedRows = request.source === "characterAccountDrafts"
+      ? filterRowsForCharacterAccountDrafts(pageRows, request.character_id ?? "")
+      : pageRows;
+    const inRangeRows = filterRowsByTimeWindow(scopedRows, request.since_ms, request.until_ms);
     const enrichedRows = isDraftSource(request.source)
       ? enrichDraftRows(inRangeRows, request.draft_resolution_entries ?? [])
       : inRangeRows;
@@ -96,13 +104,13 @@ async function runFetchBatch(request: FetchBatchRequest) {
       previousCursor ?? ""
     );
     const requestLimit = getFetchLimitForSource(request.source, request.limit);
-    const hasMoreRows = pageRows.length >= requestLimit;
+    const hasMoreRows = scopedRows.length >= requestLimit;
     const nextOffset: number | null = supportsOffsetPagination(request.source)
       ? (nextCursor ? offset : (offset ?? 0) + requestLimit)
       : null;
     const isDone =
-      shouldFinishFetchPage(request.source, pageRows.length, nextCursor, hasMoreRows) ||
-      reachedOlderThanSinceBoundary(pageRows, request.since_ms);
+      shouldFinishFetchPage(request.source, scopedRows.length, nextCursor, hasMoreRows) ||
+      reachedOlderThanSinceBoundary(scopedRows, request.since_ms);
 
     previousCursor = cursor;
     cursor = nextCursor;
@@ -132,102 +140,6 @@ async function runFetchBatch(request: FetchBatchRequest) {
   };
 }
 
-function filterRowsByTimeWindow(rows: unknown[], sinceMs?: number | null, untilMs?: number | null): unknown[] {
-  if (sinceMs == null && untilMs == null) {
-    return rows;
-  }
-
-  return rows.filter((row) => {
-    const timestampMs = extractRowTimestampMs(row);
-    if (timestampMs == null) {
-      return false;
-    }
-    if (sinceMs != null && timestampMs < sinceMs) {
-      return false;
-    }
-    if (untilMs != null && timestampMs > untilMs) {
-      return false;
-    }
-    return true;
-  });
-}
-
-function reachedOlderThanSinceBoundary(rows: unknown[], sinceMs?: number | null): boolean {
-  if (sinceMs == null || rows.length === 0) {
-    return false;
-  }
-
-  let seenTimestamp = false;
-  for (const row of rows) {
-    const timestampMs = extractRowTimestampMs(row);
-    if (timestampMs == null) {
-      return false;
-    }
-    seenTimestamp = true;
-    if (timestampMs >= sinceMs) {
-      return false;
-    }
-  }
-
-  return seenTimestamp;
-}
-
-function extractRowTimestampMs(row: unknown): number | null {
-  if (!row || typeof row !== "object") {
-    return null;
-  }
-
-  const record = row as Record<string, unknown>;
-  const post = record.post && typeof record.post === "object" ? (record.post as Record<string, unknown>) : null;
-  const draft = record.draft && typeof record.draft === "object" ? (record.draft as Record<string, unknown>) : null;
-
-  return pickFirstTimestampMs([
-    record.published_at,
-    record.publishedAt,
-    record.created_at,
-    record.createdAt,
-    record.updated_at,
-    record.updatedAt,
-    post?.published_at,
-    post?.publishedAt,
-    post?.created_at,
-    post?.createdAt,
-    post?.updated_at,
-    post?.updatedAt,
-    draft?.published_at,
-    draft?.publishedAt,
-    draft?.created_at,
-    draft?.createdAt,
-    draft?.updated_at,
-    draft?.updatedAt
-  ]);
-}
-
-function pickFirstTimestampMs(candidates: unknown[]): number | null {
-  for (const candidate of candidates) {
-    const parsed = parseTimestampMsCandidate(candidate);
-    if (parsed != null) {
-      return parsed;
-    }
-  }
-  return null;
-}
-
-function parseTimestampMsCandidate(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    // Treat large values as milliseconds, smaller as unix seconds.
-    return value > 10_000_000_000 ? value : value * 1000;
-  }
-  if (typeof value !== "string" || !value.trim()) {
-    return null;
-  }
-  const numeric = Number(value);
-  if (Number.isFinite(numeric)) {
-    return numeric > 10_000_000_000 ? numeric : numeric * 1000;
-  }
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? parsed : null;
-}
 
 async function fetchBatchPayload(
   request: FetchBatchRequest,
@@ -489,14 +401,21 @@ async function buildFetchEndpointCandidates(
     }];
   }
   if (request.source === "characterAccountDrafts") {
-    return [{
-      key: "character-account-drafts",
-      optional: true,
-      url: buildUrl(`/backend/project_y/profile/drafts/cameos/character/${encodeURIComponent(request.character_id ?? "")}`, {
-        limit,
-        cursor
-      }).toString()
-    }];
+    return [
+      {
+        key: "character-account-drafts",
+        optional: true,
+        url: buildUrl(`/backend/project_y/profile/drafts/cameos/character/${encodeURIComponent(request.character_id ?? "")}`, {
+          limit,
+          cursor
+        }).toString()
+      },
+      {
+        key: "viewer-character-drafts-fallback",
+        optional: true,
+        url: buildUrl("/backend/project_y/profile/drafts/cameos", { limit, cursor }).toString()
+      }
+    ];
   }
   if (request.source === "creatorPublished") {
     const creatorId = await resolveCreatorId(request.creator_user_id ?? "", request.route_url ?? "", request.creator_username ?? "");
