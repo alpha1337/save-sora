@@ -4,8 +4,7 @@ import { fileURLToPath } from "node:url";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "..");
-const v2ManifestPath = path.join(repoRoot, "v2", "manifest.json");
-const legacyManifestPath = path.join(repoRoot, "manifest.json");
+const manifestPath = path.join(repoRoot, "manifest.json");
 const packageJsonPath = path.join(repoRoot, "package.json");
 const semverPattern = /^\d+\.\d+\.\d+$/;
 
@@ -19,35 +18,29 @@ function main() {
     printUsageAndExit();
   }
 
-  const v2Manifest = readJson(v2ManifestPath);
+  const manifest = readJson(manifestPath);
   const packageJson = readJson(packageJsonPath);
-  const v2ManifestVersion = normalizeVersion(v2Manifest.version);
+  const manifestVersion = normalizeVersion(manifest.version);
   const packageVersion = normalizeVersion(packageJson.version);
 
-  if (!v2ManifestVersion || !packageVersion) {
-    throw new Error("v2/manifest.json and package.json must both contain a valid x.y.z version.");
+  if (!manifestVersion || !packageVersion) {
+    throw new Error("manifest.json and package.json must both contain a valid x.y.z version.");
   }
 
-  if (v2ManifestVersion !== packageVersion) {
+  if (manifestVersion !== packageVersion) {
     throw new Error(
-      `v2/manifest.json (${v2ManifestVersion}) and package.json (${packageVersion}) are out of sync.`,
+      `manifest.json (${manifestVersion}) and package.json (${packageVersion}) are out of sync.`,
     );
   }
 
-  const nextVersion = resolveNextVersion(v2ManifestVersion, normalizedArgument);
-  v2Manifest.version = nextVersion;
+  const nextVersion = resolveNextVersion(manifestVersion, normalizedArgument);
+  manifest.version = nextVersion;
   packageJson.version = nextVersion;
 
-  writeJson(v2ManifestPath, v2Manifest);
+  writeJson(manifestPath, manifest);
   writeJson(packageJsonPath, packageJson);
 
-  if (normalizeVersion(readJson(legacyManifestPath).version)) {
-    const legacyManifest = readJson(legacyManifestPath);
-    legacyManifest.version = nextVersion;
-    writeJson(legacyManifestPath, legacyManifest);
-  }
-
-  console.log(`Updated Save Sora version: ${v2ManifestVersion} -> ${nextVersion}`);
+  console.log(`Updated Save Sora version: ${manifestVersion} -> ${nextVersion}`);
 }
 
 function resolveNextVersion(currentVersion, instruction) {

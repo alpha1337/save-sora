@@ -1,0 +1,353 @@
+:root {
+  --ss-bg: #1d2021;
+  --ss-panel: #282828;
+  --ss-panel-elev: #3c3836;
+  --ss-border: #504945;
+  --ss-text: #f9f5d7;
+  --ss-muted: #ebdbb2;
+  --ss-accent: #83a598;
+  --ss-accent-strong: #458588;
+  --ss-success: #b8bb26;
+  --ss-warning: #fabd2f;
+  --ss-danger: #fb4934;
+  --ss-focus: #d79921;
+  color: var(--ss-text);
+  font-family: "IBM Plex Sans", "Segoe UI", "SF Pro Text", sans-serif;
+  background: linear-gradient(180deg, #1d2021 0%, #141617 100%);
+}
+
+body {
+  background: var(--ss-bg);
+  color: var(--ss-text);
+}
+
+.ss-shell-header,
+.ss-panel {
+  background: linear-gradient(180deg, #32302f, #282828);
+  border: 1px solid #665c54;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.45);
+}
+
+.ss-shell-header,
+.ss-panel,
+.ss-dialog-content,
+.ss-button,
+.ss-input,
+.ss-select-trigger,
+.ss-source-dropdown-trigger,
+.ss-source-dropdown-menu,
+.ss-summary-stat,
+.ss-list-row,
+.ss-checkbox-list-item,
+.ss-results-card,
+.ss-results-group-head,
+.ss-results-group-collapse,
+.ss-media-action-button,
+.ss-media-action-link,
+.ss-results-card-thumb,
+.ss-empty-state,
+.ss-date-preset-button,
+.ss-react-datepicker,
+.ss-badge {
+  border-radius: 0;
+}
+
+.ss-select-content,
+.ss-source-dropdown-menu,
+.ss-dialog-content,
+.react-datepicker-popper .react-datepicker {
+  border-radius: 0 !important;
+}
+
+.ss-muted,
+.ss-summary-stat-label,
+.ss-results-card-meta dt {
+  color: var(--ss-muted);
+}
+
+.ss-summary-stat,
+.ss-results-card,
+.ss-list-row,
+.ss-checkbox-list-item,
+.ss-results-group-head,
+.ss-empty-state,
+.ss-download-progress-panel,
+.ss-download-worker-row {
+  background: var(--ss-panel-elev);
+  border-color: #665c54;
+}
+
+.ss-button {
+  border: 1px solid var(--ss-border);
+}
+
+.ss-button--default {
+  background: linear-gradient(180deg, #689d6a, #427b58);
+  border-color: #427b58;
+  color: #fbf1c7;
+}
+
+.ss-button--secondary,
+.ss-button--ghost {
+  background: linear-gradient(180deg, #504945, #3c3836);
+  border-color: #7c6f64;
+  color: #f9f5d7;
+}
+
+.ss-button--danger {
+  background: linear-gradient(180deg, #cc241d, #9d0006);
+  border-color: #9d0006;
+  color: #fbf1c7;
+}
+
+.ss-input,
+.ss-select-trigger,
+.ss-source-dropdown-trigger,
+.ss-date-preset-button,
+.ss-media-action-button,
+.ss-media-action-link {
+  background: linear-gradient(180deg, #3c3836, #32302f);
+  border: 1px solid #7c6f64;
+  color: #f9f5d7;
+  font-weight: 600;
+}
+
+.ss-date-preset-button[data-selected="true"] {
+  background: rgba(131, 165, 152, 0.24);
+  border-color: #83a598;
+  box-shadow: inset 0 0 0 1px rgba(131, 165, 152, 0.3);
+}
+
+.ss-date-preset-button:focus-visible {
+  outline: none;
+  border-color: #fabd2f;
+  box-shadow: inset 0 0 0 1px rgba(250, 189, 47, 0.3);
+}
+
+.ss-select-trigger {
+  min-height: 3rem;
+}
+
+.ss-select-chevron {
+  color: #d5c4a1;
+}
+
+.ss-input::placeholder {
+  color: #d5c4a1;
+}
+
+.ss-toolbar .ss-input {
+  background: #f9f5d7;
+  border-color: #ebdbb2;
+  color: #1d2021;
+}
+
+.ss-toolbar .ss-input::placeholder {
+  color: #665c54;
+}
+
+.ss-select-content,
+.ss-source-dropdown-menu,
+.ss-dialog-content {
+  background: linear-gradient(180deg, #3c3836, #282828);
+  border: 1px solid #7c6f64;
+  box-shadow: 0 20px 48px rgba(0, 0, 0, 0.5);
+  color: #f9f5d7;
+}
+
+.ss-select-item[data-highlighted],
+.ss-select-item:hover {
+  background: rgba(131, 165, 152, 0.35);
+}
+
+.ss-select-item {
+  border-color: transparent;
+  color: #f9f5d7;
+}
+
+.ss-select-item-marker {
+  color: #ffffff;
+}
+
+.ss-toolbar .ss-checkbox-row {
+  gap: 0.5rem;
+  padding: 0.1rem 0.2rem;
+}
+
+.ss-toolbar .ss-checkbox-row span {
+  color: #f9f5d7;
+  font-size: 0.95rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.ss-select-item[data-highlighted] {
+  border-color: #83a598;
+}
+
+.ss-select-item[data-state="checked"] {
+  background: rgba(104, 157, 106, 0.28);
+  border-color: #8ec07c;
+  color: #fbf1c7;
+}
+
+.ss-source-dropdown-menu .ss-checkbox-icon,
+.ss-source-dropdown-menu .ss-checkbox-icon.is-checked,
+.ss-source-dropdown-menu .ss-checkbox {
+  color: #ffffff;
+}
+
+.ss-source-dropdown-menu .ss-source-dropdown-icon {
+  color: #ffffff;
+}
+
+.ss-segmented-toggle {
+  background: linear-gradient(180deg, #3c3836, #282828);
+  border-color: #7c6f64;
+}
+
+.ss-segmented-toggle-button {
+  background: transparent;
+  border-color: transparent;
+  color: #f9f5d7;
+  font-weight: 700;
+}
+
+.ss-character-account-list .ss-character-account-row {
+  background: linear-gradient(180deg, #3c3836, #32302f);
+  border-color: #7c6f64;
+}
+
+.ss-character-account-row .ss-checkbox-row > span {
+  color: #f9f5d7;
+}
+
+.ss-character-account-count {
+  background: rgba(131, 165, 152, 0.18);
+  border-color: #83a598;
+  color: #ffffff;
+}
+
+.ss-source-dropdown-menu {
+  max-height: min(420px, calc(100vh - 7rem));
+  overflow-y: auto;
+}
+
+.ss-dialog-content {
+  max-height: calc(100vh - 2rem);
+  overflow-y: auto;
+}
+
+.ss-dialog-content--wide {
+  max-height: calc(100vh - 2rem);
+  width: min(980px, calc(100vw - 2rem));
+}
+
+.ss-dialog-overlay {
+  background: rgba(0, 0, 0, 0.72);
+}
+
+.ss-results-thumb-stat {
+  background: rgba(29, 32, 33, 0.9);
+  border-color: #665c54;
+  color: #f9f5d7;
+}
+
+.ss-download-progress-track {
+  background: #504945;
+}
+
+.ss-download-progress-fill {
+  background: linear-gradient(90deg, #8ec07c, #689d6a);
+}
+
+.ss-download-worker-meta {
+  color: #ebdbb2;
+}
+
+.ss-download-worker-progress-track {
+  background: #504945;
+}
+
+.ss-download-worker-progress-fill {
+  background: linear-gradient(90deg, #8ec07c, #b8bb26);
+}
+
+.ss-checkbox {
+  color: #d5c4a1;
+}
+
+.ss-checkbox-icon.is-checked {
+  color: #8ec07c;
+}
+
+.ss-badge--default {
+  background: rgba(131, 165, 152, 0.2);
+  color: #d5c4a1;
+}
+
+.ss-badge--success {
+  background: rgba(184, 187, 38, 0.2);
+  color: #ebdbb2;
+}
+
+.ss-badge--warning {
+  background: rgba(250, 189, 47, 0.2);
+  color: #fbf1c7;
+}
+
+.ss-button:focus-visible,
+.ss-checkbox:focus-visible,
+.ss-input:focus-visible,
+.ss-select-trigger:focus-visible,
+.ss-source-dropdown-trigger:focus-visible,
+.ss-date-preset-button:focus-visible,
+.ss-media-action-button:focus-visible,
+.ss-media-action-link:focus-visible,
+.ss-results-group-collapse:focus-visible {
+  outline: 3px solid #fabd2f;
+  outline-offset: 1px;
+}
+
+.ss-header-grid h1,
+.ss-section-heading h2,
+.ss-panel h3,
+.ss-results-card-title,
+.ss-summary-stat-value {
+  color: #f9f5d7;
+}
+
+.ss-section-heading p,
+.ss-results-caption,
+.ss-summary-stat-hint,
+.ss-results-card-meta dd {
+  color: #ebdbb2;
+}
+
+.ss-react-datepicker {
+  background: #282828;
+  border: 1px solid var(--ss-border);
+  color: var(--ss-text);
+}
+
+.ss-react-datepicker .react-datepicker__header {
+  background: #32302f;
+  border-bottom: 1px solid var(--ss-border);
+}
+
+.ss-react-datepicker .react-datepicker__day,
+.ss-react-datepicker .react-datepicker__day-name,
+.ss-react-datepicker .react-datepicker__current-month,
+.ss-react-datepicker .react-datepicker-time__header {
+  color: var(--ss-text);
+}
+
+.ss-react-datepicker .react-datepicker__day:hover {
+  background: rgba(131, 165, 152, 0.25);
+}
+
+.ss-react-datepicker .react-datepicker__day--selected,
+.ss-react-datepicker .react-datepicker__day--keyboard-selected {
+  background: var(--ss-accent-strong);
+  color: #fbf1c7;
+}

@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "..");
-const buildRoot = path.join(repoRoot, "v2", ".build");
+const buildRoot = path.join(repoRoot, ".build");
 const distRoot = path.join(repoRoot, "dist");
 const manifestPath = path.join(buildRoot, "manifest.json");
 

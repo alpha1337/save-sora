@@ -7,11 +7,10 @@ import reactRefresh from "eslint-plugin-react-refresh";
 import tseslint from "typescript-eslint";
 
 const rootDir = path.dirname(fileURLToPath(import.meta.url));
-const typedFiles = ["v2/**/*.{ts,tsx,mts,cts}"];
+const typedFiles = ["src/**/*.{ts,tsx,mts,cts}", "background/**/*.{ts,tsx,mts,cts}", "injected/**/*.{ts,tsx,mts,cts}", "workers/**/*.{ts,tsx,mts,cts}", "testing/**/*.{ts,tsx,mts,cts}"];
 const scriptFiles = [
   "eslint.config.mjs",
-  "scripts/**/*.mjs",
-  "v2/scripts/**/*.mjs"
+  "scripts/**/*.mjs"
 ];
 
 const typedConfigs = tseslint.configs.recommendedTypeChecked.map((config) => ({
@@ -20,7 +19,7 @@ const typedConfigs = tseslint.configs.recommendedTypeChecked.map((config) => ({
   languageOptions: {
     ...config.languageOptions,
     parserOptions: {
-      project: "./v2/tsconfig.json",
+      project: "./tsconfig.json",
       tsconfigRootDir: rootDir
     }
   }
@@ -31,7 +30,7 @@ export default [
     ignores: [
       "dist/**",
       "node_modules/**",
-      "v2/.build/**",
+      ".build/**",
       ".local-dev/**",
       ".playwright-cli/**"
     ]

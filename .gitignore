@@ -8,4 +8,4 @@ coverage/
 *.pem
 *.zip
 dist/
-v2/.build/
+.build/
