@@ -27,7 +27,7 @@ export async function fetchJson(url: string): Promise<unknown> {
     }
 
     if (attempt >= FETCH_RETRY_DELAYS_MS.length || !isRetriableSoraStatus(response.status)) {
-      throw new Error(`Sora request failed with status ${response.status}.`);
+      throw new Error(buildSoraRequestErrorMessage(response.status));
     }
 
     await sleep(FETCH_RETRY_DELAYS_MS[attempt]);
@@ -43,7 +43,7 @@ export async function fetchText(url: string): Promise<string> {
   });
 
   if (!response.ok) {
-    throw new Error(`Sora detail request failed with status ${response.status}.`);
+    throw new Error(buildSoraRequestErrorMessage(response.status));
   }
 
   return response.text();
@@ -161,6 +161,25 @@ export function isRetriableSoraStatus(status: number): boolean {
 
 function sleep(durationMs: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, durationMs));
+}
+
+function buildSoraRequestErrorMessage(status: number): string {
+  if (status === 400) {
+    return "Sora rejected this request. The item may be unavailable, no longer shareable, or still processing.";
+  }
+  if (status === 401 || status === 403) {
+    return "Your Sora session is no longer authorized. Refresh Sora, sign in again, and retry.";
+  }
+  if (status === 404) {
+    return "The requested Sora item could not be found.";
+  }
+  if (status === 429) {
+    return "Sora is rate-limiting requests right now. Please retry in a minute.";
+  }
+  if (status >= 500) {
+    return "Sora is temporarily unavailable. Please retry shortly.";
+  }
+  return `Sora request failed (status ${status}).`;
 }
 
 export function resolveSharedVideoIdFromValue(value: unknown, depth = 0): string {

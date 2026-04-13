@@ -17,6 +17,7 @@ import { AppShellTemplate } from "@components/templates/app-shell-template";
 import { createLogger } from "@lib/logging/logger";
 import { replaceDownloadQueue, saveSessionMeta } from "@lib/db/session-db";
 import { fetchSelectedSources, loadCharacterAccountsIntoState, resolveAndAddCreatorProfile } from "@features/fetch/fetch-controller";
+import { getUserFacingErrorMessage } from "@lib/utils/user-facing-errors";
 import type { DateRangePreset, TopLevelSourceType } from "types/domain";
 
 const logger = createLogger("app");
@@ -75,9 +76,14 @@ export function App() {
     void bootstrapAppState().catch((error) => {
       logger.error("bootstrap failed", error);
       useAppStore.getState().setPhase("error");
-      useAppStore.getState().setErrorMessage(error instanceof Error ? error.message : String(error));
+      useAppStore.getState().setErrorMessage(getUserFacingErrorMessage(error));
     });
   }, []);
+
+  function setAppError(error: unknown): void {
+    useAppStore.getState().setPhase("error");
+    useAppStore.getState().setErrorMessage(getUserFacingErrorMessage(error));
+  }
 
   useEffect(() => {
     void saveSessionMeta(state.session_meta);
@@ -115,8 +121,7 @@ export function App() {
       autoSelectAllDownloadableRef.current = true;
       await fetchSelectedSources();
     } catch (error) {
-      useAppStore.getState().setPhase("error");
-      useAppStore.getState().setErrorMessage(error instanceof Error ? error.message : String(error));
+      setAppError(error);
     }
   }
 
@@ -127,8 +132,7 @@ export function App() {
       }
       await downloadSelectedRows();
     } catch (error) {
-      useAppStore.getState().setPhase("error");
-      useAppStore.getState().setErrorMessage(error instanceof Error ? error.message : String(error));
+      setAppError(error);
     }
   }
 
@@ -137,8 +141,7 @@ export function App() {
       await resolveAndAddCreatorProfile(creatorRouteInput.trim());
       setCreatorRouteInput("");
     } catch (error) {
-      useAppStore.getState().setPhase("error");
-      useAppStore.getState().setErrorMessage(error instanceof Error ? error.message : String(error));
+      setAppError(error);
     }
   }
 
@@ -146,8 +149,7 @@ export function App() {
     try {
       await loadCharacterAccountsIntoState();
     } catch (error) {
-      useAppStore.getState().setPhase("error");
-      useAppStore.getState().setErrorMessage(error instanceof Error ? error.message : String(error));
+      setAppError(error);
     }
   }
 
@@ -249,7 +251,9 @@ export function App() {
     }
 
     autoLoadCharacterAccountsRef.current = true;
-    void handleLoadCharacterAccounts();
+    void loadCharacterAccountsIntoState().catch((error) => {
+      setAppError(error);
+    });
   }, [showCharacterSidebar, state.character_accounts.length, state.phase]);
 
   useEffect(() => {
@@ -319,7 +323,7 @@ export function App() {
       header={
         <div className="ss-header-grid">
           <div>
-            <h1>Save Sora v2.0.130</h1>
+            <h1>Save Sora v2.0.136</h1>
             <p className="ss-muted">Download anything on Sora, remove watermarks, export metadata and organized ZIP files.</p>
           </div>
           <div className="ss-inline-actions">

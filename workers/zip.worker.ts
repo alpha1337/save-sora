@@ -8,6 +8,7 @@ interface BuildArchiveMessage {
 }
 
 const ZIP_FETCH_CONCURRENCY = 4;
+const WATERMARK_FETCH_RETRY_DELAYS_MS = [800, 2000, 4000];
 
 self.addEventListener("message", (event: MessageEvent<BuildArchiveMessage>) => {
   if (event.data.type !== "build-archive") {
@@ -76,12 +77,7 @@ async function buildArchive(workPlan: ArchiveWorkPlan): Promise<void> {
       activeLabel = `Bundling ${itemLabel}`;
       publishProgress();
 
-      const response = await fetch(`https://soravdl.com/api/proxy/video/${encodeURIComponent(row.video_id)}`);
-      if (!response.ok) {
-        throw new Error(`soraVDL download failed for ${row.video_id} with status ${response.status}.`);
-      }
-
-      const bytes = new Uint8Array(await response.arrayBuffer());
+      const bytes = await fetchWatermarkFreeVideoBytes(row.video_id);
       const entry = new ZipPassThrough(libraryPathByVideoId.get(row.video_id) ?? `library/${row.video_id}.mp4`);
       zip.add(entry);
       entry.push(bytes, true);
@@ -147,4 +143,44 @@ async function runWithConcurrency<T>(
   }
 
   await Promise.all(Array.from({ length: Math.min(concurrency, values.length) }, (_value, workerIndex) => worker(workerIndex)));
+}
+
+async function fetchWatermarkFreeVideoBytes(videoId: string): Promise<Uint8Array> {
+  for (let attempt = 0; attempt <= WATERMARK_FETCH_RETRY_DELAYS_MS.length; attempt += 1) {
+    const response = await fetch(`https://soravdl.com/api/proxy/video/${encodeURIComponent(videoId)}`);
+
+    if (response.ok) {
+      return new Uint8Array(await response.arrayBuffer());
+    }
+
+    const status = response.status;
+    if (status === 429 && attempt < WATERMARK_FETCH_RETRY_DELAYS_MS.length) {
+      await sleep(WATERMARK_FETCH_RETRY_DELAYS_MS[attempt]);
+      continue;
+    }
+
+    throw new Error(buildWatermarkRemovalErrorMessage(status));
+  }
+
+  throw new Error("Watermark removal failed after retries. Please try again.");
+}
+
+function buildWatermarkRemovalErrorMessage(status: number): string {
+  if (status === 429) {
+    return "Watermark removal is being rate-limited right now. Please wait a minute and try Build ZIP again.";
+  }
+  if (status === 400) {
+    return "Watermark removal is unavailable for one or more selected videos right now. They may still be processing.";
+  }
+  if (status === 404) {
+    return "A selected video is no longer available for watermark removal.";
+  }
+  if (status >= 500) {
+    return "Watermark removal is temporarily unavailable due to a server issue. Please retry shortly.";
+  }
+  return `Watermark removal failed (status ${status}).`;
+}
+
+function sleep(durationMs: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, durationMs));
 }
