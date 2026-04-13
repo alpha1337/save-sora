@@ -11,7 +11,7 @@ import type {
 } from "../src/types/background";
 import { cleanupTrackedHiddenWorkers, HiddenTabPool } from "./hidden-tab-pool";
 
-const pool = new HiddenTabPool(3);
+const pool = new HiddenTabPool(1);
 const APP_URL = chrome.runtime.getURL("app.html");
 void cleanupTrackedHiddenWorkers();
 

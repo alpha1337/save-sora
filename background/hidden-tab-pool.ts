@@ -10,7 +10,7 @@ interface HiddenWorker {
 const WORKER_BOOTSTRAP_URL = `${SORA_ORIGIN}/profile`;
 const WORKER_LOAD_TIMEOUT_MS = 20_000;
 const WORKER_PREPARE_RETRY_LIMIT = 2;
-const WORKER_IDLE_EVICTION_MS = 45_000;
+const WORKER_IDLE_EVICTION_MS = 10_000;
 const WORKER_TRACKING_KEY = "saveSoraHiddenWorkers";
 
 interface TrackedHiddenWorkers {
@@ -108,12 +108,18 @@ export class HiddenTabPool {
 
     if (typeof worker.windowId === "number") {
       try {
-        await chrome.windows.remove(worker.windowId);
-        await this.persistTrackedWorkers();
-        this.queue.shift()?.();
-        return;
+        const workerWindow = await chrome.windows.get(worker.windowId, { populate: true });
+        const tabs = workerWindow.tabs ?? [];
+        const hasWorkerTab = tabs.some((tab) => tab.id === worker.tabId);
+        const onlyReusableSoraTabs = tabs.length > 0 && tabs.every((tab) => isReusableSoraWorkerTabUrl(tab.url));
+        if (workerWindow.type === "popup" && hasWorkerTab && onlyReusableSoraTabs) {
+          await chrome.windows.remove(worker.windowId);
+          await this.persistTrackedWorkers();
+          this.queue.shift()?.();
+          return;
+        }
       } catch (_error) {
-        // Fall back to removing the worker tab if the worker window is already gone.
+        // Fall back to removing the worker tab if the worker window is unavailable.
       }
     }
 
@@ -132,7 +138,6 @@ export class HiddenTabPool {
       const worker = this.workers[index];
       try {
         const tab = await chrome.tabs.get(worker.tabId);
-        worker.windowId = typeof tab.windowId === "number" ? tab.windowId : worker.windowId;
         if (!worker.busy && !isReusableSoraWorkerTabUrl(tab.url)) {
           await this.disposeWorker(worker, true);
         }
@@ -187,60 +192,30 @@ export function shouldRetryWorkerTask(error: unknown): boolean {
 }
 
 async function createDedicatedWorker(): Promise<HiddenWorker> {
-  try {
-    const workerWindow = await chrome.windows.create({
-      url: WORKER_BOOTSTRAP_URL,
-      focused: false,
-      state: "minimized",
-      type: "popup"
-    });
-
-    if (typeof workerWindow.id === "number") {
-      const workerTabs = await chrome.tabs.query({ windowId: workerWindow.id });
-      const workerTab = workerTabs.find((tab) => typeof tab.id === "number") ?? null;
-      if (workerTab?.id) {
-        await waitForTabComplete(workerTab.id);
-        return {
-          busy: false,
-          injected: false,
-          tabId: workerTab.id,
-          windowId: workerWindow.id
-        };
-      }
-
-      await chrome.windows.remove(workerWindow.id).catch(() => undefined);
-    }
-  } catch (_error) {
-    // Fall back to an inactive tab when Chrome cannot create a minimized window.
-  }
-
-  const fallbackWindow = await chrome.windows.create({
-    url: WORKER_BOOTSTRAP_URL,
-    focused: false,
-    state: "minimized",
-    type: "popup"
+  const workerTab = await chrome.tabs.create({
+    active: false,
+    pinned: true,
+    url: WORKER_BOOTSTRAP_URL
   });
 
-  const fallbackTabs = typeof fallbackWindow.id === "number" ? await chrome.tabs.query({ windowId: fallbackWindow.id }) : [];
-  const fallbackTab = fallbackTabs.find((tab) => typeof tab.id === "number") ?? null;
-
-  if (!fallbackTab?.id) {
+  if (!workerTab.id) {
     throw new Error("Could not create a dedicated Sora worker tab.");
   }
 
-  await waitForTabComplete(fallbackTab.id);
+  await waitForTabComplete(workerTab.id);
+  await chrome.tabs.update(workerTab.id, { active: false, autoDiscardable: false }).catch(() => undefined);
+
   return {
     busy: false,
     injected: false,
-    tabId: fallbackTab.id,
-    windowId: typeof fallbackWindow.id === "number" ? fallbackWindow.id : null
+    tabId: workerTab.id,
+    windowId: null
   };
 }
 
 async function ensureWorkerReady(worker: HiddenWorker): Promise<void> {
   for (let attempt = 0; attempt < WORKER_PREPARE_RETRY_LIMIT; attempt += 1) {
     const currentTab = await chrome.tabs.get(worker.tabId);
-    worker.windowId = typeof currentTab.windowId === "number" ? currentTab.windowId : worker.windowId;
 
     if (!isReusableSoraWorkerTabUrl(currentTab.url) || currentTab.status !== "complete") {
       await chrome.tabs.update(worker.tabId, { active: false, url: WORKER_BOOTSTRAP_URL });
@@ -357,19 +332,15 @@ export async function cleanupTrackedHiddenWorkers(): Promise<void> {
   const stored = await chrome.storage.session.get(WORKER_TRACKING_KEY).catch(() => ({} as Record<string, unknown>));
   const storedRecord = stored as Record<string, unknown>;
   const tracked = storedRecord[WORKER_TRACKING_KEY] as TrackedHiddenWorkers | undefined;
-  if (!tracked) {
-    return;
-  }
-
-  const windowIds = [...new Set((tracked.window_ids ?? []).filter((windowId) => Number.isInteger(windowId)))];
-  const tabIds = [...new Set((tracked.tab_ids ?? []).filter((tabId) => Number.isInteger(tabId)))];
+  const windowIds = [...new Set((tracked?.window_ids ?? []).filter((windowId) => Number.isInteger(windowId)))];
+  const tabIds = [...new Set((tracked?.tab_ids ?? []).filter((tabId) => Number.isInteger(tabId)))];
 
   for (const windowId of windowIds) {
     try {
       const workerWindow = await chrome.windows.get(windowId, { populate: true });
       const tabs = workerWindow.tabs ?? [];
       const onlyReusableSoraTabs = tabs.length > 0 && tabs.every((tab) => isReusableSoraWorkerTabUrl(tab.url));
-      if (onlyReusableSoraTabs && (workerWindow.state === "minimized" || workerWindow.type === "popup")) {
+      if (workerWindow.type === "popup" && onlyReusableSoraTabs) {
         await chrome.windows.remove(windowId);
       }
     } catch (_error) {
@@ -379,12 +350,29 @@ export async function cleanupTrackedHiddenWorkers(): Promise<void> {
 
   for (const tabId of tabIds) {
     try {
-      const workerTab = await chrome.tabs.get(tabId);
-      if (!workerTab.active && isReusableSoraWorkerTabUrl(workerTab.url)) {
-        await chrome.tabs.remove(tabId);
-      }
+      await chrome.tabs.remove(tabId);
     } catch (_error) {
       // Ignore stale or inaccessible tab ids.
+    }
+  }
+
+  const allWindows = await chrome.windows.getAll({ populate: true }).catch(() => [] as chrome.windows.Window[]);
+  for (const chromeWindow of allWindows) {
+    if (chromeWindow.type !== "popup" || chromeWindow.state !== "minimized" || typeof chromeWindow.id !== "number") {
+      continue;
+    }
+
+    const tabs = chromeWindow.tabs ?? [];
+    const isSoraPopupWorkerWindow =
+      tabs.length === 1 && typeof tabs[0]?.url === "string" && tabs[0].url.startsWith(WORKER_BOOTSTRAP_URL);
+    if (!isSoraPopupWorkerWindow) {
+      continue;
+    }
+
+    try {
+      await chrome.windows.remove(chromeWindow.id);
+    } catch (_error) {
+      // Ignore windows that are already gone.
     }
   }
 
