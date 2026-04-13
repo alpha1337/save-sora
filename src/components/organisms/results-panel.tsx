@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { ChevronDown, Download, FileSpreadsheet, PanelLeftClose, PanelLeftOpen } from "lucide-react";
-import type { DownloadProgressState, GroupByOption, VideoRow, VideoSortOption } from "types/domain";
+import type { DownloadProgressState, FetchProgressState, GroupByOption, VideoRow, VideoSortOption } from "types/domain";
 import { Button } from "@components/atoms/button";
 import { Checkbox } from "@components/atoms/checkbox";
 import { Panel } from "@components/atoms/panel";
@@ -13,6 +13,7 @@ interface ResultsPanelProps {
   allVisibleSelected: boolean;
   downloadableRowCount: number;
   downloadProgress: DownloadProgressState;
+  fetchProgress: FetchProgressState;
   hasRows: boolean;
   hasQuery: boolean;
   phase: string;
@@ -48,6 +49,7 @@ export function ResultsPanel({
   allVisibleSelected,
   downloadableRowCount,
   downloadProgress,
+  fetchProgress,
   downloadDisabled = false,
   exportDisabled = false,
   hasSidebar = false,
@@ -78,6 +80,7 @@ export function ResultsPanel({
   const [activePreviewRowId, setActivePreviewRowId] = useState("");
   const [collapsedGroupKeys, setCollapsedGroupKeys] = useState<string[]>([]);
   const hasZipSelection = selectedDownloadableRowCount > 0;
+  const showFetchProgress = phase === "fetching" || fetchProgress.running_jobs > 0;
   const showDownloadProgress = phase === "downloading" || downloadProgress.running_workers > 0;
   const groupedRows = useMemo(
     () => (groupBy === "none" ? [] : buildGroupedRows(rows, groupBy)),
@@ -126,6 +129,51 @@ export function ResultsPanel({
             value={`${formatCount(selectedDownloadableRowCount)} of ${formatCount(downloadableRowCount)}`}
           />
           <SummaryStat hint="Combined estimated size of selected rows" label="Selected Size" value={formatBytes(selectedBytes)} />
+        </div>
+      ) : null}
+      {showFetchProgress ? (
+        <div className="ss-download-progress-panel">
+          <div className="ss-download-progress-head">
+            <strong>{fetchProgress.active_label || "Fetching rows"}</strong>
+            <span className="ss-muted">
+              {formatCount(fetchProgress.completed_jobs)}/{formatCount(fetchProgress.total_jobs)} jobs
+            </span>
+          </div>
+          <div className="ss-download-progress-track" aria-hidden="true">
+            <div
+              className="ss-download-progress-fill"
+              style={{ width: `${formatProgressPercent(fetchProgress.completed_jobs, fetchProgress.total_jobs)}%` }}
+            />
+          </div>
+          <div className="ss-download-worker-list">
+            {fetchProgress.job_progress.length > 0 ? (
+              fetchProgress.job_progress.map((job) => (
+                <div className="ss-download-worker-row" key={job.job_id}>
+                  <div className="ss-download-worker-main">
+                    <strong>{job.label}</strong>
+                    <span className="ss-muted">
+                      {job.active_item_title
+                        ? `Fetching ${job.active_item_title}`
+                        : job.status === "completed"
+                          ? "Completed"
+                          : job.status === "running"
+                            ? "Running"
+                            : "Queued"}
+                    </span>
+                    <div className="ss-download-worker-progress-track" aria-hidden="true">
+                      <div
+                        className="ss-download-worker-progress-fill"
+                        style={{ width: `${formatFetchJobProgressPercent(job)}%` }}
+                      />
+                    </div>
+                  </div>
+                  <span className="ss-download-worker-meta">{`${formatFetchJobProgressPercent(job)}%`}</span>
+                </div>
+              ))
+            ) : (
+              <div className="ss-muted">Starting fetch workers…</div>
+            )}
+          </div>
         </div>
       ) : null}
       {showDownloadProgress ? (
@@ -229,6 +277,19 @@ function formatWorkerProgressPercent(completedItems: number, downloadProgress: D
   const workerCount = Math.max(1, downloadProgress.total_workers);
   const estimatedItemsPerWorker = Math.max(1, Math.ceil(downloadProgress.total_items / workerCount));
   return Math.min(100, Math.max(0, Math.round((completedItems / estimatedItemsPerWorker) * 100)));
+}
+
+function formatFetchJobProgressPercent(job: FetchProgressState["job_progress"][number]): number {
+  if (typeof job.expected_total_count === "number" && job.expected_total_count > 0) {
+    return Math.min(100, Math.max(0, Math.round((job.fetched_rows / job.expected_total_count) * 100)));
+  }
+  if (job.status === "completed") {
+    return 100;
+  }
+  if (job.status === "running") {
+    return Math.min(95, Math.max(5, job.processed_batches * 20));
+  }
+  return 0;
 }
 
 function formatSkipReasonLabel(reason: string): string {

@@ -39,7 +39,7 @@ export function reachedOlderThanSinceBoundary(rows: unknown[], sinceMs?: number 
   return seenTimestamp;
 }
 
-export function filterRowsForCharacterAccountDrafts(rows: unknown[], characterId: string): unknown[] {
+export function filterRowsForCharacterId(rows: unknown[], characterId: string): unknown[] {
   const trimmedCharacterId = characterId.trim();
   if (!trimmedCharacterId) {
     return rows;

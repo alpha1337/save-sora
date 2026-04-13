@@ -84,13 +84,14 @@ function buildCreatorJobs(
   };
 
   if (profile.is_character_profile) {
-    const resolvedCharacterId = profile.user_id || profile.profile_id;
+    const permalinkName = resolvePermalinkProfileName(profile.permalink);
     const matchedAccount = characterAccounts.find(
       (account) =>
-        account.account_id === resolvedCharacterId ||
+        account.account_id === profile.user_id ||
+        account.account_id === profile.profile_id ||
         (profile.username && account.username === profile.username)
     );
-    const permalinkName = resolvePermalinkProfileName(profile.permalink);
+    const resolvedCharacterId = resolveCharacterId(profile, matchedAccount?.account_id, permalinkName);
     const resolvedCharacterDisplayName =
       matchedAccount?.display_name ||
       profile.display_name ||
@@ -138,6 +139,13 @@ function buildCreatorJobs(
       ...baseJobData
     }, fetchWindow)
   ];
+}
+
+function resolveCharacterId(profile: CreatorProfile, accountId: string | undefined, permalinkName: string): string {
+  const preferred = [profile.user_id, profile.profile_id, accountId, permalinkName].find(
+    (value) => Boolean(value && value.startsWith("ch_"))
+  );
+  return preferred || profile.user_id || profile.profile_id || accountId || permalinkName || "Character";
 }
 
 function resolvePermalinkProfileName(permalink: string | null): string {

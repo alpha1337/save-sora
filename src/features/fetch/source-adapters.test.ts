@@ -106,6 +106,32 @@ describe("buildFetchJobs", () => {
     expect(jobs.map((job) => job.expected_total_count)).toEqual([143852, null]);
   });
 
+  it("prefers ch_* character ids when creator payload also contains an owner user id", () => {
+    const jobs = buildFetchJobs(
+      createState([
+        {
+          profile_id: "ch_crystal",
+          user_id: "user_owner_123",
+          username: "creator.sample",
+          display_name: "Crystal Sparkle",
+          permalink: "https://sora.chatgpt.com/profile/creator.sample",
+          profile_picture_url: null,
+          is_character_profile: true,
+          published_count: null,
+          appearance_count: 143852,
+          draft_count: 4,
+          created_at: "2026-04-11T00:00:00.000Z"
+        }
+      ])
+    );
+
+    const appearancesJob = jobs.find((job) => job.source === "characterAccountAppearances");
+    const draftsJob = jobs.find((job) => job.source === "characterAccountDrafts");
+
+    expect(appearancesJob?.character_id).toBe("ch_crystal");
+    expect(draftsJob?.character_id).toBe("ch_crystal");
+  });
+
   it("routes character profiles by flag even when the id is not prefixed with ch_", () => {
     const jobs = buildFetchJobs(
       createState([

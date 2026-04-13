@@ -17,7 +17,7 @@ import {
 } from "../lib/shared";
 import {
   filterRowsByTimeWindow,
-  filterRowsForCharacterAccountDrafts,
+  filterRowsForCharacterId,
   reachedOlderThanSinceBoundary
 } from "./fetch-batch-filters";
 
@@ -83,8 +83,8 @@ async function runFetchBatch(request: FetchBatchRequest) {
     const batchPayload = await fetchBatchPayload(request, cursor, offset, endpointKey);
     const payload = batchPayload.payload;
     const pageRows = getPostListingRows(payload);
-    const scopedRows = request.source === "characterAccountDrafts"
-      ? filterRowsForCharacterAccountDrafts(pageRows, request.character_id ?? "")
+    const scopedRows = request.source === "characterAccountDrafts" || request.source === "characterAccountAppearances"
+      ? filterRowsForCharacterId(pageRows, request.character_id ?? "")
       : pageRows;
     const inRangeRows = filterRowsByTimeWindow(scopedRows, request.since_ms, request.until_ms);
     const enrichedRows = isDraftSource(request.source)
@@ -391,14 +391,22 @@ async function buildFetchEndpointCandidates(
     }];
   }
   if (request.source === "characterAccountAppearances") {
-    return [{
-      key: "character-appearances",
-      url: buildUrl(`/backend/project_y/profile_feed/${encodeURIComponent(request.character_id ?? "")}`, {
-        limit,
-        cut: "appearances",
-        cursor
-      }).toString()
-    }];
+    return [
+      {
+        key: "character-appearances",
+        optional: true,
+        url: buildUrl(`/backend/project_y/profile_feed/${encodeURIComponent(request.character_id ?? "")}`, {
+          limit,
+          cut: "appearances",
+          cursor
+        }).toString()
+      },
+      {
+        key: "viewer-appearances-fallback",
+        optional: true,
+        url: buildUrl("/backend/project_y/profile_feed/me", { limit, cut: "appearances", cursor }).toString()
+      }
+    ];
   }
   if (request.source === "characterAccountDrafts") {
     return [

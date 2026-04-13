@@ -323,7 +323,7 @@ export function App() {
       header={
         <div className="ss-header-grid">
           <div>
-            <h1>Save Sora v2.0.136</h1>
+            <h1>Save Sora v2.0.140</h1>
             <p className="ss-muted">Download anything on Sora, remove watermarks, export metadata and organized ZIP files.</p>
           </div>
           <div className="ss-inline-actions">
@@ -346,6 +346,7 @@ export function App() {
           allVisibleSelected={allVisibleSelected}
           downloadableRowCount={downloadableRowsCount}
           downloadProgress={state.download_progress}
+          fetchProgress={state.fetch_progress}
           downloadDisabled={!canBuildZip}
           exportDisabled={isDownloading || state.video_rows.length === 0}
           hasSidebar={hasSidebar}

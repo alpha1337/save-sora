@@ -11,6 +11,15 @@ const emptyDownloadProgress = {
   total_workers: 0,
   worker_progress: []
 };
+const emptyFetchProgress = {
+  active_label: "",
+  completed_jobs: 0,
+  processed_batches: 0,
+  processed_rows: 0,
+  running_jobs: 0,
+  total_jobs: 0,
+  job_progress: []
+};
 
 const baseRow: VideoRow = {
   row_id: "row-1",
@@ -55,6 +64,7 @@ describe("ResultsPanel", () => {
         allVisibleSelected={false}
         downloadableRowCount={120000}
         downloadProgress={emptyDownloadProgress}
+        fetchProgress={emptyFetchProgress}
         hasRows
         hasQuery
         groupBy="none"
@@ -90,6 +100,7 @@ describe("ResultsPanel", () => {
         allVisibleSelected={false}
         downloadableRowCount={120000}
         downloadProgress={emptyDownloadProgress}
+        fetchProgress={emptyFetchProgress}
         hasRows
         hasQuery
         groupBy="none"
@@ -131,6 +142,7 @@ describe("ResultsPanel", () => {
         allVisibleSelected={false}
         downloadableRowCount={2}
         downloadProgress={emptyDownloadProgress}
+        fetchProgress={emptyFetchProgress}
         hasRows
         hasQuery={false}
         groupBy="creator"
@@ -173,6 +185,7 @@ describe("ResultsPanel", () => {
         allVisibleSelected={false}
         downloadableRowCount={2}
         downloadProgress={emptyDownloadProgress}
+        fetchProgress={emptyFetchProgress}
         hasRows
         hasQuery={false}
         groupBy="creator"

@@ -42,7 +42,7 @@ describe("source endpoint contracts", () => {
       user: { id: "user-hpMzqszkKps0XRRewJj8bxER" }
     };
     const appearancesPayload = {
-      items: [{ post: { id: "s_a1", posted_at: 1775636364.275118 } }],
+      items: [{ post: { id: "s_a1", posted_at: 1775636364.275118 }, character_user_id: "ch_123" }],
       cursor: "appearance-next-cursor"
     };
 
