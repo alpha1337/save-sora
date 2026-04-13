@@ -45,3 +45,15 @@ Build it on Windows with NSIS installed:
 
 The extension uses only permissions required for local session-based fetch + export workflows.
 See `manifest.json` for the authoritative permission list.
+
+Permission rationale:
+
+- `downloads`: saves selected Sora videos and generated ZIP archives to the user-selected local download directory.
+- `scripting`: injects authenticated fetch helpers into active Sora/ChatGPT tabs.
+- `storage`: persists user preferences and lightweight extension state.
+- `tabs`: discovers/reuses authenticated Sora tabs and manages hidden worker tabs for fetch orchestration.
+- `unlimitedStorage`: stores large, user-requested local session metadata (normalized row data, selection state, download history indexes, CSV-ready data) without premature quota eviction during high-volume fetches.
+
+Privacy policy (GitHub Pages):
+
+- `https://alpha1337.github.io/save-sora/privacy.html`
