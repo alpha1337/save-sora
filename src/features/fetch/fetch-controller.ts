@@ -43,10 +43,8 @@ import {
 import type { FetchResumeState } from "./fetch-runtime-utils";
 import type { FetchJob } from "./source-adapters";
 import { buildFetchJobs } from "./source-adapters";
-
 export { buildFetchResumeStateFromCheckpoints, finalizeFetchJobCheckpoint, getNewStoredRowIds, shouldStopForNoGrowthPages, shouldStopForStalledCursor } from "./fetch-runtime-utils";
 export { buildInitialFetchProgress } from "./fetch-controller-helpers";
-
 const logger = createLogger("fetch-controller");
 const SORA_PROFILE_ORIGIN = "https://sora.chatgpt.com";
 const FETCH_BATCH_LIMIT = 100;
@@ -54,17 +52,19 @@ const APPEARANCE_FEED_BATCH_LIMIT = 100;
 const FETCH_PAGE_BUDGET = 3;
 const HIGH_VOLUME_SOURCE_PAGE_BUDGET = 1;
 const FETCH_CONCURRENCY = 3;
-const DETAIL_FALLBACK_CONCURRENCY = 4;
+const DETAIL_FALLBACK_CONCURRENCY = 2;
+const DRAFT_RECOVERY_MAX_ROUNDS = 4;
+const DRAFT_RECOVERY_MAX_ATTEMPTS_PER_ROW = 5;
+const DRAFT_RECOVERY_ROUND_BASE_DELAY_MS = 750;
+const DRAFT_RECOVERY_REQUEST_DELAY_MS = 140;
 let activeFetchAbortController: AbortController | null = null;
 const characterLabelLookupPromises = new Map<string, Promise<string>>();
-
 interface BatchProcessResult {
   active_item_title: string;
   draftResolutionRecords: DraftResolutionRecord[];
   persistencePromise: Promise<void>;
   stored_row_ids: string[];
 }
-
 export async function fetchSelectedSources(): Promise<void> {
   const refreshedState = await refreshCreatorProfilesForFetch();
   const state = refreshedState ?? useAppStore.getState();
@@ -72,11 +72,9 @@ export async function fetchSelectedSources(): Promise<void> {
   const resumeState = await resolveFetchResumeState(jobs);
   const lastFetchAt = new Date().toISOString();
   const jobsToRun = jobs.filter((job) => resumeState.checkpointByJobId.get(job.id)?.status !== "completed");
-
   if (jobs.length === 0) {
     throw new Error("Select at least one source, creator, or character account before fetching.");
   }
-
   if (!resumeState.shouldResume) {
     await clearWorkingSessionData();
     await replaceDownloadQueue([]);
@@ -87,7 +85,6 @@ export async function fetchSelectedSources(): Promise<void> {
     });
     useAppStore.getState().replaceVideoRows([]);
   }
-
   useAppStore.setState({
     phase: "fetching",
     error_message: "",
@@ -104,15 +101,13 @@ export async function fetchSelectedSources(): Promise<void> {
     query: "",
     last_fetch_at: lastFetchAt
   });
-
   const abortController = new AbortController();
   activeFetchAbortController = abortController;
-
   try {
     await runWithConcurrency(jobsToRun, FETCH_CONCURRENCY, (job) =>
       runFetchJob(job, abortController.signal, resumeState.selectionSignature, resumeState.checkpointByJobId.get(job.id) ?? null)
     );
-
+    await recoverUnresolvedDraftRows(abortController.signal);
     useAppStore.setState({
       phase: "ready",
       fetch_progress: {
@@ -132,7 +127,6 @@ export async function fetchSelectedSources(): Promise<void> {
       });
       return;
     }
-
     throw error;
   } finally {
     if (activeFetchAbortController === abortController) {
@@ -141,7 +135,6 @@ export async function fetchSelectedSources(): Promise<void> {
     await cleanupHiddenWorkersAfterFetch();
   }
 }
-
 export async function loadCharacterAccountsIntoState(): Promise<void> {
   try {
     const rows = await collectAllRows("characterProfiles", { label: "Character accounts" }, new AbortController().signal);
@@ -151,7 +144,6 @@ export async function loadCharacterAccountsIntoState(): Promise<void> {
     await cleanupHiddenWorkers();
   }
 }
-
 export async function resolveAndAddCreatorProfile(routeInput: string): Promise<void> {
   try {
     const routeUrl = normalizeCreatorProfileInput(routeInput);
@@ -159,35 +151,29 @@ export async function resolveAndAddCreatorProfile(routeInput: string): Promise<v
       type: "resolve-creator-profile",
       route_url: routeUrl
     });
-
     if (!response.ok) {
       throw new Error(response.error);
     }
-
     const profile = normalizeCreatorProfile((response as BackgroundResponse & { payload?: unknown }).payload, routeUrl);
     if (!profile) {
       throw new Error("Could not resolve a creator profile from that route.");
     }
-
     useAppStore.getState().addCreatorProfile(profile);
   } finally {
     await cleanupHiddenWorkers();
   }
 }
-
 async function refreshCreatorProfilesForFetch() {
   const state = useAppStore.getState();
   const profilesNeedingRefresh = state.creator_profiles.filter((profile) => shouldRefreshCreatorProfile(profile));
   if (profilesNeedingRefresh.length === 0) {
     return state;
   }
-
   const refreshedProfiles = await Promise.all(
     profilesNeedingRefresh.map(async (profile) => {
       if (!profile.permalink) {
         return profile;
       }
-
       try {
         const response = await sendBackgroundRequest<BackgroundResponse>({
           type: "resolve-creator-profile",
@@ -201,13 +187,11 @@ async function refreshCreatorProfilesForFetch() {
       }
     })
   );
-
   const refreshedProfileMap = new Map(refreshedProfiles.map((profile) => [profile.profile_id, profile]));
   const nextProfiles = state.creator_profiles.map((profile) => refreshedProfileMap.get(profile.profile_id) ?? profile);
   useAppStore.getState().setCreatorProfiles(nextProfiles);
   return { ...useAppStore.getState(), creator_profiles: nextProfiles };
 }
-
 async function runFetchJob(
   job: FetchJob,
   signal: AbortSignal,
@@ -218,7 +202,6 @@ async function runFetchJob(
   logger.info("running fetch job", runtimeJob.id);
   markFetchJobRunning(runtimeJob, checkpoint);
   throwIfFetchCanceled(signal);
-
   const fetchedAt = new Date().toISOString();
   const recoveryTasks: Array<Promise<void>> = [];
   const finalCheckpoint = await streamFetchBatches(runtimeJob.source, runtimeJob, signal, checkpoint, selectionSignature, async (rows) => {
@@ -228,11 +211,9 @@ async function runFetchJob(
       : normalizePostRows(runtimeJob.source, rowsWithContext, fetchedAt);
     const inRangeRows = filterRowsByFetchWindow(normalizedRows, runtimeJob.fetch_since_ms, runtimeJob.fetch_until_ms);
     const draftResolutionRecords = buildDraftResolutionRecords(rowsWithContext);
-
     if (inRangeRows.length > 0) {
       useAppStore.getState().upsertVideoRows(stripRawPayloadFromRows(inRangeRows));
     }
-
     const recoverableRows = getRecoverableRows(inRangeRows);
     if (recoverableRows.length > 0) {
       recoveryTasks.push(
@@ -245,7 +226,6 @@ async function runFetchJob(
         })
       );
     }
-
     const persistenceTasks: Array<Promise<void>> = [];
     if (draftResolutionRecords.length > 0) {
       persistenceTasks.push(saveDraftResolutionRecords(draftResolutionRecords));
@@ -253,7 +233,6 @@ async function runFetchJob(
     if (inRangeRows.length > 0) {
       persistenceTasks.push(upsertVideoRows(inRangeRows));
     }
-
     return {
       active_item_title: pickActiveItemTitle(inRangeRows),
       draftResolutionRecords,
@@ -261,10 +240,8 @@ async function runFetchJob(
       stored_row_ids: inRangeRows.map((row) => row.row_id)
     };
   });
-
   await Promise.all(recoveryTasks);
   throwIfFetchCanceled(signal);
-
   await saveFetchJobCheckpoint(
     finalizeFetchJobCheckpoint(runtimeJob, selectionSignature, finalCheckpoint ?? checkpoint, {
       fetched_rows: useAppStore.getState().fetch_progress.job_progress.find((entry) => entry.job_id === runtimeJob.id)?.fetched_rows ?? 0,
@@ -272,26 +249,21 @@ async function runFetchJob(
       status: "completed"
     })
   );
-
   incrementCompletedJobs(runtimeJob);
 }
-
 async function resolveFetchJobLabel(job: FetchJob): Promise<FetchJob> {
   const currentLabel = resolveCharacterLabelFromJobText(job);
   if (!currentLabel || !currentLabel.startsWith("ch_")) {
     return job;
   }
-
   const resolvedDisplayName = await resolveCharacterDisplayNameById(currentLabel);
   if (!resolvedDisplayName) {
     return job;
   }
-
   const nextLabel = job.label.replace(currentLabel, resolvedDisplayName).trim();
   if (!nextLabel || nextLabel === job.label) {
     return job;
   }
-
   useAppStore.setState((state) => ({
     fetch_progress: {
       ...state.fetch_progress,
@@ -300,59 +272,47 @@ async function resolveFetchJobLabel(job: FetchJob): Promise<FetchJob> {
       )
     }
   }));
-
   return {
     ...job,
     label: nextLabel,
     character_display_name: resolvedDisplayName
   };
 }
-
 function resolveCharacterLabelFromJobText(job: FetchJob): string {
   const fromDisplay = (job.character_display_name ?? "").trim();
   if (fromDisplay && !isGenericCharacterPlaceholder(fromDisplay)) {
     return fromDisplay;
   }
-
   const fromLabel = job.label.replace(/\s+(drafts|appearances|published|cameos)$/i, "").trim();
   if (fromLabel && !isGenericCharacterPlaceholder(fromLabel)) {
     return fromLabel;
   }
-
   const fromCharacterId = (job.character_id ?? "").trim();
   if (fromCharacterId) {
     return fromCharacterId;
   }
-
   const fromJobId = extractCharacterIdFromJobId(job.id);
   return fromJobId;
 }
-
 function isGenericCharacterPlaceholder(value: string): boolean {
   return /^character$/i.test(value.trim());
 }
-
 function extractCharacterIdFromJobId(jobId: string): string {
   const match = jobId.match(/(ch_[A-Za-z0-9]+)/);
   return match?.[1] ?? "";
 }
-
 async function resolveCharacterDisplayNameById(characterId: string): Promise<string> {
   const normalizedCharacterId = characterId.trim();
   if (!normalizedCharacterId || !normalizedCharacterId.startsWith("ch_")) {
     return "";
   }
-
   if (!characterLabelLookupPromises.has(normalizedCharacterId)) {
     characterLabelLookupPromises.set(normalizedCharacterId, lookupCharacterDisplayName(normalizedCharacterId));
   }
-
   return characterLabelLookupPromises.get(normalizedCharacterId) ?? Promise.resolve("");
 }
-
 async function lookupCharacterDisplayName(characterId: string): Promise<string> {
   const routeUrl = `${SORA_PROFILE_ORIGIN}/profile/${encodeURIComponent(characterId)}`;
-
   try {
     const response = await sendBackgroundRequest<BackgroundResponse>({
       type: "resolve-creator-profile",
@@ -368,13 +328,11 @@ async function lookupCharacterDisplayName(characterId: string): Promise<string> 
             if (existingIndex === -1) {
               return { creator_profiles: [...state.creator_profiles, profile] };
             }
-
             const nextProfiles = [...state.creator_profiles];
             nextProfiles[existingIndex] = { ...nextProfiles[existingIndex], ...profile };
             return { creator_profiles: nextProfiles };
           });
         }
-
         return label;
       }
     }
@@ -383,7 +341,6 @@ async function lookupCharacterDisplayName(characterId: string): Promise<string> 
       logger.warn("character label lookup failed", error);
     }
   }
-
   try {
     const probe = await sendBackgroundRequest<FetchBatchResponse>({
       type: "fetch-batch",
@@ -395,7 +352,6 @@ async function lookupCharacterDisplayName(characterId: string): Promise<string> 
     if (!probe.ok || !probe.payload.rows.length) {
       return "";
     }
-
     const name = resolveCharacterDisplayFromRows(probe.payload.rows, characterId);
     return name;
   } catch (error) {
@@ -403,7 +359,6 @@ async function lookupCharacterDisplayName(characterId: string): Promise<string> 
     return "";
   }
 }
-
 function resolveCharacterDisplayFromRows(rows: unknown[], characterId: string): string {
   for (const row of rows) {
     const names = getCharacterNames(row);
@@ -411,7 +366,6 @@ function resolveCharacterDisplayFromRows(rows: unknown[], characterId: string): 
       const preferred = names.find((candidate) => candidate && !candidate.startsWith("ch_"));
       return (preferred || names[0] || "").trim();
     }
-
     if (!row || typeof row !== "object") {
       continue;
     }
@@ -448,15 +402,12 @@ function resolveCharacterDisplayFromRows(rows: unknown[], characterId: string): 
       }
     }
   }
-
   return "";
 }
-
 function applyFetchJobRowContext(rows: unknown[], job: FetchJob): unknown[] {
   if (!job.character_id || (job.source !== "characterAccountDrafts" && job.source !== "characterAccountAppearances")) {
     return rows;
   }
-
   const characterLabel = getCharacterLabelFromJob(job.character_display_name ?? "", job.label);
   return rows.map((row) => {
     if (!row || typeof row !== "object") {
@@ -471,7 +422,6 @@ function applyFetchJobRowContext(rows: unknown[], job: FetchJob): unknown[] {
     };
   });
 }
-
 function getCharacterLabelFromJob(displayName: string, jobLabel: string): string {
   const direct = displayName.trim();
   if (direct) {
@@ -480,7 +430,6 @@ function getCharacterLabelFromJob(displayName: string, jobLabel: string): string
   const fromLabel = jobLabel.replace(/\s+(drafts|appearances)$/i, "").trim();
   return fromLabel.startsWith("ch_") ? "" : fromLabel;
 }
-
 async function collectAllRows(source: LowLevelSourceType, job: FetchJob | { label: string }, signal: AbortSignal): Promise<unknown[]> {
   const collectedRows: unknown[] = [];
   await streamFetchBatches(source, job, signal, null, "", async (rows) => {
@@ -492,10 +441,8 @@ async function collectAllRows(source: LowLevelSourceType, job: FetchJob | { labe
       stored_row_ids: []
     };
   });
-
   return collectedRows;
 }
-
 async function streamFetchBatches(
   source: LowLevelSourceType,
   job: FetchJob | { label: string },
@@ -512,11 +459,11 @@ async function streamFetchBatches(
   let streamedRowCount = checkpoint?.fetched_rows ?? 0;
   let processedBatches = checkpoint?.processed_batches ?? 0;
   const seenSessionRowIds = new Set(useAppStore.getState().video_rows.map((row) => row.row_id));
+  const seenJobRowIds = new Set<string>();
   let consecutiveNoGrowthPages = 0;
   let previousPageSignature = "";
   let consecutiveRepeatedPageSignatures = 0;
   let latestCheckpoint = checkpoint;
-
   while (!done) {
     throwIfFetchCanceled(signal);
     const requestCursor = cursor;
@@ -537,7 +484,6 @@ async function streamFetchBatches(
       draft_resolution_entries: [...draftResolutionMap.entries()].map(([generation_id, video_id]) => ({ generation_id, video_id }))
     });
     throwIfFetchCanceled(signal);
-
     const batchRows = response.payload.rows;
     endpointKey = response.payload.endpoint_key;
     cursor = response.payload.next_cursor;
@@ -546,11 +492,11 @@ async function streamFetchBatches(
       ? await onBatch(batchRows)
       : { active_item_title: "", draftResolutionRecords: [], persistencePromise: Promise.resolve(), stored_row_ids: [] };
     throwIfFetchCanceled(signal);
-
     const newStoredRowIds = getNewStoredRowIds(batchResult.stored_row_ids, seenSessionRowIds);
-    streamedRowCount += newStoredRowIds.length;
+    const newJobRowIds = getNewStoredRowIds(batchResult.stored_row_ids, seenJobRowIds);
+    streamedRowCount += newJobRowIds.length;
     processedBatches += batchRows.length > 0 ? 1 : 0;
-    consecutiveNoGrowthPages = newStoredRowIds.length === 0 ? consecutiveNoGrowthPages + 1 : 0;
+    consecutiveNoGrowthPages = newJobRowIds.length === 0 ? consecutiveNoGrowthPages + 1 : 0;
     const currentPageSignature = getPageSignature(response.payload.endpoint_key, response.payload.row_keys);
     if (newStoredRowIds.length === 0 && currentPageSignature) {
       consecutiveRepeatedPageSignatures = currentPageSignature === previousPageSignature
@@ -563,24 +509,20 @@ async function streamFetchBatches(
     updateFetchBatchProgress(
       job,
       streamedRowCount,
-      newStoredRowIds.length,
+      newJobRowIds.length,
       processedBatches,
       batchResult.active_item_title,
       endpointKey,
       batchRows
     );
-
     for (const record of batchResult.draftResolutionRecords) {
       draftResolutionMap.set(record.generation_id, record.video_id);
     }
-
     await batchResult.persistencePromise;
-
     done =
       response.payload.done ||
       shouldStopForStalledCursor(consecutiveRepeatedPageSignatures, source) ||
       shouldStopForNoGrowthPages(consecutiveNoGrowthPages, batchRows.length, source);
-
     if ("id" in job) {
       latestCheckpoint = buildFetchJobCheckpoint(job, selectionSignature, latestCheckpoint, {
         cursor,
@@ -594,26 +536,37 @@ async function streamFetchBatches(
       await saveFetchJobCheckpoint(latestCheckpoint);
     }
   }
-
   return latestCheckpoint;
 }
-
-async function recoverMissingVideoIds(rows: VideoRow[], signal: AbortSignal): Promise<VideoRow[]> {
+async function recoverMissingVideoIds(
+  rows: VideoRow[],
+  signal: AbortSignal,
+  attemptByRowId: Map<string, number> = new Map()
+): Promise<VideoRow[]> {
   const pendingRows = dedupeRowsById(rows);
   if (pendingRows.length === 0) {
     return [];
   }
-
   const recoveredRows: VideoRow[] = [];
   let currentIndex = 0;
-
   async function worker() {
     while (currentIndex < pendingRows.length) {
       throwIfFetchCanceled(signal);
       const row = pendingRows[currentIndex];
       currentIndex += 1;
-
+      const attempts = (attemptByRowId.get(row.row_id) ?? 0) + 1;
+      attemptByRowId.set(row.row_id, attempts);
+      await sleepWithJitter(DRAFT_RECOVERY_REQUEST_DELAY_MS, signal);
       try {
+        if (row.source_bucket === "drafts" && row.video_id && !row.playback_url) {
+          recoveredRows.push({
+            ...row,
+            playback_url: buildDraftPlaybackUrl(row.video_id),
+            is_downloadable: true,
+            skip_reason: row.skip_reason === "unresolved_draft_video_id" ? "" : row.skip_reason
+          });
+          continue;
+        }
         const generationId = extractGenerationIdFromRow(row);
         const shouldRecoverDraftReference =
           Boolean(generationId) &&
@@ -625,7 +578,6 @@ async function recoverMissingVideoIds(rows: VideoRow[], signal: AbortSignal): Pr
             detail_url: row.detail_url || undefined,
             row_payload: safeParseRawPayload(row.raw_payload_json)
           });
-
           const resolvedVideoId = draftReferenceResponse.payload.video_id || row.video_id;
           const resolvedThumbnailUrl = draftReferenceResponse.payload.thumbnail_url || row.thumbnail_url;
           const resolvedDetailUrl = draftReferenceResponse.payload.share_url || row.detail_url;
@@ -646,12 +598,12 @@ async function recoverMissingVideoIds(rows: VideoRow[], signal: AbortSignal): Pr
               thumbnail_url: resolvedThumbnailUrl,
               detail_url: resolvedDetailUrl,
               estimated_size_bytes: resolvedEstimatedSize,
+              playback_url: row.playback_url || buildDraftPlaybackUrl(resolvedVideoId),
               is_downloadable: true,
               skip_reason: ""
             });
             continue;
           }
-
           if (draftReferenceResponse.payload.skip_reason && draftReferenceResponse.payload.skip_reason !== row.skip_reason) {
             recoveredRows.push({
               ...row,
@@ -660,11 +612,9 @@ async function recoverMissingVideoIds(rows: VideoRow[], signal: AbortSignal): Pr
             continue;
           }
         }
-
         if (!row.detail_url) {
           continue;
         }
-
         const response = await sendBackgroundRequest<FetchDetailHtmlResponse>({
           type: "fetch-detail-html",
           detail_url: row.detail_url
@@ -673,10 +623,10 @@ async function recoverMissingVideoIds(rows: VideoRow[], signal: AbortSignal): Pr
         if (!videoId) {
           continue;
         }
-
         recoveredRows.push({
           ...row,
           video_id: videoId,
+          playback_url: row.playback_url || buildDraftPlaybackUrl(videoId),
           is_downloadable: true,
           skip_reason: ""
         });
@@ -687,30 +637,57 @@ async function recoverMissingVideoIds(rows: VideoRow[], signal: AbortSignal): Pr
       }
     }
   }
-
   await Promise.all(Array.from({ length: Math.min(DETAIL_FALLBACK_CONCURRENCY, pendingRows.length) }, () => worker()));
   return recoveredRows;
 }
-
+async function recoverUnresolvedDraftRows(signal: AbortSignal): Promise<void> {
+  const attemptByRowId = new Map<string, number>();
+  for (let round = 0; round < DRAFT_RECOVERY_MAX_ROUNDS; round += 1) {
+    throwIfFetchCanceled(signal);
+    const recoverableRows = getRecoverableRows(useAppStore.getState().video_rows).filter(
+      (row) => (attemptByRowId.get(row.row_id) ?? 0) < DRAFT_RECOVERY_MAX_ATTEMPTS_PER_ROW
+    );
+    if (recoverableRows.length === 0) {
+      return;
+    }
+    const recoveredRows = await recoverMissingVideoIds(recoverableRows, signal, attemptByRowId);
+    if (recoveredRows.length > 0) {
+      await upsertVideoRows(recoveredRows);
+      useAppStore.getState().upsertVideoRows(stripRawPayloadFromRows(recoveredRows));
+    }
+    const hasPendingRecoverableRows = getRecoverableRows(useAppStore.getState().video_rows).some(
+      (row) => (attemptByRowId.get(row.row_id) ?? 0) < DRAFT_RECOVERY_MAX_ATTEMPTS_PER_ROW
+    );
+    if (!hasPendingRecoverableRows || round >= DRAFT_RECOVERY_MAX_ROUNDS - 1) {
+      return;
+    }
+    const delayMs = DRAFT_RECOVERY_ROUND_BASE_DELAY_MS * (round + 1);
+    await sleepWithJitter(delayMs, signal);
+  }
+}
 function getRecoverableRows(rows: VideoRow[]): VideoRow[] {
   return rows.filter((row) => {
     const generationId = extractGenerationIdFromRow(row);
     const hasRecoveryHandle = Boolean(row.detail_url) || Boolean(generationId);
-    if (!hasRecoveryHandle) {
+    const needsPlaybackRecovery = row.source_bucket === "drafts" && Boolean(row.video_id) && !row.playback_url;
+    if (!hasRecoveryHandle && !needsPlaybackRecovery) {
       return false;
     }
     const needsVideoIdRecovery =
       !row.video_id &&
       (row.skip_reason === "missing_video_id" || row.skip_reason === "unresolved_draft_video_id");
     const needsThumbnailRecovery = shouldHydrateDraftThumbnail(row) && Boolean(generationId);
-    return needsVideoIdRecovery || needsThumbnailRecovery;
+    return needsVideoIdRecovery || needsThumbnailRecovery || needsPlaybackRecovery;
   });
 }
-
 function shouldHydrateDraftThumbnail(row: VideoRow): boolean {
   return row.source_bucket === "drafts" && !row.thumbnail_url;
 }
-
+function buildDraftPlaybackUrl(videoId: string): string {
+  return /^s_[A-Za-z0-9_-]+$/.test(videoId)
+    ? `https://soravdl.com/api/proxy/video/${encodeURIComponent(videoId)}`
+    : "";
+}
 function pickActiveItemTitle(rows: VideoRow[]): string {
   for (const row of rows) {
     const candidate = row.title?.trim();
@@ -722,10 +699,8 @@ function pickActiveItemTitle(rows: VideoRow[]): string {
     }
     return candidate;
   }
-
   return "";
 }
-
 function dedupeRowsById(rows: VideoRow[]): VideoRow[] {
   const rowMap = new Map<string, VideoRow>();
   for (const row of rows) {
@@ -733,7 +708,6 @@ function dedupeRowsById(rows: VideoRow[]): VideoRow[] {
   }
   return [...rowMap.values()];
 }
-
 function safeParseRawPayload(rawPayloadJson: string): unknown {
   if (!rawPayloadJson) {
     return null;
@@ -744,16 +718,14 @@ function safeParseRawPayload(rawPayloadJson: string): unknown {
     return null;
   }
 }
-
 function filterRowsByFetchWindow(rows: VideoRow[], sinceMs?: number | null, untilMs?: number | null): VideoRow[] {
   if (sinceMs == null && untilMs == null) {
     return rows;
   }
-
   return rows.filter((row) => {
     const timestampMs = parseRowTimestampMs(row);
     if (timestampMs == null) {
-      return false;
+      return true;
     }
     if (sinceMs != null && timestampMs < sinceMs) {
       return false;
@@ -764,17 +736,14 @@ function filterRowsByFetchWindow(rows: VideoRow[], sinceMs?: number | null, unti
     return true;
   });
 }
-
 function parseRowTimestampMs(row: VideoRow): number | null {
   const parsed = Date.parse(row.published_at || row.created_at || row.fetched_at || "");
   return Number.isFinite(parsed) ? parsed : null;
 }
-
 function isExpectedCharacterLookupError(error: unknown): boolean {
   const message = getErrorMessage(error).toLowerCase();
   return message.includes("status 404") || message.includes("failed to fetch");
 }
-
 function isExpectedDetailFallbackError(error: unknown): boolean {
   const message = getErrorMessage(error).toLowerCase();
   return (
@@ -785,24 +754,36 @@ function isExpectedDetailFallbackError(error: unknown): boolean {
     message.includes("could not establish connection. receiving end does not exist")
   );
 }
-
 function getErrorMessage(error: unknown): string {
   if (error instanceof Error) {
     return error.message;
   }
   return String(error ?? "");
 }
-
+async function sleepWithJitter(durationMs: number, signal: AbortSignal): Promise<void> {
+  const jitterMs = Math.floor(Math.random() * 120);
+  await new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, durationMs + jitterMs);
+    if (!signal.aborted) {
+      signal.addEventListener(
+        "abort",
+        () => {
+          clearTimeout(timer);
+          resolve();
+        },
+        { once: true }
+      );
+    }
+  });
+}
 function extractGenerationIdFromRow(row: VideoRow): string {
   const fromDetail = row.detail_url.match(/gen_[A-Za-z0-9_-]+/i)?.[0] ?? "";
   if (fromDetail) {
     return fromDetail;
   }
-
   const fromRaw = row.raw_payload_json.match(/gen_[A-Za-z0-9_-]+/i)?.[0] ?? "";
   return fromRaw;
 }
-
 /**
  * Requests a cooperative stop for the currently running fetch. The current
  * in-flight batch is allowed to finish, after which the fetch settles cleanly.
@@ -811,13 +792,11 @@ export function cancelActiveFetch(): void {
   if (!activeFetchAbortController || activeFetchAbortController.signal.aborted) {
     return;
   }
-
   activeFetchAbortController.abort();
   useAppStore.getState().setFetchProgress({
     active_label: "Stopping after current page..."
   });
 }
-
 function buildDraftResolutionRecords(rows: unknown[]): DraftResolutionRecord[] {
   return rows.flatMap((row) => {
     if (!row || typeof row !== "object") {
@@ -840,7 +819,6 @@ function buildDraftResolutionRecords(rows: unknown[]): DraftResolutionRecord[] {
     return [{ generation_id: generationId, video_id: videoId }];
   });
 }
-
 function incrementCompletedJobs(job: FetchJob): void {
   useAppStore.setState((state) => ({
     fetch_progress: buildNextFetchProgressState(
@@ -856,7 +834,6 @@ function incrementCompletedJobs(job: FetchJob): void {
     )
   }));
 }
-
 function getPageBudgetForSource(source: LowLevelSourceType): number {
   if (
     source === "creatorPublished" ||
@@ -866,10 +843,8 @@ function getPageBudgetForSource(source: LowLevelSourceType): number {
   ) {
     return HIGH_VOLUME_SOURCE_PAGE_BUDGET;
   }
-
   return FETCH_PAGE_BUDGET;
 }
-
 function markFetchJobRunning(job: FetchJob, checkpoint: FetchJobCheckpoint | null): void {
   useAppStore.setState((state) => ({
     fetch_progress: buildNextFetchProgressState(
@@ -889,7 +864,6 @@ function markFetchJobRunning(job: FetchJob, checkpoint: FetchJobCheckpoint | nul
     )
   }));
 }
-
 function updateFetchBatchProgress(
   job: FetchJob | { label: string },
   streamedRowCount: number,
@@ -901,7 +875,6 @@ function updateFetchBatchProgress(
 ): void {
   const debugSchemaKeys = extractSchemaKeys(batchRows);
   const debugSampleJson = buildDebugSampleJson(batchRows);
-
   useAppStore.setState((state) => {
     if (!("id" in job)) {
       return {
@@ -913,7 +886,6 @@ function updateFetchBatchProgress(
         }
       };
     }
-
     const nextJobProgress = state.fetch_progress.job_progress.map((entry) =>
       entry.job_id === job.id
         ? {
@@ -928,7 +900,6 @@ function updateFetchBatchProgress(
           }
         : entry
     );
-
     return {
       fetch_progress: buildNextFetchProgressState(state.fetch_progress, nextJobProgress, {
         processed_batches: state.fetch_progress.processed_batches + 1,
@@ -937,22 +908,18 @@ function updateFetchBatchProgress(
     };
   });
 }
-
 function extractSchemaKeys(rows: unknown[]): string[] {
   const firstRecord = rows.find((row): row is Record<string, unknown> => Boolean(row) && typeof row === "object" && !Array.isArray(row));
   if (!firstRecord) {
     return [];
   }
-
   return Object.keys(firstRecord).sort();
 }
-
 function buildDebugSampleJson(rows: unknown[]): string {
   const firstRow = rows[0];
   if (firstRow === undefined) {
     return "";
   }
-
   try {
     const rawJson = JSON.stringify(firstRow, null, 2);
     return rawJson.length <= 4000 ? rawJson : `${rawJson.slice(0, 4000)}\n...truncated`;
@@ -960,16 +927,13 @@ function buildDebugSampleJson(rows: unknown[]): string {
     return "";
   }
 }
-
 async function resolveFetchResumeState(jobs: FetchJob[]): Promise<FetchResumeState> {
   const checkpoints = await loadFetchJobCheckpoints();
   return buildFetchResumeStateFromCheckpoints(jobs, checkpoints);
 }
-
 async function cleanupHiddenWorkersAfterFetch(): Promise<void> {
   await cleanupHiddenWorkers();
 }
-
 async function cleanupHiddenWorkers(): Promise<void> {
   try {
     await sendBackgroundRequest<BackgroundResponse>({ type: "cleanup-hidden-workers" });
@@ -977,7 +941,6 @@ async function cleanupHiddenWorkers(): Promise<void> {
     logger.warn("hidden worker cleanup request failed", error);
   }
 }
-
 function buildFetchJobCheckpoint(
   job: FetchJob,
   selectionSignature: string,

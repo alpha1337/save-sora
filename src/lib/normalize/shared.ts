@@ -720,9 +720,9 @@ export function getRowTitle(value: unknown, fallbackId: string): string {
   const title = compactWhitespace(
     pickFirstString([
       getDiscoveryPhrase(value),
-      getPrompt(value),
       getCaption(value),
-      getDescription(value)
+      getDescription(value),
+      getPrompt(value)
     ])
   );
   return sanitizeFileNamePart(title, title || fallbackTitle);

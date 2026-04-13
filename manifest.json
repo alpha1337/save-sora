@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Save Sora: Sora Bulk Downloader",
-  "version": "2.0.144",
+  "version": "2.0.145",
   "description": "Bulk download Sora videos with a fullscreen library, CSV export, and cross-platform organizer archive output.",
   "icons": {
     "16": "assets/icon-16.png",

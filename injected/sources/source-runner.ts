@@ -12,6 +12,7 @@ import {
   getEstimatedTotalCount,
   getPostListingRows,
   getRawRowKey,
+  isRetriableSoraStatus,
   getUsernameFromRouteUrl,
   resolveSharedVideoIdFromValue
 } from "../lib/shared";
@@ -19,15 +20,14 @@ import {
   filterRowsByTimeWindow,
   reachedOlderThanSinceBoundary
 } from "./fetch-batch-filters";
-
 const APPEARANCE_FEED_PAGE_LIMIT = 100;
-
+const DRAFT_LOOKUP_LIMIT = "100";
+const DRAFT_SHARE_POST_RETRY_DELAYS_MS = [500, 1200, 2500];
 interface FetchEndpointCandidate {
   key: string;
   optional?: boolean;
   url: string;
 }
-
 /**
  * Executes typed background requests from inside the signed-in Sora page.
  */
@@ -35,19 +35,15 @@ export async function runSourceRequest(request: BackgroundRequest): Promise<unkn
   if (request.type === "fetch-detail-html") {
     return { detail_url: request.detail_url, html: await fetchText(request.detail_url) };
   }
-
   if (request.type === "resolve-viewer-identity") {
     return resolveViewerIdentity();
   }
-
   if (request.type === "resolve-draft-reference") {
     return resolveDraftReference(request);
   }
-
   if (request.type === "resolve-creator-profile") {
     return resolveCreatorProfile(request.route_url);
   }
-
   if (request.type === "fetch-character-accounts") {
     const viewerUserId = await deriveViewerUserId();
     const url = new URL(`/backend/project_y/profile/${encodeURIComponent(viewerUserId)}/characters`, SORA_ORIGIN);
@@ -61,14 +57,11 @@ export async function runSourceRequest(request: BackgroundRequest): Promise<unkn
       next_cursor: getNextCursor(payload)
     };
   }
-
   if (request.type === "fetch-batch") {
     return runFetchBatch(request);
   }
-
   throw new Error(`Unsupported injected request type: ${String((request as { type?: string }).type)}`);
 }
-
 async function runFetchBatch(request: FetchBatchRequest) {
   let cursor = request.cursor ?? null;
   let previousCursor: string | null = null;
@@ -77,7 +70,6 @@ async function runFetchBatch(request: FetchBatchRequest) {
   let endpointKey: string | null = request.endpoint_key ?? null;
   const rows: unknown[] = [];
   const rowKeys: string[] = [];
-
   for (let pageIndex = 0; pageIndex < (request.page_budget ?? 1); pageIndex += 1) {
     const batchPayload = await fetchBatchPayload(request, cursor, offset, endpointKey);
     const payload = batchPayload.payload;
@@ -86,12 +78,10 @@ async function runFetchBatch(request: FetchBatchRequest) {
     const enrichedRows = isDraftSource(request.source)
       ? enrichDraftRows(inRangeRows, request.draft_resolution_entries ?? [])
       : inRangeRows;
-
     rows.push(...enrichedRows);
     rowKeys.push(...enrichedRows.map((row) => getRawRowKey(row)).filter(Boolean));
     endpointKey = batchPayload.endpointKey;
     estimatedTotalCount = Math.max(estimatedTotalCount, getEstimatedTotalCount(payload, rows.length));
-
     const nextCursor = getNextCursorForRows(
       payload,
       pageRows,
@@ -107,11 +97,9 @@ async function runFetchBatch(request: FetchBatchRequest) {
     const isDone =
       shouldFinishFetchPage(request.source, pageRows.length, nextCursor, hasMoreRows) ||
       reachedOlderThanSinceBoundary(pageRows, request.since_ms);
-
     previousCursor = cursor;
     cursor = nextCursor;
     offset = nextOffset;
-
     if (isDone) {
       return {
         rows,
@@ -124,7 +112,6 @@ async function runFetchBatch(request: FetchBatchRequest) {
       };
     }
   }
-
   return {
     rows,
     row_keys: rowKeys,
@@ -135,8 +122,6 @@ async function runFetchBatch(request: FetchBatchRequest) {
     done: false
   };
 }
-
-
 async function fetchBatchPayload(
   request: FetchBatchRequest,
   cursor: string | null,
@@ -146,22 +131,18 @@ async function fetchBatchPayload(
   const limit = String(getFetchLimitForSource(request.source, request.limit));
   const endpointCandidates = await buildFetchEndpointCandidates(request, cursor, offset, limit);
   const matchedCandidate = endpointKey ? endpointCandidates.find((candidate) => candidate.key === endpointKey) ?? null : null;
-
   if (matchedCandidate) {
     return {
       endpointKey: matchedCandidate.key,
       payload: await fetchCandidatePayload(matchedCandidate)
     };
   }
-
   return selectBestBatchPayload(endpointCandidates, request, cursor);
 }
-
 async function fetchCandidatePayload(candidate: FetchEndpointCandidate): Promise<unknown> {
   if (!candidate.optional) {
     return fetchJson(candidate.url);
   }
-
   try {
     return await fetchJson(candidate.url);
   } catch (error) {
@@ -172,7 +153,6 @@ async function fetchCandidatePayload(candidate: FetchEndpointCandidate): Promise
     throw error;
   }
 }
-
 async function selectBestBatchPayload(
   candidates: FetchEndpointCandidate[],
   request: FetchBatchRequest,
@@ -183,7 +163,6 @@ async function selectBestBatchPayload(
   let bestScore = -1;
   let bestPaginatedResult: { endpointKey: string | null; payload: unknown } | null = null;
   let bestPaginatedScore = -1;
-
   for (const candidate of candidates) {
     const payload = await fetchCandidatePayload(candidate);
     const rows = getPostListingRows(payload);
@@ -195,31 +174,25 @@ async function selectBestBatchPayload(
     );
     const score = rows.length;
     const result = { endpointKey: candidate.key, payload };
-
     if (!firstSuccessfulResult) {
       firstSuccessfulResult = result;
     }
-
     if (score > bestScore) {
       bestScore = score;
       bestResult = result;
     }
-
     if (nextCursor && score > 0 && score > bestPaginatedScore) {
       bestPaginatedScore = score;
       bestPaginatedResult = result;
     }
   }
-
   return bestPaginatedResult ?? bestResult ?? firstSuccessfulResult ?? { endpointKey: candidates[0]?.key ?? null, payload: { items: [] } };
 }
-
 async function resolveCreatorProfile(routeUrl: string) {
   const username = getUsernameFromRouteUrl(routeUrl);
   if (!username) {
     return null;
   }
-
   const payload = (await fetchJson(`/backend/project_y/profile/username/${encodeURIComponent(username)}`)) as Record<string, unknown>;
   return {
     ...payload,
@@ -232,12 +205,10 @@ async function resolveCreatorProfile(routeUrl: string) {
           : `${SORA_ORIGIN}/profile/${encodeURIComponent(username)}`
   };
 }
-
 async function resolveViewerIdentity() {
   const viewerUserId = await deriveViewerUserId();
   let username = "";
   let displayName = "";
-
   try {
     const payload = (await fetchJson(`/backend/project_y/profile/${encodeURIComponent(viewerUserId)}`)) as Record<string, unknown>;
     username = pickFirstString([payload.username, payload.user_name, payload.userName]);
@@ -245,7 +216,6 @@ async function resolveViewerIdentity() {
   } catch (_error) {
     // fall through to feed probing
   }
-
   if (!username) {
     try {
       const feedPayload = await fetchJson(buildUrl("/backend/project_y/profile_feed/me", { limit: "1", cut: "nf2" }).toString());
@@ -264,24 +234,20 @@ async function resolveViewerIdentity() {
       // keep empty fallback values
     }
   }
-
   return {
     user_id: viewerUserId,
     username,
     display_name: displayName
   };
 }
-
 async function resolveCreatorId(explicitCreatorId: string, routeUrl: string, creatorUsername: string): Promise<string> {
   if (explicitCreatorId) {
     return explicitCreatorId;
   }
-
   const username = creatorUsername || getUsernameFromRouteUrl(routeUrl);
   if (!username) {
     throw new Error("Creator fetch requires a user id or creator route.");
   }
-
   const payload = (await fetchJson(`/backend/project_y/profile/username/${encodeURIComponent(username)}`)) as Record<string, unknown>;
   const resolvedId = pickFirstString([payload.user_id, payload.userId, username]);
   if (!resolvedId) {
@@ -289,7 +255,6 @@ async function resolveCreatorId(explicitCreatorId: string, routeUrl: string, cre
   }
   return resolvedId;
 }
-
 async function resolveCharacterAccountId(
   explicitCharacterId: string,
   routeUrl: string,
@@ -299,12 +264,10 @@ async function resolveCharacterAccountId(
   if (trimmedCharacterId.startsWith("ch_")) {
     return trimmedCharacterId;
   }
-
   const username = creatorUsername || getUsernameFromRouteUrl(routeUrl);
   if (!username) {
     return trimmedCharacterId;
   }
-
   try {
     const payload = (await fetchJson(`/backend/project_y/profile/username/${encodeURIComponent(username)}`)) as Record<string, unknown>;
     const resolvedId = pickFirstString([
@@ -320,7 +283,6 @@ async function resolveCharacterAccountId(
     return trimmedCharacterId;
   }
 }
-
 function enrichDraftRows(
   rows: unknown[],
   knownResolutionEntries: Array<{ generation_id: string; video_id: string }>
@@ -335,24 +297,20 @@ function enrichDraftRows(
     if (!generationId) {
       continue;
     }
-
     const cachedVideoId = knownResolutionMap.get(generationId);
     if (cachedVideoId) {
       record.resolved_video_id = cachedVideoId;
       record.resolved_share_url = `${SORA_ORIGIN}/p/${cachedVideoId}`;
       continue;
     }
-
     const directVideoId = resolveExistingDraftVideoId(record);
     if (directVideoId) {
       record.resolved_video_id = directVideoId;
       record.resolved_share_url = `${SORA_ORIGIN}/p/${directVideoId}`;
     }
   }
-
   return rows;
 }
-
 async function resolveDraftReference(request: { generation_id: string; detail_url?: string; row_payload?: unknown }) {
   const rowPayload = request.row_payload && typeof request.row_payload === "object"
     ? request.row_payload as Record<string, unknown>
@@ -362,7 +320,6 @@ async function resolveDraftReference(request: { generation_id: string; detail_ur
     generation_id: rowPayload.generation_id ?? rowPayload.generationId ?? request.generation_id,
     detail_url: rowPayload.detail_url ?? rowPayload.detailUrl ?? request.detail_url
   };
-
   if (shouldSkipDraftRow(workingRow)) {
     return {
       generation_id: request.generation_id,
@@ -373,7 +330,6 @@ async function resolveDraftReference(request: { generation_id: string; detail_ur
       skip_reason: classifyDraftSkipReason(workingRow)
     };
   }
-
   const createdReference = await createSharedDraftReference(workingRow, request.generation_id).catch(() => null);
   return {
     generation_id: request.generation_id,
@@ -384,7 +340,6 @@ async function resolveDraftReference(request: { generation_id: string; detail_ur
     skip_reason: createdReference?.video_id ? "" : "unresolved_draft_video_id"
   };
 }
-
 async function buildFetchEndpointCandidates(
   request: FetchBatchRequest,
   cursor: string | null,
@@ -494,10 +449,8 @@ async function buildFetchEndpointCandidates(
       url: buildUrl(`/backend/project_y/profile_feed/${encodeURIComponent(creatorId)}`, { limit, cut: "appearances", cursor }).toString()
     }];
   }
-
   throw new Error(`Unsupported fetch source: ${request.source}`);
 }
-
 async function createSharedDraftReference(row: Record<string, unknown>, generationId: string) {
   const existingVideoId = resolveExistingDraftVideoId(row);
   if (existingVideoId) {
@@ -510,11 +463,28 @@ async function createSharedDraftReference(row: Record<string, unknown>, generati
       thumbnail_url: metadata.thumbnail_url
     };
   }
-
   if (shouldSkipDraftRow(row)) {
     return null;
   }
-
+  const detailUrl = resolveDraftDetailUrl(row, generationId);
+  if (detailUrl) {
+    const detailHtml = await fetchText(detailUrl).catch(() => "");
+    const recoveredId = extractSharedVideoId(detailHtml);
+    if (recoveredId) {
+      const metadata = await resolveResolvedDraftMetadata(recoveredId, row);
+      return {
+        video_id: recoveredId,
+        share_url: `${SORA_ORIGIN}/p/${recoveredId}`,
+        download_url: buildNoWatermarkProxyUrl(recoveredId),
+        estimated_size_bytes: metadata.estimated_size_bytes,
+        thumbnail_url: metadata.thumbnail_url
+      };
+    }
+  }
+  const fromListingLookup = await resolveDraftReferenceFromListings(generationId, row);
+  if (fromListingLookup) {
+    return fromListingLookup;
+  }
   try {
     const response = (await fetchJsonWithMethod("/backend/project_y/post", "POST", {
       attachments_to_create: [{ generation_id: generationId, kind: "sora" }],
@@ -532,49 +502,82 @@ async function createSharedDraftReference(row: Record<string, unknown>, generati
         thumbnail_url: metadata.thumbnail_url
       };
     }
-  } catch (error) {
-    void error;
-    // Fall through to detail/feed recovery. A failed create request should not abort draft fetching.
+  } catch (_error) {
+    // Fall through to listing recovery.
   }
-
-  const detailUrl = resolveDraftDetailUrl(row, generationId);
-  if (detailUrl) {
-    const detailHtml = await fetchText(detailUrl).catch(() => "");
-    const recoveredId = extractSharedVideoId(detailHtml);
-    if (recoveredId) {
-      const metadata = await resolveResolvedDraftMetadata(recoveredId, row);
-      return {
-        video_id: recoveredId,
-        share_url: `${SORA_ORIGIN}/p/${recoveredId}`,
-        download_url: buildNoWatermarkProxyUrl(recoveredId),
-        estimated_size_bytes: metadata.estimated_size_bytes,
-        thumbnail_url: metadata.thumbnail_url
-      };
-    }
+  const fromPostLookup = await resolveDraftReferenceFromListings(generationId, row);
+  if (fromPostLookup) {
+    return fromPostLookup;
   }
-
-  const viewerUserId = await deriveViewerUserId();
-  for (const candidateUrl of [
-    buildUrl("/backend/project_y/profile_feed/me", { limit: "24", cut: "nf2" }).toString(),
-    buildUrl(`/backend/project_y/profile/${encodeURIComponent(viewerUserId)}/post_listing/posts`, { limit: "24" }).toString()
-  ]) {
-    const payload = await fetchJson(candidateUrl).catch(() => null);
-    const recoveredId = payload ? resolveSharedVideoIdFromValue(payload) : "";
-    if (recoveredId) {
-      const metadata = await resolveResolvedDraftMetadata(recoveredId, payload ?? row);
-      return {
-        video_id: recoveredId,
-        share_url: `${SORA_ORIGIN}/p/${recoveredId}`,
-        download_url: buildNoWatermarkProxyUrl(recoveredId),
-        estimated_size_bytes: metadata.estimated_size_bytes,
-        thumbnail_url: metadata.thumbnail_url
-      };
-    }
-  }
-
   return null;
 }
-
+async function resolveDraftReferenceFromListings(generationId: string, sourceRow: Record<string, unknown>) {
+  const viewerUserId = await deriveViewerUserId();
+  const lookupEndpoints = [
+    buildUrl("/backend/project_y/profile/drafts/v2", { limit: DRAFT_LOOKUP_LIMIT }).toString(),
+    buildUrl("/backend/project_y/profile/drafts/cameos", { limit: DRAFT_LOOKUP_LIMIT }).toString(),
+    buildUrl("/backend/project_y/profile_feed/me", { limit: "48", cut: "nf2" }).toString(),
+    buildUrl(`/backend/project_y/profile/${encodeURIComponent(viewerUserId)}/post_listing/posts`, { limit: "48" }).toString()
+  ];
+  for (const candidateUrl of lookupEndpoints) {
+    const payload = await fetchJson(candidateUrl).catch(() => null);
+    const recoveredId = payload ? resolveSharedVideoIdByGeneration(payload, generationId) : "";
+    if (recoveredId) {
+      const metadata = await resolveResolvedDraftMetadata(recoveredId, payload ?? sourceRow);
+      return {
+        video_id: recoveredId,
+        share_url: `${SORA_ORIGIN}/p/${recoveredId}`,
+        download_url: buildNoWatermarkProxyUrl(recoveredId),
+        estimated_size_bytes: metadata.estimated_size_bytes,
+        thumbnail_url: metadata.thumbnail_url
+      };
+    }
+  }
+  return null;
+}
+function resolveSharedVideoIdByGeneration(value: unknown, generationId: string, depth = 0): string {
+  if (!generationId || depth > 8 || value == null) {
+    return "";
+  }
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const match = resolveSharedVideoIdByGeneration(entry, generationId, depth + 1);
+      if (match) {
+        return match;
+      }
+    }
+    return "";
+  }
+  if (typeof value !== "object") {
+    return "";
+  }
+  const record = value as Record<string, unknown>;
+  const recordGenerationId = extractDraftGenerationId(record);
+  if (recordGenerationId === generationId) {
+    const directVideoId = resolveSharedVideoIdFromValue(record);
+    if (directVideoId) {
+      return directVideoId;
+    }
+  }
+  const rows = getPostListingRows(record);
+  for (const row of rows) {
+    const rowGenerationId = extractDraftGenerationId(row);
+    if (rowGenerationId !== generationId) {
+      continue;
+    }
+    const matchedVideoId = resolveSharedVideoIdFromValue(row);
+    if (matchedVideoId) {
+      return matchedVideoId;
+    }
+  }
+  for (const entryValue of Object.values(record)) {
+    const nestedMatch = resolveSharedVideoIdByGeneration(entryValue, generationId, depth + 1);
+    if (nestedMatch) {
+      return nestedMatch;
+    }
+  }
+  return "";
+}
 async function resolveResolvedDraftMetadata(
   videoId: string,
   initialPayload?: unknown
@@ -583,14 +586,12 @@ async function resolveResolvedDraftMetadata(
   if (fromInitial.estimated_size_bytes != null || fromInitial.thumbnail_url) {
     return fromInitial;
   }
-
   const viewerUserId = await deriveViewerUserId();
   const metadataEndpoints = [
     buildUrl("/backend/project_y/profile_feed/me", { limit: "48", cut: "nf2" }).toString(),
     buildUrl(`/backend/project_y/profile/${encodeURIComponent(viewerUserId)}/post_listing/posts`, { limit: "48" }).toString(),
     buildUrl(`/backend/project_y/profile/${encodeURIComponent(viewerUserId)}/post_listing/public`, { limit: "48" }).toString()
   ];
-
   for (const endpoint of metadataEndpoints) {
     const payload = await fetchJson(endpoint).catch(() => null);
     const resolved = extractResolvedDraftMetadataFromValue(payload, videoId);
@@ -598,34 +599,38 @@ async function resolveResolvedDraftMetadata(
       return resolved;
     }
   }
-
   return { estimated_size_bytes: null, thumbnail_url: "" };
 }
 async function fetchJsonWithMethod(url: string, method: "POST", jsonBody: unknown): Promise<unknown> {
   const auth = await import("../lib/auth").then((module) => module.deriveAuthContext());
-  const response = await fetch(new URL(url, SORA_ORIGIN).toString(), {
-    method,
-    credentials: "include",
-    headers: {
-      accept: "application/json, text/plain, */*",
-      authorization: `Bearer ${auth.token}`,
-      "content-type": "application/json",
-      "oai-language": auth.language,
-      ...(auth.deviceId ? { "oai-device-id": auth.deviceId } : {})
-    },
-    body: JSON.stringify(jsonBody)
-  });
-
-  if (!response.ok) {
-    throw new Error(`Draft share creation failed with status ${response.status}.`);
+  const requestUrl = new URL(url, SORA_ORIGIN).toString();
+  const headers = {
+    accept: "application/json, text/plain, */*",
+    authorization: `Bearer ${auth.token}`,
+    "content-type": "application/json",
+    "oai-language": auth.language,
+    ...(auth.deviceId ? { "oai-device-id": auth.deviceId } : {})
+  };
+  for (let attempt = 0; attempt <= DRAFT_SHARE_POST_RETRY_DELAYS_MS.length; attempt += 1) {
+    const response = await fetch(requestUrl, {
+      method,
+      credentials: "include",
+      headers,
+      body: JSON.stringify(jsonBody)
+    });
+    if (response.ok) {
+      return response.json();
+    }
+    if (attempt >= DRAFT_SHARE_POST_RETRY_DELAYS_MS.length || !isRetriableSoraStatus(response.status)) {
+      throw new Error(`Draft share creation failed with status ${response.status}.`);
+    }
+    await sleepWithJitter(DRAFT_SHARE_POST_RETRY_DELAYS_MS[attempt]);
   }
-
-  return response.json();
+  throw new Error("Draft share creation failed after retries.");
 }
 function resolveDraftShareText(row: Record<string, unknown>): string {
   return pickFirstString([row.discovery_phrase, row.discoveryPhrase, row.prompt, row.caption, row.description]);
 }
-
 export function resolveExistingDraftVideoId(row: Record<string, unknown>): string {
   return pickFirstString([
     row.resolved_video_id,
@@ -638,7 +643,6 @@ export function resolveExistingDraftVideoId(row: Record<string, unknown>): strin
 export function extractEstimatedSizeBytesFromResolvedRow(value: unknown, videoId: string): number | null {
   return extractResolvedDraftMetadataFromValue(value, videoId).estimated_size_bytes;
 }
-
 function extractResolvedDraftMetadataFromValue(
   value: unknown,
   videoId: string
@@ -646,18 +650,15 @@ function extractResolvedDraftMetadataFromValue(
   if (!value || typeof value !== "object") {
     return { estimated_size_bytes: null, thumbnail_url: "" };
   }
-
   const resolveFromRecord = (record: Record<string, unknown>): { estimated_size_bytes: number | null; thumbnail_url: string } => ({
     estimated_size_bytes: extractEstimatedSizeBytesFromAnyRecord(record),
     thumbnail_url: extractThumbnailUrlFromAnyRecord(record)
   });
-
   const directSize = extractEstimatedSizeBytesFromAnyRecord(value as Record<string, unknown>);
   const directThumbnail = extractThumbnailUrlFromAnyRecord(value as Record<string, unknown>);
   if ((directSize != null || directThumbnail) && resolveSharedVideoIdFromValue(value) === videoId) {
     return { estimated_size_bytes: directSize, thumbnail_url: directThumbnail };
   }
-
   const rows = getPostListingRows(value);
   for (const row of rows) {
     if (!row || typeof row !== "object") {
@@ -668,15 +669,12 @@ function extractResolvedDraftMetadataFromValue(
     }
     return resolveFromRecord(row as Record<string, unknown>);
   }
-
   return { estimated_size_bytes: null, thumbnail_url: "" };
 }
-
 export function shouldSkipDraftRow(row: Record<string, unknown> | null | undefined): boolean {
   if (!row || typeof row !== "object") {
     return true;
   }
-
   const kind = getDraftKind(row);
   const hasDraftShareCandidate = Boolean(extractDraftGenerationId(row)) || Boolean(resolveExistingDraftVideoId(row));
   return Boolean(
@@ -690,23 +688,18 @@ export function shouldSkipDraftRow(row: Record<string, unknown> | null | undefin
       !hasDraftShareCandidate)
   );
 }
-
 function classifyDraftSkipReason(row: Record<string, unknown>): string {
   if (getDraftKind(row) === "sora_error" || hasDraftFailureState(row)) {
     return "draft_error";
   }
-
   if (hasDraftEditedOrRemixStub(row)) {
     return "draft_edit_or_remix";
   }
-
   if (isDraftOutputBlocked(row)) {
     return "draft_content_violation";
   }
-
   return "unresolved_draft_video_id";
 }
-
 function hasDraftEditedOrRemixStub(row: Record<string, unknown>): boolean {
   const cVersion = pickFirstNumber([
     row.c_version,
@@ -717,7 +710,6 @@ function hasDraftEditedOrRemixStub(row: Record<string, unknown>): boolean {
   if ((cVersion ?? 0) > 0) {
     return true;
   }
-
   return pickFirstBoolean([
     row.remix_stub,
     row.remixStub,
@@ -729,7 +721,6 @@ function hasDraftEditedOrRemixStub(row: Record<string, unknown>): boolean {
     row.isEditorStub
   ]);
 }
-
 function resolveDraftDetailUrl(row: Record<string, unknown>, generationId: string): string {
   const directUrl = typeof row.detail_url === "string"
     ? row.detail_url
@@ -743,7 +734,6 @@ function resolveDraftDetailUrl(row: Record<string, unknown>, generationId: strin
   }
   return `${SORA_ORIGIN}/d/${generationId}`;
 }
-
 function extractEstimatedSizeBytesFromAnyRecord(record: Record<string, unknown>): number | null {
   const candidates: unknown[] = [
     record.size_bytes,
@@ -752,7 +742,6 @@ function extractEstimatedSizeBytesFromAnyRecord(record: Record<string, unknown>)
     record.fileSize,
     record.filesize
   ];
-
   const attachments = getNestedObjectArrays(record);
   for (const attachment of attachments) {
     candidates.push(
@@ -762,7 +751,6 @@ function extractEstimatedSizeBytesFromAnyRecord(record: Record<string, unknown>)
       attachment.fileSize,
       attachment.filesize
     );
-
     const encodings = attachment.encodings && typeof attachment.encodings === "object"
       ? attachment.encodings as Record<string, unknown>
       : null;
@@ -777,17 +765,14 @@ function extractEstimatedSizeBytesFromAnyRecord(record: Record<string, unknown>)
       : null;
     candidates.push(source?.size, sourceWm?.size, md?.size);
   }
-
   for (const candidate of candidates) {
     const numeric = Number(candidate);
     if (Number.isFinite(numeric) && numeric > 0) {
       return numeric;
     }
   }
-
   return null;
 }
-
 function extractThumbnailUrlFromAnyRecord(record: Record<string, unknown>): string {
   const directCandidates = [record.thumbnail_url, record.thumbnailUrl, record.preview_image_url, record.previewImageUrl, record.poster_url, record.posterUrl, record.image_url, record.imageUrl];
   for (const candidate of directCandidates) {
@@ -795,7 +780,6 @@ function extractThumbnailUrlFromAnyRecord(record: Record<string, unknown>): stri
       return candidate;
     }
   }
-
   const attachments = getNestedObjectArrays(record);
   for (const attachment of attachments) {
     const attachmentCandidates = [attachment.thumbnail_url, attachment.thumbnailUrl, attachment.preview_image_url, attachment.previewImageUrl, attachment.poster_url, attachment.posterUrl, attachment.image_url, attachment.imageUrl];
@@ -805,10 +789,8 @@ function extractThumbnailUrlFromAnyRecord(record: Record<string, unknown>): stri
       }
     }
   }
-
   return "";
 }
-
 function getNestedObjectArrays(record: Record<string, unknown>): Array<Record<string, unknown>> {
   const keys = ["attachments", "outputs", "media", "assets", "files", "videos", "entries", "nodes", "results", "clips"];
   const nested: Array<Record<string, unknown>> = [];
@@ -825,7 +807,6 @@ function getNestedObjectArrays(record: Record<string, unknown>): Array<Record<st
   }
   return nested;
 }
-
 function getDraftKind(row: Record<string, unknown>): string {
   return pickFirstString([
     row.kind,
@@ -835,7 +816,6 @@ function getDraftKind(row: Record<string, unknown>): string {
     (row.output as Record<string, unknown> | undefined)?.kind
   ]);
 }
-
 function isDraftOutputBlocked(row: Record<string, unknown>): boolean {
   return pickFirstBoolean([
     row.output_blocked,
@@ -848,7 +828,6 @@ function isDraftOutputBlocked(row: Record<string, unknown>): boolean {
     (row.output as Record<string, unknown> | undefined)?.contentViolation
   ]);
 }
-
 function hasDraftFailureState(row: Record<string, unknown>): boolean {
   const failureText = pickFirstString([
     row.status,
@@ -866,10 +845,8 @@ function hasDraftFailureState(row: Record<string, unknown>): boolean {
     (row.output as Record<string, unknown> | undefined)?.error_message,
     (row.output as Record<string, unknown> | undefined)?.errorMessage
   ]).toLowerCase();
-
   return /error|failed|blocked|violation/.test(failureText);
 }
-
 function buildUrl(pathname: string, params: Record<string, string | number | null | undefined>): URL {
   const url = new URL(pathname, SORA_ORIGIN);
   for (const [key, value] of Object.entries(params)) {
@@ -880,17 +857,14 @@ function buildUrl(pathname: string, params: Record<string, string | number | nul
   }
   return url;
 }
-
 function pickFirstString(candidates: unknown[]): string {
   for (const candidate of candidates) {
     if (typeof candidate === "string" && candidate.trim()) {
       return candidate.trim();
     }
   }
-
   return "";
 }
-
 function pickFirstNumber(candidates: unknown[]): number | null {
   for (const candidate of candidates) {
     const numericValue = Number(candidate);
@@ -898,28 +872,26 @@ function pickFirstNumber(candidates: unknown[]): number | null {
       return numericValue;
     }
   }
-
   return null;
 }
-
 function pickFirstBoolean(candidates: unknown[]): boolean {
   for (const candidate of candidates) {
     if (typeof candidate === "boolean") {
       return candidate;
     }
   }
-
   return false;
 }
-
+function sleepWithJitter(durationMs: number): Promise<void> {
+  const jitterMs = Math.floor(Math.random() * 150);
+  return new Promise((resolve) => setTimeout(resolve, durationMs + jitterMs));
+}
 function isDraftSource(source: FetchBatchRequest["source"]): boolean {
   return source === "drafts" || source === "characterDrafts" || source === "characterAccountDrafts";
 }
-
 function supportsOffsetPagination(source: FetchBatchRequest["source"]): boolean {
   return source === "drafts";
 }
-
 export function shouldFinishFetchPage(
   source: FetchBatchRequest["source"],
   _pageRowCount: number,
@@ -929,10 +901,8 @@ export function shouldFinishFetchPage(
   if (supportsOffsetPagination(source)) {
     return !nextCursor && !hasMoreRows;
   }
-
   return !nextCursor && !hasMoreRows;
 }
-
 export function getFetchLimitForSource(
   source: FetchBatchRequest["source"],
   requestedLimit = 100
@@ -944,10 +914,8 @@ export function getFetchLimitForSource(
   ) {
     return APPEARANCE_FEED_PAGE_LIMIT;
   }
-
   return requestedLimit;
 }
-
 function getCursorKindForSource(source: FetchBatchRequest["source"]): string {
   if (
     source === "profile" ||
@@ -956,6 +924,5 @@ function getCursorKindForSource(source: FetchBatchRequest["source"]): string {
   ) {
     return "sv2_created_at";
   }
-
   return "";
 }
