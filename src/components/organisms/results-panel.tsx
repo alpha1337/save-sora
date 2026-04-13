@@ -157,7 +157,7 @@ export function ResultsPanel({
                     <strong>{job.label}</strong>
                     <span className="ss-muted">
                       {job.active_item_title
-                        ? `Fetching ${job.active_item_title}`
+                        ? job.active_item_title
                         : job.status === "completed"
                           ? "Completed"
                           : job.status === "running"
@@ -202,7 +202,7 @@ export function ResultsPanel({
                     <strong>{worker.label}</strong>
                     <span className="ss-muted">
                       {worker.active_item_label
-                        ? `Bundling ${worker.active_item_label}`
+                        ? worker.active_item_label
                         : worker.last_completed_item_label
                           ? `Last: ${worker.last_completed_item_label}`
                           : "Queued"}

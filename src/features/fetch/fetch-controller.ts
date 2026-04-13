@@ -216,8 +216,16 @@ async function runFetchJob(
     }
     const recoverableRows = getRecoverableRows(inRangeRows);
     if (recoverableRows.length > 0) {
+      if (isDraftSource(runtimeJob.source)) {
+        setFetchJobActiveStatus(runtimeJob.id, "Fetch successful!");
+      }
       recoveryTasks.push(
-        recoverMissingVideoIds(recoverableRows, signal).then(async (recoveredRows) => {
+        recoverMissingVideoIds(
+          recoverableRows,
+          signal,
+          new Map(),
+          (statusLabel) => setFetchJobActiveStatus(runtimeJob.id, statusLabel)
+        ).then(async (recoveredRows) => {
           if (recoveredRows.length === 0) {
             return;
           }
@@ -234,7 +242,7 @@ async function runFetchJob(
       persistenceTasks.push(upsertVideoRows(inRangeRows));
     }
     return {
-      active_item_title: pickActiveItemTitle(inRangeRows),
+      active_item_title: pickActiveItemTitle(inRangeRows, runtimeJob.source),
       draftResolutionRecords,
       persistencePromise: persistenceTasks.length > 0 ? Promise.all(persistenceTasks).then(() => undefined) : Promise.resolve(),
       stored_row_ids: inRangeRows.map((row) => row.row_id)
@@ -541,7 +549,8 @@ async function streamFetchBatches(
 async function recoverMissingVideoIds(
   rows: VideoRow[],
   signal: AbortSignal,
-  attemptByRowId: Map<string, number> = new Map()
+  attemptByRowId: Map<string, number> = new Map(),
+  onStatusLabel?: (statusLabel: string) => void
 ): Promise<VideoRow[]> {
   const pendingRows = dedupeRowsById(rows);
   if (pendingRows.length === 0) {
@@ -559,12 +568,15 @@ async function recoverMissingVideoIds(
       await sleepWithJitter(DRAFT_RECOVERY_REQUEST_DELAY_MS, signal);
       try {
         if (row.source_bucket === "drafts" && row.video_id && !row.playback_url) {
+          onStatusLabel?.("Processing draft...");
           recoveredRows.push({
             ...row,
             playback_url: buildDraftPlaybackUrl(row.video_id),
             is_downloadable: true,
             skip_reason: row.skip_reason === "unresolved_draft_video_id" ? "" : row.skip_reason
           });
+          onStatusLabel?.("Processing complete!");
+          onStatusLabel?.("Complete!");
           continue;
         }
         const generationId = extractGenerationIdFromRow(row);
@@ -572,6 +584,8 @@ async function recoverMissingVideoIds(
           Boolean(generationId) &&
           (row.skip_reason === "unresolved_draft_video_id" || shouldHydrateDraftThumbnail(row));
         if (shouldRecoverDraftReference && generationId) {
+          onStatusLabel?.("Processing draft...");
+          onStatusLabel?.("Generating a shared URL...");
           const draftReferenceResponse = await sendBackgroundRequest<ResolveDraftReferenceResponse>({
             type: "resolve-draft-reference",
             generation_id: generationId,
@@ -602,6 +616,8 @@ async function recoverMissingVideoIds(
               is_downloadable: true,
               skip_reason: ""
             });
+            onStatusLabel?.("Processing complete!");
+            onStatusLabel?.("Complete!");
             continue;
           }
           if (draftReferenceResponse.payload.skip_reason && draftReferenceResponse.payload.skip_reason !== row.skip_reason) {
@@ -630,6 +646,10 @@ async function recoverMissingVideoIds(
           is_downloadable: true,
           skip_reason: ""
         });
+        if (row.source_bucket === "drafts") {
+          onStatusLabel?.("Processing complete!");
+          onStatusLabel?.("Complete!");
+        }
       } catch (error) {
         if (!isExpectedDetailFallbackError(error)) {
           logger.warn("detail fallback failed", error);
@@ -688,7 +708,7 @@ function buildDraftPlaybackUrl(videoId: string): string {
     ? `https://soravdl.com/api/proxy/video/${encodeURIComponent(videoId)}`
     : "";
 }
-function pickActiveItemTitle(rows: VideoRow[]): string {
+function pickActiveItemTitle(rows: VideoRow[], source: LowLevelSourceType): string {
   for (const row of rows) {
     const candidate = row.title?.trim();
     if (!candidate) {
@@ -697,7 +717,7 @@ function pickActiveItemTitle(rows: VideoRow[]): string {
     if (candidate === row.video_id || candidate === row.row_id) {
       continue;
     }
-    return candidate;
+    return isDraftSource(source) ? `Fetching draft ${candidate}...` : `Fetching ${candidate}...`;
   }
   return "";
 }
@@ -831,6 +851,18 @@ function incrementCompletedJobs(job: FetchJob): void {
       {
         completed_jobs: state.fetch_progress.completed_jobs + 1
       }
+    )
+  }));
+}
+function setFetchJobActiveStatus(jobId: string, statusLabel: string): void {
+  useAppStore.setState((state) => ({
+    fetch_progress: buildNextFetchProgressState(
+      state.fetch_progress,
+      state.fetch_progress.job_progress.map((entry) =>
+        entry.job_id === jobId
+          ? { ...entry, status: "running" as const, active_item_title: statusLabel }
+          : entry
+      )
     )
   }));
 }

@@ -77,19 +77,23 @@ async function buildArchive(workPlan: ArchiveWorkPlan): Promise<void> {
       const itemTitle = row.title?.trim();
       const itemLabel = itemTitle ? `${itemTitle} · ${row.video_id}` : row.video_id;
       worker.status = "running";
-      worker.active_item_label = itemLabel;
+      worker.active_item_label = "Attempting to remove watermark";
       activeLabel = `Bundling ${itemLabel}`;
       publishProgress();
-
-      const bytes = await fetchWatermarkFreeVideoBytes(row.video_id);
+      const bytes = await fetchWatermarkFreeVideoBytes(row.video_id, (statusLabel) => {
+        worker.active_item_label = statusLabel;
+        activeLabel = `${itemLabel} · ${statusLabel}`;
+        publishProgress();
+      });
+      worker.active_item_label = "Watermark removed!";
+      publishProgress();
       const entry = new ZipPassThrough(libraryPathByVideoId.get(row.video_id) ?? `library/${row.video_id}.mp4`);
       zip.add(entry);
       entry.push(bytes, true);
-
       completedItems += 1;
       worker.completed_items += 1;
       worker.active_item_label = "";
-      worker.last_completed_item_label = itemLabel;
+      worker.last_completed_item_label = "Complete!";
       publishProgress();
     },
     (workerIndex) => {
@@ -149,28 +153,30 @@ async function runWithConcurrency<T>(
   await Promise.all(Array.from({ length: Math.min(concurrency, values.length) }, (_value, workerIndex) => worker(workerIndex)));
 }
 
-async function fetchWatermarkFreeVideoBytes(videoId: string): Promise<Uint8Array> {
+async function fetchWatermarkFreeVideoBytes(
+  videoId: string,
+  onStatusLabel?: (statusLabel: string) => void
+): Promise<Uint8Array> {
+  onStatusLabel?.("Attempting to remove watermark");
   for (let attempt = 0; attempt < WATERMARK_FETCH_MAX_ATTEMPTS; attempt += 1) {
     await waitForGlobalRateLimitCooldown();
     const response = await fetch(`https://soravdl.com/api/proxy/video/${encodeURIComponent(videoId)}`);
-
     if (response.ok) {
       watermarkRateLimitStreak = 0;
+      onStatusLabel?.("Watermark removed!");
       return new Uint8Array(await response.arrayBuffer());
     }
-
     const status = response.status;
     if (status === 429 && attempt + 1 < WATERMARK_FETCH_MAX_ATTEMPTS) {
       watermarkRateLimitStreak += 1;
       const retryDelayMs = resolveRetryDelayMs(response, attempt, watermarkRateLimitStreak);
       globalRateLimitCooldownUntilMs = Date.now() + retryDelayMs;
+      onStatusLabel?.("Rate-limit exceeded, trying again");
       await sleep(retryDelayMs);
       continue;
     }
-
     throw new Error(buildWatermarkRemovalErrorMessage(status));
   }
-
   throw new Error("Watermark removal failed after retries. Please try again.");
 }
 
