@@ -20,7 +20,7 @@ describe("hidden-tab-pool recovery policy", () => {
   });
 
   it("recognizes reusable Sora worker pages", () => {
-    expect(isReusableSoraWorkerTabUrl("https://sora.chatgpt.com/profile/crystal.party")).toBe(true);
+    expect(isReusableSoraWorkerTabUrl("https://sora.chatgpt.com/profile/creator.sample")).toBe(true);
     expect(isReusableSoraWorkerTabUrl("https://sora.chatgpt.com/drafts")).toBe(true);
     expect(isReusableSoraWorkerTabUrl("https://chatgpt.com/")).toBe(false);
     expect(isReusableSoraWorkerTabUrl("chrome-extension://abc/app.html")).toBe(false);

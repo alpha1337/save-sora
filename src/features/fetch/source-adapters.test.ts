@@ -60,9 +60,9 @@ describe("buildFetchJobs", () => {
       {
         profile_id: "user-crystal",
         user_id: "user-crystal",
-        username: "crystal.party",
+        username: "creator.sample",
         display_name: "Crystal Sparkle",
-        permalink: "https://sora.chatgpt.com/profile/crystal.party",
+        permalink: "https://sora.chatgpt.com/profile/creator.sample",
         profile_picture_url: null,
         is_character_profile: false,
         published_count: 1083,
@@ -86,9 +86,9 @@ describe("buildFetchJobs", () => {
         {
           profile_id: "ch_crystal",
           user_id: "ch_crystal",
-          username: "crystal.party",
+          username: "creator.sample",
           display_name: "Crystal Sparkle",
-          permalink: "https://sora.chatgpt.com/profile/crystal.party",
+          permalink: "https://sora.chatgpt.com/profile/creator.sample",
           profile_picture_url: null,
           is_character_profile: true,
           published_count: null,
@@ -112,9 +112,9 @@ describe("buildFetchJobs", () => {
         {
           profile_id: "profile-crystal",
           user_id: "profile-crystal",
-          username: "crystal.party",
+          username: "creator.sample",
           display_name: "Crystal Sparkle",
-          permalink: "https://sora.chatgpt.com/profile/crystal.party",
+          permalink: "https://sora.chatgpt.com/profile/creator.sample",
           profile_picture_url: null,
           is_character_profile: true,
           published_count: null,
@@ -138,9 +138,9 @@ describe("buildFetchJobs", () => {
         {
           profile_id: "user-crystal",
           user_id: "user-crystal",
-          username: "crystal.party",
+          username: "creator.sample",
           display_name: "Crystal Sparkle",
-          permalink: "https://sora.chatgpt.com/profile/crystal.party",
+          permalink: "https://sora.chatgpt.com/profile/creator.sample",
           profile_picture_url: null,
           is_character_profile: false,
           published_count: 1083,
@@ -163,9 +163,9 @@ describe("buildFetchJobs", () => {
       {
         profile_id: "ch_crystal",
         user_id: "ch_crystal",
-        username: "crystal.party",
+        username: "creator.sample",
         display_name: "Crystal Sparkle",
-        permalink: "https://sora.chatgpt.com/profile/crystal.party",
+        permalink: "https://sora.chatgpt.com/profile/creator.sample",
         profile_picture_url: null,
         is_character_profile: true,
         published_count: null,
@@ -178,7 +178,7 @@ describe("buildFetchJobs", () => {
     state.character_accounts = [
       {
         account_id: "ch_crystal",
-        username: "crystal.party",
+        username: "creator.sample",
         display_name: "Crystal Sparkle",
         profile_picture_url: null,
         appearance_count: 143800,
@@ -201,9 +201,9 @@ describe("buildFetchJobs", () => {
       {
         profile_id: "ch_crystal",
         user_id: "ch_crystal",
-        username: "crystal.party",
+        username: "creator.sample",
         display_name: "Crystal Sparkle",
-        permalink: "https://sora.chatgpt.com/profile/crystal.party",
+        permalink: "https://sora.chatgpt.com/profile/creator.sample",
         profile_picture_url: null,
         is_character_profile: true,
         published_count: null,
@@ -229,9 +229,9 @@ describe("buildFetchJobs", () => {
       {
         profile_id: "ch_crystal",
         user_id: "",
-        username: "crystal.party",
+        username: "creator.sample",
         display_name: "",
-        permalink: "https://sora.chatgpt.com/profile/crystal.party",
+        permalink: "https://sora.chatgpt.com/profile/creator.sample",
         profile_picture_url: null,
         is_character_profile: true,
         published_count: null,
@@ -243,7 +243,7 @@ describe("buildFetchJobs", () => {
     state.character_accounts = [
       {
         account_id: "ch_crystal",
-        username: "crystal.party",
+        username: "creator.sample",
         display_name: "Crystal Sparkle",
         profile_picture_url: null,
         appearance_count: 143852,
@@ -269,7 +269,7 @@ describe("buildFetchJobs", () => {
         user_id: "",
         username: "",
         display_name: "",
-        permalink: "https://sora.chatgpt.com/profile/crystal.party",
+        permalink: "https://sora.chatgpt.com/profile/creator.sample",
         profile_picture_url: null,
         is_character_profile: true,
         published_count: null,
@@ -283,8 +283,8 @@ describe("buildFetchJobs", () => {
     const appearancesJob = jobs.find((job) => job.source === "characterAccountAppearances");
     const draftsJob = jobs.find((job) => job.source === "characterAccountDrafts");
 
-    expect(appearancesJob?.label).toBe("crystal.party appearances");
-    expect(draftsJob?.label).toBe("crystal.party drafts");
-    expect(appearancesJob?.character_display_name).toBe("crystal.party");
+    expect(appearancesJob?.label).toBe("creator.sample appearances");
+    expect(draftsJob?.label).toBe("creator.sample drafts");
+    expect(appearancesJob?.character_display_name).toBe("creator.sample");
   });
 });

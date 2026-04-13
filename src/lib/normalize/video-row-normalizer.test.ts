@@ -205,7 +205,7 @@ describe("video-row-normalizer", () => {
           cameo_profiles: [
             {
               user_id: "ch_crystal",
-              username: "crystal.party",
+              username: "creator.sample",
               display_name: "Crystal Sparkle"
             },
             {
@@ -224,8 +224,8 @@ describe("video-row-normalizer", () => {
       title: "wii nostalgia aesthetic",
       creator_name: "Muhammad Ali",
       creator_username: "muhammad_f_ali",
-      character_name: "crystal.party",
-      character_username: "crystal.party",
+      character_name: "creator.sample",
+      character_username: "creator.sample",
       duration_seconds: 9.8,
       width: 352,
       height: 640,
@@ -234,7 +234,7 @@ describe("video-row-normalizer", () => {
       skip_reason: ""
     });
     expect(row.row_id).toMatch(/^characterAccountAppearances:/);
-    expect(row.character_names).toEqual(["crystal.party"]);
+    expect(row.character_names).toEqual(["creator.sample"]);
     expect(row.published_at).toBe(new Date(1775636349.345291 * 1000).toISOString());
   });
 
@@ -426,11 +426,11 @@ describe("video-row-normalizer", () => {
     const profile = normalizeCreatorProfile(
       {
         user_id: "ch_crystal",
-        username: "crystal.party",
+        username: "creator.sample",
         display_name: "Crystal Sparkle",
         is_character_profile: true
       },
-      "https://sora.chatgpt.com/profile/crystal.party"
+      "https://sora.chatgpt.com/profile/creator.sample"
     );
 
     expect(profile).toMatchObject({
@@ -444,12 +444,12 @@ describe("video-row-normalizer", () => {
   it("prefers a character user id when creator profile payloads expose both ids", () => {
     const profile = normalizeCreatorProfile(
       {
-        user_id: "user_binaryrot",
+        user_id: "user_creator.alt",
         character_user_id: "ch_crystal",
-        username: "crystal.party",
+        username: "creator.sample",
         display_name: "Crystal Sparkle"
       },
-      "https://sora.chatgpt.com/profile/crystal.party"
+      "https://sora.chatgpt.com/profile/creator.sample"
     );
 
     expect(profile).toMatchObject({
@@ -461,13 +461,13 @@ describe("video-row-normalizer", () => {
   it("preserves profile count metrics for progress estimation", () => {
     const profile = normalizeCreatorProfile(
       {
-        user_id: "user_binaryrot",
-        username: "binaryrot",
+        user_id: "user_creator.alt",
+        username: "creator.alt",
         display_name: "Binary Rot",
         post_count: 3018,
         cameo_count: 2535
       },
-      "https://sora.chatgpt.com/profile/binaryrot"
+      "https://sora.chatgpt.com/profile/creator.alt"
     );
 
     expect(profile).toMatchObject({
@@ -481,7 +481,7 @@ describe("video-row-normalizer", () => {
     const profile = normalizeCreatorProfile(
       {
         user_id: "ch_crystal",
-        username: "crystal.party",
+        username: "creator.sample",
         display_name: "Crystal Sparkle",
         owner_profile: {
           user_id: "user_bobby",
@@ -489,7 +489,7 @@ describe("video-row-normalizer", () => {
           cameo_count: 143852
         }
       },
-      "https://sora.chatgpt.com/profile/crystal.party"
+      "https://sora.chatgpt.com/profile/creator.sample"
     );
 
     expect(profile).toMatchObject({

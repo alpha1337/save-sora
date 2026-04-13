@@ -507,7 +507,7 @@ function testOwnedRowsStayInPostsBucket() {
   const post = { id: "post-3" };
 
   assert.deepEqual(
-    classifyCreatorFeedItem(row, post, { creatorUserId: "user-creator-1", creatorUsername: "binaryrot" }),
+    classifyCreatorFeedItem(row, post, { creatorUserId: "user-creator-1", creatorUsername: "creator.alt" }),
     { sourcePage: "creatorPublished", sourceLabel: "Creator Post" },
   );
 }

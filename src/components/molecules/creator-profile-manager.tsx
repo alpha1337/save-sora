@@ -38,7 +38,7 @@ export function CreatorProfileManager({
         <Input
           disabled={disabled}
           onChange={(event) => onCreatorRouteInputChange(event.target.value)}
-          placeholder="@creator, crystal.party, or https://sora.chatgpt.com/profile/creator"
+          placeholder="@creator, creator.sample, or https://sora.chatgpt.com/profile/creator"
           value={creatorRouteInput}
         />
         <Button disabled={disabled || !creatorRouteInput.trim()} type="submit">
