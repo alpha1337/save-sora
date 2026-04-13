@@ -780,7 +780,9 @@ function isExpectedDetailFallbackError(error: unknown): boolean {
   return (
     message.includes("failed to fetch") ||
     message.includes("status 403") ||
-    message.includes("status 404")
+    message.includes("status 404") ||
+    message.includes("message channel closed before a response was received") ||
+    message.includes("could not establish connection. receiving end does not exist")
   );
 }
 
