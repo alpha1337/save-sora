@@ -1,6 +1,6 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { RefreshCcw } from "lucide-react";
+import { Heart, RefreshCcw } from "lucide-react";
 import DatePicker from "react-datepicker";
 import { useAppStore } from "@app/store/use-app-store";
 import { selectFilteredVideoRows } from "@app/store/selectors";
@@ -323,7 +323,7 @@ export function App() {
       header={
         <div className="ss-header-grid">
           <div>
-            <h1>Save Sora v2.0.145</h1>
+            <h1>Save Sora v2.0.146</h1>
             <p className="ss-muted">Download anything on Sora, remove watermarks, export metadata and organized ZIP files.</p>
           </div>
           <div className="ss-inline-actions">
@@ -332,6 +332,12 @@ export function App() {
               onToggleSource={handleToggleSource}
               sourceSelections={state.session_meta.active_sources}
             />
+            <Button asChild tone="secondary">
+              <a href="https://ko-fi.com/savesora" rel="noreferrer noopener" target="_blank">
+                <Heart size={16} />
+                Donate
+              </a>
+            </Button>
             <Button disabled={state.phase === "fetching" || state.phase === "downloading"} onClick={openFetchDateModal} type="button">
               <RefreshCcw size={16} />
               Fetch Videos
