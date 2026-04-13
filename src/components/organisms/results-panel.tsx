@@ -82,6 +82,10 @@ export function ResultsPanel({
   const hasZipSelection = selectedDownloadableRowCount > 0;
   const showFetchProgress = phase === "fetching" || fetchProgress.running_jobs > 0;
   const showDownloadProgress = phase === "downloading" || downloadProgress.running_workers > 0;
+  const activeFetchJobs = useMemo(
+    () => fetchProgress.job_progress.filter((job) => job.status !== "completed"),
+    [fetchProgress.job_progress]
+  );
   const groupedRows = useMemo(
     () => (groupBy === "none" ? [] : buildGroupedRows(rows, groupBy)),
     [groupBy, rows]
@@ -146,8 +150,8 @@ export function ResultsPanel({
             />
           </div>
           <div className="ss-download-worker-list">
-            {fetchProgress.job_progress.length > 0 ? (
-              fetchProgress.job_progress.map((job) => (
+            {activeFetchJobs.length > 0 ? (
+              activeFetchJobs.map((job) => (
                 <div className="ss-download-worker-row" key={job.job_id}>
                   <div className="ss-download-worker-main">
                     <strong>{job.label}</strong>
@@ -171,7 +175,7 @@ export function ResultsPanel({
                 </div>
               ))
             ) : (
-              <div className="ss-muted">Starting fetch workers…</div>
+              <div className="ss-muted">No active jobs in queue.</div>
             )}
           </div>
         </div>

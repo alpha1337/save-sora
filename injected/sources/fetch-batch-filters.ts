@@ -39,15 +39,6 @@ export function reachedOlderThanSinceBoundary(rows: unknown[], sinceMs?: number 
   return seenTimestamp;
 }
 
-export function filterRowsForCharacterId(rows: unknown[], characterId: string): unknown[] {
-  const trimmedCharacterId = characterId.trim();
-  if (!trimmedCharacterId) {
-    return rows;
-  }
-
-  return rows.filter((row) => rowContainsCharacterId(row, trimmedCharacterId, 0));
-}
-
 function extractRowTimestampMs(row: unknown): number | null {
   if (!row || typeof row !== "object") {
     return null;
@@ -102,37 +93,4 @@ function parseTimestampMsCandidate(value: unknown): number | null {
   }
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) ? parsed : null;
-}
-
-function rowContainsCharacterId(value: unknown, characterId: string, depth: number): boolean {
-  if (depth > 6 || value == null) {
-    return false;
-  }
-  if (typeof value === "string") {
-    return value.trim() === characterId;
-  }
-  if (Array.isArray(value)) {
-    return value.some((entry) => rowContainsCharacterId(entry, characterId, depth + 1));
-  }
-  if (typeof value !== "object") {
-    return false;
-  }
-
-  const record = value as Record<string, unknown>;
-  const directCandidates = [
-    record.character_id,
-    record.characterId,
-    record.character_user_id,
-    record.characterUserId,
-    record.user_id,
-    record.userId,
-    record.profile_id,
-    record.profileId,
-    record.id
-  ];
-  if (directCandidates.some((candidate) => typeof candidate === "string" && candidate.trim() === characterId)) {
-    return true;
-  }
-
-  return Object.values(record).some((entry) => rowContainsCharacterId(entry, characterId, depth + 1));
 }

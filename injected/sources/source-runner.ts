@@ -17,7 +17,6 @@ import {
 } from "../lib/shared";
 import {
   filterRowsByTimeWindow,
-  filterRowsForCharacterId,
   reachedOlderThanSinceBoundary
 } from "./fetch-batch-filters";
 
@@ -83,10 +82,7 @@ async function runFetchBatch(request: FetchBatchRequest) {
     const batchPayload = await fetchBatchPayload(request, cursor, offset, endpointKey);
     const payload = batchPayload.payload;
     const pageRows = getPostListingRows(payload);
-    const scopedRows = request.source === "characterAccountDrafts" || request.source === "characterAccountAppearances"
-      ? filterRowsForCharacterId(pageRows, request.character_id ?? "")
-      : pageRows;
-    const inRangeRows = filterRowsByTimeWindow(scopedRows, request.since_ms, request.until_ms);
+    const inRangeRows = filterRowsByTimeWindow(pageRows, request.since_ms, request.until_ms);
     const enrichedRows = isDraftSource(request.source)
       ? enrichDraftRows(inRangeRows, request.draft_resolution_entries ?? [])
       : inRangeRows;
@@ -104,13 +100,13 @@ async function runFetchBatch(request: FetchBatchRequest) {
       previousCursor ?? ""
     );
     const requestLimit = getFetchLimitForSource(request.source, request.limit);
-    const hasMoreRows = scopedRows.length >= requestLimit;
+    const hasMoreRows = pageRows.length >= requestLimit;
     const nextOffset: number | null = supportsOffsetPagination(request.source)
       ? (nextCursor ? offset : (offset ?? 0) + requestLimit)
       : null;
     const isDone =
-      shouldFinishFetchPage(request.source, scopedRows.length, nextCursor, hasMoreRows) ||
-      reachedOlderThanSinceBoundary(scopedRows, request.since_ms);
+      shouldFinishFetchPage(request.source, pageRows.length, nextCursor, hasMoreRows) ||
+      reachedOlderThanSinceBoundary(pageRows, request.since_ms);
 
     previousCursor = cursor;
     cursor = nextCursor;
@@ -294,6 +290,37 @@ async function resolveCreatorId(explicitCreatorId: string, routeUrl: string, cre
   return resolvedId;
 }
 
+async function resolveCharacterAccountId(
+  explicitCharacterId: string,
+  routeUrl: string,
+  creatorUsername: string
+): Promise<string> {
+  const trimmedCharacterId = explicitCharacterId.trim();
+  if (trimmedCharacterId.startsWith("ch_")) {
+    return trimmedCharacterId;
+  }
+
+  const username = creatorUsername || getUsernameFromRouteUrl(routeUrl);
+  if (!username) {
+    return trimmedCharacterId;
+  }
+
+  try {
+    const payload = (await fetchJson(`/backend/project_y/profile/username/${encodeURIComponent(username)}`)) as Record<string, unknown>;
+    const resolvedId = pickFirstString([
+      payload.character_user_id,
+      payload.characterUserId,
+      payload.profile_id,
+      payload.profileId,
+      payload.user_id,
+      payload.userId
+    ]);
+    return resolvedId || trimmedCharacterId;
+  } catch (_error) {
+    return trimmedCharacterId;
+  }
+}
+
 function enrichDraftRows(
   rows: unknown[],
   knownResolutionEntries: Array<{ generation_id: string; video_id: string }>
@@ -391,11 +418,16 @@ async function buildFetchEndpointCandidates(
     }];
   }
   if (request.source === "characterAccountAppearances") {
+    const resolvedCharacterId = await resolveCharacterAccountId(
+      request.character_id ?? "",
+      request.route_url ?? "",
+      request.creator_username ?? ""
+    );
     return [
       {
         key: "character-appearances",
         optional: true,
-        url: buildUrl(`/backend/project_y/profile_feed/${encodeURIComponent(request.character_id ?? "")}`, {
+        url: buildUrl(`/backend/project_y/profile_feed/${encodeURIComponent(resolvedCharacterId)}`, {
           limit,
           cut: "appearances",
           cursor
@@ -409,11 +441,16 @@ async function buildFetchEndpointCandidates(
     ];
   }
   if (request.source === "characterAccountDrafts") {
+    const resolvedCharacterId = await resolveCharacterAccountId(
+      request.character_id ?? "",
+      request.route_url ?? "",
+      request.creator_username ?? ""
+    );
     return [
       {
         key: "character-account-drafts",
         optional: true,
-        url: buildUrl(`/backend/project_y/profile/drafts/cameos/character/${encodeURIComponent(request.character_id ?? "")}`, {
+        url: buildUrl(`/backend/project_y/profile/drafts/cameos/character/${encodeURIComponent(resolvedCharacterId)}`, {
           limit,
           cursor
         }).toString()
@@ -496,10 +533,7 @@ async function createSharedDraftReference(row: Record<string, unknown>, generati
       };
     }
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (/status 400\b/.test(message)) {
-      return null;
-    }
+    void error;
     // Fall through to detail/feed recovery. A failed create request should not abort draft fetching.
   }
 
