@@ -7,7 +7,7 @@ interface BuildArchiveMessage {
   payload: ArchiveWorkPlan;
 }
 
-const ZIP_FETCH_CONCURRENCY = 3;
+const ZIP_FETCH_CONCURRENCY = 1;
 const WATERMARK_FETCH_MAX_ATTEMPTS = 6;
 const WATERMARK_FETCH_BASE_RETRY_MS = 1200;
 const WATERMARK_FETCH_MAX_RETRY_MS = 20000;
