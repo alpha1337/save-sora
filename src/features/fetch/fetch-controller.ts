@@ -567,22 +567,10 @@ async function recoverMissingVideoIds(
       attemptByRowId.set(row.row_id, attempts);
       await sleepWithJitter(DRAFT_RECOVERY_REQUEST_DELAY_MS, signal);
       try {
-        if (row.source_bucket === "drafts" && row.video_id && !row.playback_url) {
-          onStatusLabel?.("Processing draft...");
-          recoveredRows.push({
-            ...row,
-            playback_url: buildDraftPlaybackUrl(row.video_id),
-            is_downloadable: true,
-            skip_reason: row.skip_reason === "unresolved_draft_video_id" ? "" : row.skip_reason
-          });
-          onStatusLabel?.("Processing complete!");
-          onStatusLabel?.("Complete!");
-          continue;
-        }
         const generationId = extractGenerationIdFromRow(row);
         const shouldRecoverDraftReference =
           Boolean(generationId) &&
-          (row.skip_reason === "unresolved_draft_video_id" || shouldHydrateDraftThumbnail(row));
+          row.skip_reason === "unresolved_draft_video_id";
         if (shouldRecoverDraftReference && generationId) {
           onStatusLabel?.("Processing draft...");
           onStatusLabel?.("Generating a shared URL...");
@@ -612,7 +600,7 @@ async function recoverMissingVideoIds(
               thumbnail_url: resolvedThumbnailUrl,
               detail_url: resolvedDetailUrl,
               estimated_size_bytes: resolvedEstimatedSize,
-              playback_url: row.playback_url || buildDraftPlaybackUrl(resolvedVideoId),
+              playback_url: row.playback_url,
               is_downloadable: true,
               skip_reason: ""
             });
@@ -642,7 +630,7 @@ async function recoverMissingVideoIds(
         recoveredRows.push({
           ...row,
           video_id: videoId,
-          playback_url: row.playback_url || buildDraftPlaybackUrl(videoId),
+          playback_url: row.playback_url,
           is_downloadable: true,
           skip_reason: ""
         });
@@ -689,24 +677,14 @@ function getRecoverableRows(rows: VideoRow[]): VideoRow[] {
   return rows.filter((row) => {
     const generationId = extractGenerationIdFromRow(row);
     const hasRecoveryHandle = Boolean(row.detail_url) || Boolean(generationId);
-    const needsPlaybackRecovery = row.source_bucket === "drafts" && Boolean(row.video_id) && !row.playback_url;
-    if (!hasRecoveryHandle && !needsPlaybackRecovery) {
+    if (!hasRecoveryHandle) {
       return false;
     }
     const needsVideoIdRecovery =
       !row.video_id &&
       (row.skip_reason === "missing_video_id" || row.skip_reason === "unresolved_draft_video_id");
-    const needsThumbnailRecovery = shouldHydrateDraftThumbnail(row) && Boolean(generationId);
-    return needsVideoIdRecovery || needsThumbnailRecovery || needsPlaybackRecovery;
+    return needsVideoIdRecovery;
   });
-}
-function shouldHydrateDraftThumbnail(row: VideoRow): boolean {
-  return row.source_bucket === "drafts" && !row.thumbnail_url;
-}
-function buildDraftPlaybackUrl(videoId: string): string {
-  return /^s_[A-Za-z0-9_-]+$/.test(videoId)
-    ? `https://soravdl.com/api/proxy/video/${encodeURIComponent(videoId)}`
-    : "";
 }
 function pickActiveItemTitle(rows: VideoRow[], source: LowLevelSourceType): string {
   for (const row of rows) {

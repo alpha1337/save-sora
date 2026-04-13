@@ -3,6 +3,7 @@ import { Clock3, ExternalLink, Eye, Heart, PlayCircle, Repeat2 } from "lucide-re
 import type { VideoRow } from "types/domain";
 import { Checkbox } from "@components/atoms/checkbox";
 import { formatBytes, formatCount, formatDate, formatDuration } from "@lib/utils/format-utils";
+import { resolvePreviewPlaybackUrl } from "@lib/utils/video-playback";
 
 interface VideoMetadataCardProps {
   row: VideoRow;
@@ -25,7 +26,8 @@ export function VideoMetadataCard({
   skipReasonLabel
 }: VideoMetadataCardProps) {
   const canSelect = Boolean(row.is_downloadable && row.video_id);
-  const canPlay = Boolean(row.playback_url);
+  const previewUrl = resolvePreviewPlaybackUrl(row);
+  const canPlay = Boolean(previewUrl);
   const characterLine = row.character_names.join(", ") || row.character_name || "";
   const cardTitle = resolveCardTitle(row);
   const fileSizeLabel = resolveFileSizeLabel(row);
@@ -87,7 +89,7 @@ export function VideoMetadataCard({
               playsInline
               poster={row.thumbnail_url || undefined}
               preload="metadata"
-              src={row.playback_url}
+              src={previewUrl}
             />
           ) : row.thumbnail_url ? (
             <img alt={cardTitle} className="ss-results-card-thumb" loading="lazy" src={row.thumbnail_url} />

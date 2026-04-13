@@ -147,7 +147,7 @@ export function normalizeDraftRows(source: LowLevelSourceType, rows: unknown[], 
       remix_count: null,
       detail_url: detailUrl,
       thumbnail_url: getPreferredThumbnailUrl(row),
-      playback_url: getPlaybackUrlFromRow(row) || buildDraftPlaybackUrl(resolvedVideoId),
+      playback_url: getPlaybackUrlFromRow(row),
       duration_seconds: getDurationSeconds(row),
       estimated_size_bytes: getEstimatedSizeBytes(row),
       width: dimensions.width,
@@ -233,12 +233,6 @@ function getPlaybackUrlFromRow(value: unknown): string {
   }
 
   return "";
-}
-
-function buildDraftPlaybackUrl(videoId: string): string {
-  return /^s_[A-Za-z0-9_-]+$/.test(videoId)
-    ? `https://soravdl.com/api/proxy/video/${encodeURIComponent(videoId)}`
-    : "";
 }
 
 export function normalizeCreatorProfile(profile: unknown, routeUrl: string): CreatorProfile | null {

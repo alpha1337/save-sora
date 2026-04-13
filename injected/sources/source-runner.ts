@@ -2,7 +2,6 @@ import type { BackgroundRequest, FetchBatchRequest } from "../../src/types/backg
 import { deriveViewerUserId } from "../lib/auth";
 import { SORA_ORIGIN } from "../lib/origins";
 import {
-  buildNoWatermarkProxyUrl,
   extractDraftGenerationId,
   extractSharedVideoId,
   fetchJson,
@@ -21,7 +20,6 @@ import {
   reachedOlderThanSinceBoundary
 } from "./fetch-batch-filters";
 const APPEARANCE_FEED_PAGE_LIMIT = 100;
-const DRAFT_LOOKUP_LIMIT = "100";
 const DRAFT_SHARE_POST_RETRY_DELAYS_MS = [500, 1200, 2500];
 interface FetchEndpointCandidate {
   key: string;
@@ -454,37 +452,34 @@ async function buildFetchEndpointCandidates(
 async function createSharedDraftReference(row: Record<string, unknown>, generationId: string) {
   const existingVideoId = resolveExistingDraftVideoId(row);
   if (existingVideoId) {
-    const metadata = await resolveResolvedDraftMetadata(existingVideoId, row);
+    const metadata = extractResolvedDraftMetadataFromValue(row, existingVideoId);
     return {
       video_id: existingVideoId,
       share_url: `${SORA_ORIGIN}/p/${existingVideoId}`,
-      download_url: buildNoWatermarkProxyUrl(existingVideoId),
       estimated_size_bytes: metadata.estimated_size_bytes,
       thumbnail_url: metadata.thumbnail_url
     };
   }
+
   if (shouldSkipDraftRow(row)) {
     return null;
   }
+
   const detailUrl = resolveDraftDetailUrl(row, generationId);
   if (detailUrl) {
     const detailHtml = await fetchText(detailUrl).catch(() => "");
     const recoveredId = extractSharedVideoId(detailHtml);
     if (recoveredId) {
-      const metadata = await resolveResolvedDraftMetadata(recoveredId, row);
+      const metadata = extractResolvedDraftMetadataFromValue(row, recoveredId);
       return {
         video_id: recoveredId,
         share_url: `${SORA_ORIGIN}/p/${recoveredId}`,
-        download_url: buildNoWatermarkProxyUrl(recoveredId),
         estimated_size_bytes: metadata.estimated_size_bytes,
         thumbnail_url: metadata.thumbnail_url
       };
     }
   }
-  const fromListingLookup = await resolveDraftReferenceFromListings(generationId, row);
-  if (fromListingLookup) {
-    return fromListingLookup;
-  }
+
   try {
     const response = (await fetchJsonWithMethod("/backend/project_y/post", "POST", {
       attachments_to_create: [{ generation_id: generationId, kind: "sora" }],
@@ -493,113 +488,19 @@ async function createSharedDraftReference(row: Record<string, unknown>, generati
     })) as Record<string, unknown>;
     const videoId = resolveSharedVideoIdFromValue(response);
     if (videoId) {
-      const metadata = await resolveResolvedDraftMetadata(videoId, response);
+      const metadata = extractResolvedDraftMetadataFromValue(response, videoId);
       return {
         video_id: videoId,
         share_url: `${SORA_ORIGIN}/p/${videoId}`,
-        download_url: buildNoWatermarkProxyUrl(videoId),
         estimated_size_bytes: metadata.estimated_size_bytes,
         thumbnail_url: metadata.thumbnail_url
       };
     }
   } catch (_error) {
-    // Fall through to listing recovery.
+    // Fail closed: the fetch controller will keep retrying unresolved drafts.
   }
-  const fromPostLookup = await resolveDraftReferenceFromListings(generationId, row);
-  if (fromPostLookup) {
-    return fromPostLookup;
-  }
+
   return null;
-}
-async function resolveDraftReferenceFromListings(generationId: string, sourceRow: Record<string, unknown>) {
-  const viewerUserId = await deriveViewerUserId();
-  const lookupEndpoints = [
-    buildUrl("/backend/project_y/profile/drafts/v2", { limit: DRAFT_LOOKUP_LIMIT }).toString(),
-    buildUrl("/backend/project_y/profile/drafts/cameos", { limit: DRAFT_LOOKUP_LIMIT }).toString(),
-    buildUrl("/backend/project_y/profile_feed/me", { limit: "48", cut: "nf2" }).toString(),
-    buildUrl(`/backend/project_y/profile/${encodeURIComponent(viewerUserId)}/post_listing/posts`, { limit: "48" }).toString()
-  ];
-  for (const candidateUrl of lookupEndpoints) {
-    const payload = await fetchJson(candidateUrl).catch(() => null);
-    const recoveredId = payload ? resolveSharedVideoIdByGeneration(payload, generationId) : "";
-    if (recoveredId) {
-      const metadata = await resolveResolvedDraftMetadata(recoveredId, payload ?? sourceRow);
-      return {
-        video_id: recoveredId,
-        share_url: `${SORA_ORIGIN}/p/${recoveredId}`,
-        download_url: buildNoWatermarkProxyUrl(recoveredId),
-        estimated_size_bytes: metadata.estimated_size_bytes,
-        thumbnail_url: metadata.thumbnail_url
-      };
-    }
-  }
-  return null;
-}
-function resolveSharedVideoIdByGeneration(value: unknown, generationId: string, depth = 0): string {
-  if (!generationId || depth > 8 || value == null) {
-    return "";
-  }
-  if (Array.isArray(value)) {
-    for (const entry of value) {
-      const match = resolveSharedVideoIdByGeneration(entry, generationId, depth + 1);
-      if (match) {
-        return match;
-      }
-    }
-    return "";
-  }
-  if (typeof value !== "object") {
-    return "";
-  }
-  const record = value as Record<string, unknown>;
-  const recordGenerationId = extractDraftGenerationId(record);
-  if (recordGenerationId === generationId) {
-    const directVideoId = resolveSharedVideoIdFromValue(record);
-    if (directVideoId) {
-      return directVideoId;
-    }
-  }
-  const rows = getPostListingRows(record);
-  for (const row of rows) {
-    const rowGenerationId = extractDraftGenerationId(row);
-    if (rowGenerationId !== generationId) {
-      continue;
-    }
-    const matchedVideoId = resolveSharedVideoIdFromValue(row);
-    if (matchedVideoId) {
-      return matchedVideoId;
-    }
-  }
-  for (const entryValue of Object.values(record)) {
-    const nestedMatch = resolveSharedVideoIdByGeneration(entryValue, generationId, depth + 1);
-    if (nestedMatch) {
-      return nestedMatch;
-    }
-  }
-  return "";
-}
-async function resolveResolvedDraftMetadata(
-  videoId: string,
-  initialPayload?: unknown
-): Promise<{ estimated_size_bytes: number | null; thumbnail_url: string }> {
-  const fromInitial = extractResolvedDraftMetadataFromValue(initialPayload, videoId);
-  if (fromInitial.estimated_size_bytes != null || fromInitial.thumbnail_url) {
-    return fromInitial;
-  }
-  const viewerUserId = await deriveViewerUserId();
-  const metadataEndpoints = [
-    buildUrl("/backend/project_y/profile_feed/me", { limit: "48", cut: "nf2" }).toString(),
-    buildUrl(`/backend/project_y/profile/${encodeURIComponent(viewerUserId)}/post_listing/posts`, { limit: "48" }).toString(),
-    buildUrl(`/backend/project_y/profile/${encodeURIComponent(viewerUserId)}/post_listing/public`, { limit: "48" }).toString()
-  ];
-  for (const endpoint of metadataEndpoints) {
-    const payload = await fetchJson(endpoint).catch(() => null);
-    const resolved = extractResolvedDraftMetadataFromValue(payload, videoId);
-    if (resolved.estimated_size_bytes != null || resolved.thumbnail_url) {
-      return resolved;
-    }
-  }
-  return { estimated_size_bytes: null, thumbnail_url: "" };
 }
 async function fetchJsonWithMethod(url: string, method: "POST", jsonBody: unknown): Promise<unknown> {
   const auth = await import("../lib/auth").then((module) => module.deriveAuthContext());
