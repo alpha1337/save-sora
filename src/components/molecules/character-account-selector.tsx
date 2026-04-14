@@ -7,6 +7,7 @@ interface CharacterAccountSelectorProps {
   accounts: CharacterAccount[];
   disabled?: boolean;
   selectedAccountIds: string[];
+  videoCountOverrides?: Record<string, number>;
   onSetSelectedAccountIds: (accountIds: string[]) => void;
   onToggleAccount: (accountId: string, checked: boolean) => void;
 }
@@ -19,7 +20,8 @@ export function CharacterAccountSelector({
   disabled = false,
   onSetSelectedAccountIds,
   onToggleAccount,
-  selectedAccountIds
+  selectedAccountIds,
+  videoCountOverrides
 }: CharacterAccountSelectorProps) {
   const selectedIdSet = new Set(selectedAccountIds);
   const selectableAccountIds = accounts.map((account) => account.account_id).filter(Boolean);
@@ -68,7 +70,13 @@ export function CharacterAccountSelector({
               label={account.display_name || account.username || account.account_id}
               onCheckedChange={(checked) => onToggleAccount(account.account_id, checked)}
             />
-            <span className="ss-character-account-count">{formatCharacterVideoCount(account.appearance_count, account.draft_count)}</span>
+            <span className="ss-character-account-count">
+              {formatCharacterVideoCount(
+                account.appearance_count,
+                account.draft_count,
+                videoCountOverrides?.[account.account_id]
+              )}
+            </span>
           </div>
         ))}
       </div>
@@ -76,7 +84,14 @@ export function CharacterAccountSelector({
   );
 }
 
-function formatCharacterVideoCount(appearanceCount: number | null, draftCount: number | null): string {
+function formatCharacterVideoCount(
+  appearanceCount: number | null,
+  draftCount: number | null,
+  overrideCount?: number
+): string {
+  if (typeof overrideCount === "number") {
+    return overrideCount > 0 ? `${formatCount(overrideCount)} videos` : "No videos";
+  }
   const safeAppearanceCount = typeof appearanceCount === "number" ? appearanceCount : 0;
   const safeDraftCount = typeof draftCount === "number" ? draftCount : 0;
   const total = safeAppearanceCount + safeDraftCount;

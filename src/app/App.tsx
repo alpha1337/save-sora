@@ -55,6 +55,58 @@ export function App() {
     const accountIdSet = new Set(state.character_accounts.map((account) => account.account_id));
     return state.session_meta.selected_character_account_ids.filter((accountId) => accountIdSet.has(accountId)).length;
   }, [state.character_accounts, state.session_meta.selected_character_account_ids]);
+  const selectedCharacterAccountVideoCountOverrides = useMemo(() => {
+    if (state.video_rows.length === 0 || state.session_meta.selected_character_account_ids.length === 0) {
+      return {};
+    }
+
+    const selectedAccountIds = new Set(state.session_meta.selected_character_account_ids);
+    const selectedAccounts = state.character_accounts.filter((account) => selectedAccountIds.has(account.account_id));
+    if (selectedAccounts.length === 0) {
+      return {};
+    }
+
+    const matcherByAccountId = new Map(
+      selectedAccounts.map((account) => [
+        account.account_id,
+        {
+          displayName: normalizeCharacterLabel(account.display_name),
+          username: normalizeCharacterLabel(account.username)
+        }
+      ])
+    );
+    const rowsByAccountId = new Map(selectedAccounts.map((account) => [account.account_id, new Set<string>()]));
+
+    for (const row of state.video_rows) {
+      if (row.source_type !== "characterAccountAppearances" && row.source_type !== "characterAccountDrafts") {
+        continue;
+      }
+      const normalizedCharacterNameSet = new Set(
+        [row.character_name, ...row.character_names]
+          .map(normalizeCharacterLabel)
+          .filter(Boolean)
+      );
+      const normalizedCharacterUsername = normalizeCharacterLabel(row.character_username);
+      const rowKey = row.row_id || `${row.source_type}:${row.video_id}:${row.detail_url}`;
+      for (const [accountId, matcher] of matcherByAccountId) {
+        const matchesUsername = Boolean(
+          matcher.username &&
+          (normalizedCharacterUsername === matcher.username || normalizedCharacterNameSet.has(matcher.username))
+        );
+        const matchesDisplayName = Boolean(matcher.displayName && normalizedCharacterNameSet.has(matcher.displayName));
+        if (!matchesUsername && !matchesDisplayName) {
+          continue;
+        }
+        rowsByAccountId.get(accountId)?.add(rowKey);
+      }
+    }
+
+    const overrides: Record<string, number> = {};
+    for (const [accountId, rowIds] of rowsByAccountId) {
+      overrides[accountId] = rowIds.size;
+    }
+    return overrides;
+  }, [state.character_accounts, state.session_meta.selected_character_account_ids, state.video_rows]);
   const selectedBytes = useMemo(
     () => selectedRows.reduce((sum, row) => sum + (row.estimated_size_bytes ?? 0), 0),
     [selectedRows]
@@ -299,6 +351,7 @@ export function App() {
               state.setSelectedCharacterAccountIds([...new Set(selectedIds)]);
             }}
             selectedAccountIds={state.session_meta.selected_character_account_ids}
+            videoCountOverrides={selectedCharacterAccountVideoCountOverrides}
           />
         </div>
       ) : null}
@@ -312,7 +365,7 @@ export function App() {
       header={
         <div className="ss-header-grid">
           <div>
-            <h1>Save Sora v2.0.170</h1>
+            <h1>Save Sora v2.0.171</h1>
             <p className="ss-muted">Download anything on Sora, remove watermarks, export metadata and organized ZIP files.</p>
           </div>
           <div className="ss-inline-actions">
@@ -440,6 +493,10 @@ export function App() {
       </Dialog.Root>
     </AppShellTemplate>
   );
+}
+
+function normalizeCharacterLabel(value: string): string {
+  return value.trim().replace(/^@+/, "").toLowerCase();
 }
 
 function isZipReadyRow(row: { is_downloadable: boolean; video_id: string }): boolean {
