@@ -518,6 +518,41 @@ describe("video-row-normalizer", () => {
     expect(row.video_id).toBe("gen_nested_prompt_123");
   });
 
+  it("maps nested characterAccountDrafts metadata from draft payload fields", () => {
+    const draftCreatedAtSeconds = 1763170088;
+    const [row] = normalizeDraftRows(
+      "characterAccountDrafts",
+      [
+        {
+          profile: {
+            display_name: "alpha1337"
+          },
+          draft: {
+            id: "gen_nested_exact_123",
+            prompt: "Prompt from nested draft",
+            duration_s: 9.8,
+            created_at: draftCreatedAtSeconds,
+            download_urls: {
+              watermark: "https://videos.openai.com/watermarked-from-download-urls.mp4"
+            },
+            encodings: {
+              thumbnail: {
+                path: "https://videos.openai.com/nested-enc-thumb.jpg"
+              }
+            }
+          }
+        }
+      ],
+      FETCHED_AT
+    );
+
+    expect(row.prompt).toBe("Prompt from nested draft");
+    expect(row.thumbnail_url).toBe("https://videos.openai.com/nested-enc-thumb.jpg");
+    expect(row.playback_url).toBe("https://videos.openai.com/watermarked-from-download-urls.mp4");
+    expect(row.duration_seconds).toBe(9.8);
+    expect(row.created_at).toBe(new Date(draftCreatedAtSeconds * 1000).toISOString());
+  });
+
   it("keeps missing-id posts distinct when payload differs", () => {
     const [first, second] = normalizePostRows(
       "profile",

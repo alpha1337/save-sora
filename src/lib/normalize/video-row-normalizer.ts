@@ -331,8 +331,26 @@ function getPlaybackUrlFromRow(value: unknown): string {
     const mdEncoding = encodings?.md && typeof encodings.md === "object"
       ? encodings.md as Record<string, unknown>
       : null;
+    const downloadUrls = candidate.download_urls && typeof candidate.download_urls === "object"
+      ? candidate.download_urls as Record<string, unknown>
+      : null;
+    const downloadUrlsCamel = candidate.downloadUrls && typeof candidate.downloadUrls === "object"
+      ? candidate.downloadUrls as Record<string, unknown>
+      : null;
     const resolved = normalizeAbsoluteUrl(
-      pickFirstString([candidate.downloadable_url, candidate.downloadableUrl, candidate.url, sourceEncoding?.path, mdEncoding?.path])
+      pickFirstString([
+        candidate.downloadable_url,
+        candidate.downloadableUrl,
+        downloadUrls?.watermark,
+        downloadUrls?.no_watermark,
+        downloadUrls?.endcard_watermark,
+        downloadUrlsCamel?.watermark,
+        downloadUrlsCamel?.no_watermark,
+        downloadUrlsCamel?.endcard_watermark,
+        candidate.url,
+        sourceEncoding?.path,
+        mdEncoding?.path
+      ])
     );
     if (resolved) {
       return resolved;
@@ -359,8 +377,26 @@ function getDraftPlaybackUrlFromRow(value: unknown, generationId: string, resolv
     const mdEncoding = encodings?.md && typeof encodings.md === "object"
       ? encodings.md as Record<string, unknown>
       : null;
+    const downloadUrls = candidate.download_urls && typeof candidate.download_urls === "object"
+      ? candidate.download_urls as Record<string, unknown>
+      : null;
+    const downloadUrlsCamel = candidate.downloadUrls && typeof candidate.downloadUrls === "object"
+      ? candidate.downloadUrls as Record<string, unknown>
+      : null;
     const url = normalizeAbsoluteUrl(
-      pickFirstString([candidate.downloadable_url, candidate.downloadableUrl, candidate.url, sourceEncoding?.path, mdEncoding?.path])
+      pickFirstString([
+        candidate.downloadable_url,
+        candidate.downloadableUrl,
+        downloadUrls?.watermark,
+        downloadUrls?.no_watermark,
+        downloadUrls?.endcard_watermark,
+        downloadUrlsCamel?.watermark,
+        downloadUrlsCamel?.no_watermark,
+        downloadUrlsCamel?.endcard_watermark,
+        candidate.url,
+        sourceEncoding?.path,
+        mdEncoding?.path
+      ])
     );
     const candidateId = pickFirstString([
       candidate.id,
