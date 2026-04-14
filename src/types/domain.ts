@@ -47,6 +47,8 @@ export interface SourceSelectionState {
 export interface CreatorProfile {
   profile_id: string;
   user_id: string;
+  owner_user_id?: string;
+  character_user_id?: string;
   username: string;
   display_name: string;
   permalink: string;

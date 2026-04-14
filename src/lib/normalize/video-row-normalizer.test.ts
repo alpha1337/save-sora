@@ -224,7 +224,7 @@ describe("video-row-normalizer", () => {
       title: "wii nostalgia aesthetic",
       creator_name: "Muhammad Ali",
       creator_username: "muhammad_f_ali",
-      character_name: "creator.sample",
+      character_name: "Crystal Sparkle",
       character_username: "creator.sample",
       duration_seconds: 9.8,
       width: 352,
@@ -234,7 +234,7 @@ describe("video-row-normalizer", () => {
       skip_reason: ""
     });
     expect(row.row_id).toMatch(/^characterAccountAppearances:/);
-    expect(row.character_names).toEqual(["creator.sample"]);
+    expect(row.character_names).toEqual(["Crystal Sparkle"]);
     expect(row.published_at).toBe(new Date(1775636349.345291 * 1000).toISOString());
   });
 
@@ -360,6 +360,84 @@ describe("video-row-normalizer", () => {
     expect(row.skip_reason).toBe("unresolved_draft_video_id");
   });
 
+  it("falls back to the draft downloadable url when no shared s_* id is available", () => {
+    const [row] = normalizeDraftRows(
+      "characterAccountDrafts",
+      [
+        {
+          id: "gen_fallback_dl_123",
+          prompt: "Shared cameo draft",
+          attachments: [{ downloadable_url: "https://videos.openai.com/draft-fallback.mp4" }]
+        }
+      ],
+      FETCHED_AT
+    );
+
+    expect(row.video_id).toBe("gen_fallback_dl_123");
+    expect(row.playback_url).toBe("https://videos.openai.com/draft-fallback.mp4");
+    expect(row.is_downloadable).toBe(true);
+    expect(row.skip_reason).toBe("");
+  });
+
+  it("prefers remix output attachments over source/reference attachments for draft playback", () => {
+    const [row] = normalizeDraftRows(
+      "drafts",
+      [
+        {
+          id: "gen_remix123",
+          prompt: "My remix draft",
+          attachments: [
+            {
+              id: "s_source_other_user",
+              kind: "source",
+              downloadable_url: "https://videos.openai.com/remix-source.mp4"
+            },
+            {
+              id: "gen_remix123",
+              kind: "output",
+              downloadable_url: "https://videos.openai.com/remix-output.mp4"
+            }
+          ]
+        }
+      ],
+      FETCHED_AT
+    );
+
+    expect(row.video_id).toBe("gen_remix123");
+    expect(row.playback_url).toBe("https://videos.openai.com/remix-output.mp4");
+    expect(row.is_downloadable).toBe(true);
+    expect(row.skip_reason).toBe("");
+  });
+
+  it("ignores resolved draft ids that only match source attachments", () => {
+    const [row] = normalizeDraftRows(
+      "drafts",
+      [
+        {
+          id: "gen_remix456",
+          resolved_video_id: "s_source_only",
+          attachments: [
+            {
+              id: "s_source_only",
+              kind: "source",
+              downloadable_url: "https://videos.openai.com/remix-source.mp4"
+            },
+            {
+              id: "gen_remix456",
+              kind: "output",
+              downloadable_url: "https://videos.openai.com/remix-output.mp4"
+            }
+          ]
+        }
+      ],
+      FETCHED_AT
+    );
+
+    expect(row.video_id).toBe("gen_remix456");
+    expect(row.playback_url).toBe("https://videos.openai.com/remix-output.mp4");
+    expect(row.is_downloadable).toBe(true);
+  });
+
   it("uses fetch-job character context for characterAccountDrafts when row lacks character fields", () => {
     const [row] = normalizeDraftRows(
       "characterAccountDrafts",
@@ -441,7 +519,7 @@ describe("video-row-normalizer", () => {
     });
   });
 
-  it("prefers a character user id when creator profile payloads expose both ids", () => {
+  it("keeps creator and character ids distinct when payloads expose both ids", () => {
     const profile = normalizeCreatorProfile(
       {
         user_id: "user_creator.alt",
@@ -453,7 +531,9 @@ describe("video-row-normalizer", () => {
     );
 
     expect(profile).toMatchObject({
-      user_id: "ch_crystal",
+      user_id: "user_creator.alt",
+      owner_user_id: "user_creator.alt",
+      character_user_id: "ch_crystal",
       is_character_profile: true
     });
   });

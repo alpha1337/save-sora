@@ -181,6 +181,7 @@ export function shouldRetryWorkerTask(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return (
     /Receiving end does not exist/i.test(message) ||
+    /No tab with id/i.test(message) ||
     /message channel closed before a response was received/i.test(message) ||
     /The message port closed before a response was received/i.test(message) ||
     /Could not derive a Sora bearer token/i.test(message) ||

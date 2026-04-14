@@ -36,7 +36,7 @@ describe("source endpoint contracts", () => {
     expect(shouldFinishFetchPage("characterAccountAppearances", 0, null, false)).toBe(true);
   });
 
-  it("locks character appearances to the appearances feed contract", async () => {
+  it("locks character appearances to the character post-listing contract", async () => {
     const sessionPayload = {
       accessToken: "eyJhbGciOiJS.test.token",
       user: { id: "user-hpMzqszkKps0XRRewJj8bxER" }
@@ -54,14 +54,11 @@ describe("source endpoint contracts", () => {
           headers: { "content-type": "application/json" }
         });
       }
-      if (url.includes("cut=appearances")) {
+      if (url.includes("/backend/project_y/profile/ch_123/post_listing/posts")) {
         return new Response(JSON.stringify(appearancesPayload), {
           status: 200,
           headers: { "content-type": "application/json" }
         });
-      }
-      if (url.includes("cut=nf2")) {
-        return new Response(null, { status: 500 });
       }
 
       return new Response(null, { status: 404 });
@@ -77,11 +74,134 @@ describe("source endpoint contracts", () => {
     });
 
     expect(result).toMatchObject({
-      endpoint_key: "character-appearances",
+      endpoint_key: "character-post-listing-posts",
       next_cursor: "appearance-next-cursor",
       rows: appearancesPayload.items
     });
-    expect(fetchMock.mock.calls.map(([input]) => (typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url)).some((url) => url.includes("cut=nf2"))).toBe(false);
+    const requestedUrls = fetchMock.mock.calls.map(([input]) =>
+      typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url
+    );
+    expect(requestedUrls.some((url) => url.includes("/backend/project_y/profile/ch_123/post_listing/posts"))).toBe(true);
+  });
+
+  it("falls back to alternate creator published endpoints when a candidate is rejected", async () => {
+    const sessionPayload = {
+      accessToken: "eyJhbGciOiJS.test.token",
+      user: { id: "user-hpMzqszkKps0XRRewJj8bxER" }
+    };
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url === "https://sora.chatgpt.com/api/auth/session") {
+        return new Response(JSON.stringify(sessionPayload), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      }
+      if (url.includes("/backend/project_y/profile/username/quiettakes")) {
+        return new Response(JSON.stringify({ user_id: "user_quiettakes" }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      }
+      if (url.includes("/post_listing/posts")) {
+        return new Response(null, { status: 400 });
+      }
+      if (url.includes("/post_listing/profile")) {
+        return new Response(
+          JSON.stringify({
+            items: [{ post: { id: "s_alt123", posted_at: 1775636364.275118 } }],
+            cursor: "profile-next-cursor"
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" }
+          }
+        );
+      }
+      return new Response(null, { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await runSourceRequest({
+      type: "fetch-batch",
+      source: "creatorPublished",
+      creator_username: "quiettakes",
+      limit: 100,
+      page_budget: 1
+    });
+
+    expect(result).toMatchObject({
+      endpoint_key: "creator-post-listing-profile",
+      rows: [{ post: { id: "s_alt123", posted_at: 1775636364.275118 } }]
+    });
+    const requestedUrls = fetchMock.mock.calls.map(([input]) =>
+      typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url
+    );
+    expect(requestedUrls.some((url) => url.includes("/post_listing/posts"))).toBe(true);
+    expect(requestedUrls.some((url) => url.includes("/post_listing/profile"))).toBe(true);
+  });
+
+  it("falls back to username-scoped creator post listing endpoints when id-scoped requests are rejected", async () => {
+    const sessionPayload = {
+      accessToken: "eyJhbGciOiJS.test.token",
+      user: { id: "user-hpMzqszkKps0XRRewJj8bxER" }
+    };
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url === "https://sora.chatgpt.com/api/auth/session") {
+        return new Response(JSON.stringify(sessionPayload), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      }
+      if (url.includes("/backend/project_y/profile/username/quiettakes") && !url.includes("/post_listing/")) {
+        return new Response(JSON.stringify({ user_id: "user_quiettakes", username: "quiettakes" }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      }
+      if (url.includes("/backend/project_y/profile/user_quiettakes/post_listing/")) {
+        return new Response(null, { status: 400 });
+      }
+      if (url.includes("/backend/project_y/profile/quiettakes/post_listing/")) {
+        return new Response(null, { status: 400 });
+      }
+      if (url.includes("/backend/project_y/profile/username/quiettakes/post_listing/profile")) {
+        return new Response(
+          JSON.stringify({
+            items: [{ post: { id: "s_username_path", posted_at: 1775636364.275118 } }],
+            cursor: "profile-next-cursor"
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" }
+          }
+        );
+      }
+      if (url.includes("/backend/project_y/profile/username/quiettakes/post_listing/")) {
+        return new Response(null, { status: 404 });
+      }
+      return new Response(null, { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await runSourceRequest({
+      type: "fetch-batch",
+      source: "creatorPublished",
+      creator_username: "quiettakes",
+      limit: 100,
+      page_budget: 1
+    });
+
+    expect(result).toMatchObject({
+      endpoint_key: "creator-post-listing-profile-username",
+      rows: [{ post: { id: "s_username_path", posted_at: 1775636364.275118 } }]
+    });
+    const requestedUrls = fetchMock.mock.calls.map(([input]) =>
+      typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url
+    );
+    expect(requestedUrls.some((url) => url.includes("/profile/user_quiettakes/post_listing/posts"))).toBe(true);
+    expect(requestedUrls.some((url) => url.includes("/profile/username/quiettakes/post_listing/profile"))).toBe(true);
   });
 });
 

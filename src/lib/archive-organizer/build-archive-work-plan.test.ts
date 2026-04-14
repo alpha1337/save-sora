@@ -44,6 +44,10 @@ function createRow(overrides: Partial<VideoRow> = {}): VideoRow {
 describe("buildArchiveWorkPlan", () => {
   it("stores each downloadable row once and emits organizer targets deterministically", () => {
     const downloadableRow = createRow();
+    const duplicateRow = createRow({
+      row_id: "profile:s_alpha123:duplicate",
+      title: "Nebula Run Duplicate"
+    });
     const skippedRow = createRow({
       row_id: "drafts:missing",
       video_id: "",
@@ -51,7 +55,7 @@ describe("buildArchiveWorkPlan", () => {
       skip_reason: "unresolved_draft_video_id"
     });
 
-    const plan = buildArchiveWorkPlan([downloadableRow, skippedRow], "Sora Library: April 2026");
+    const plan = buildArchiveWorkPlan([downloadableRow, duplicateRow, skippedRow], "Sora Library: April 2026");
 
     expect(plan.rows).toHaveLength(1);
     expect(plan.archive_name).toBe("Sora Library- April 2026");

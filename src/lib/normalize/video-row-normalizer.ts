@@ -108,23 +108,30 @@ export function normalizeDraftRows(source: LowLevelSourceType, rows: unknown[], 
   return rows.map((row) => {
     const rowRecord = row as Record<string, unknown>;
     const generationId = getDraftGenerationId(row);
-    const resolvedVideoId = pickFirstString([
+    const resolvedVideoIdCandidate = pickFirstString([
       rowRecord.resolved_video_id,
       rowRecord.resolvedVideoId,
       getVideoIdFromValue(row)
     ]);
+    const resolvedVideoId = isSourceResolvedDraftId(row, resolvedVideoIdCandidate) ? "" : resolvedVideoIdCandidate;
+    const fallbackDraftId = pickFirstString([generationId, getRowPostId(row)]);
+    const playbackUrl = getDraftPlaybackUrlFromRow(row, generationId, resolvedVideoId);
+    const effectiveVideoId = resolvedVideoId || (playbackUrl ? fallbackDraftId : "");
+    const isDownloadable = Boolean(resolvedVideoId || playbackUrl);
     const title = getRowTitle(row, "draft");
-    const detailUrl = normalizeAbsoluteUrl(
+    const sharedDetailUrl = normalizeAbsoluteUrl(
       pickFirstString([rowRecord.resolved_share_url, rowRecord.resolvedShareUrl])
-    ) || getDetailUrl(row, resolvedVideoId || generationId);
+    );
+    const fallbackDetailUrl = getDetailUrl(row, effectiveVideoId || generationId);
+    const detailUrl = sanitizeDraftDetailUrl(sharedDetailUrl || fallbackDetailUrl, generationId, resolvedVideoId);
     const dimensions = getDimensions(row);
     const characterNames = getCharacterNames(row);
 
     return {
-      row_id: resolvedVideoId || generationId
-        ? buildRowId(source, resolvedVideoId || generationId, title)
+      row_id: effectiveVideoId || generationId
+        ? buildRowId(source, effectiveVideoId || generationId, title)
         : buildRowIdFromPayload(source, "", title, row),
-      video_id: resolvedVideoId,
+      video_id: effectiveVideoId,
       source_type: source,
       source_bucket: resolveSourceBucket(source),
       title,
@@ -147,17 +154,72 @@ export function normalizeDraftRows(source: LowLevelSourceType, rows: unknown[], 
       remix_count: null,
       detail_url: detailUrl,
       thumbnail_url: getPreferredThumbnailUrl(row),
-      playback_url: getPlaybackUrlFromRow(row),
+      playback_url: playbackUrl,
       duration_seconds: getDurationSeconds(row),
       estimated_size_bytes: getEstimatedSizeBytes(row),
       width: dimensions.width,
       height: dimensions.height,
       raw_payload_json: stringifyRawPayload(row),
-      is_downloadable: Boolean(resolvedVideoId),
-      skip_reason: resolvedVideoId ? "" : "unresolved_draft_video_id",
+      is_downloadable: isDownloadable,
+      skip_reason: isDownloadable ? "" : "unresolved_draft_video_id",
       fetched_at: fetchedAt
     };
   });
+}
+
+function isSourceResolvedDraftId(value: unknown, resolvedVideoId: string): boolean {
+  if (!resolvedVideoId || typeof value !== "object" || value == null) {
+    return false;
+  }
+
+  const record = value as Record<string, unknown>;
+  let sawResolvedId = false;
+  for (const candidate of [record, ...getAttachmentObjects(record)]) {
+    const candidateId = pickFirstString([
+      candidate.id,
+      candidate.post_id,
+      candidate.postId,
+      candidate.public_id,
+      candidate.publicId,
+      candidate.share_id,
+      candidate.shareId
+    ]);
+    if (candidateId !== resolvedVideoId) {
+      continue;
+    }
+
+    sawResolvedId = true;
+    const typeHint = pickFirstString([
+      candidate.kind,
+      candidate.type,
+      candidate.role,
+      candidate.asset_type,
+      candidate.assetType,
+      candidate.media_type,
+      candidate.mediaType
+    ]).toLowerCase();
+    if (!typeHint.includes("source") && !typeHint.includes("reference") && !typeHint.includes("input")) {
+      return false;
+    }
+  }
+
+  return sawResolvedId;
+}
+
+function sanitizeDraftDetailUrl(detailUrl: string, generationId: string, resolvedVideoId: string): string {
+  if (resolvedVideoId) {
+    return `https://sora.chatgpt.com/p/${resolvedVideoId}`;
+  }
+
+  if (!detailUrl) {
+    return generationId ? `https://sora.chatgpt.com/d/${generationId}` : "";
+  }
+
+  if (detailUrl.includes("/backend/")) {
+    return generationId ? `https://sora.chatgpt.com/d/${generationId}` : "";
+  }
+
+  return detailUrl;
 }
 
 export function normalizeCharacterAccounts(rows: unknown[]): CharacterAccount[] {
@@ -235,6 +297,90 @@ function getPlaybackUrlFromRow(value: unknown): string {
   return "";
 }
 
+function getDraftPlaybackUrlFromRow(value: unknown, generationId: string, resolvedVideoId: string): string {
+  if (!value || typeof value !== "object") {
+    return "";
+  }
+
+  const record = value as Record<string, unknown>;
+  const candidateObjects = [record, ...getAttachmentObjects(record)];
+  const candidates = candidateObjects.map((candidate) => {
+    const encodings = candidate.encodings && typeof candidate.encodings === "object"
+      ? candidate.encodings as Record<string, unknown>
+      : null;
+    const sourceEncoding = encodings?.source && typeof encodings.source === "object"
+      ? encodings.source as Record<string, unknown>
+      : null;
+    const mdEncoding = encodings?.md && typeof encodings.md === "object"
+      ? encodings.md as Record<string, unknown>
+      : null;
+    const url = normalizeAbsoluteUrl(
+      pickFirstString([candidate.downloadable_url, candidate.downloadableUrl, candidate.url, sourceEncoding?.path, mdEncoding?.path])
+    );
+    const candidateId = pickFirstString([
+      candidate.id,
+      candidate.post_id,
+      candidate.postId,
+      candidate.public_id,
+      candidate.publicId,
+      candidate.generation_id,
+      candidate.generationId
+    ]);
+    const candidateGenerationId = pickFirstString([candidate.generation_id, candidate.generationId]);
+    const typeHint = pickFirstString([
+      candidate.kind,
+      candidate.type,
+      candidate.role,
+      candidate.asset_type,
+      candidate.assetType,
+      candidate.media_type,
+      candidate.mediaType
+    ]).toLowerCase();
+
+    return {
+      candidateGenerationId,
+      candidateId,
+      typeHint,
+      url
+    };
+  }).filter((entry) => entry.url);
+
+  let bestScore = Number.NEGATIVE_INFINITY;
+  let bestUrl = "";
+  for (const candidate of candidates) {
+    let score = 0;
+    if (resolvedVideoId && candidate.candidateId === resolvedVideoId) {
+      score += 100;
+    }
+    if (generationId && candidate.candidateGenerationId === generationId) {
+      score += 90;
+    }
+    if (generationId && candidate.candidateId === generationId) {
+      score += 80;
+    }
+    if (candidate.typeHint.includes("output") || candidate.typeHint.includes("generated") || candidate.typeHint.includes("result")) {
+      score += 50;
+    }
+    if (candidate.typeHint.includes("source") || candidate.typeHint.includes("reference") || candidate.typeHint.includes("input")) {
+      score -= 80;
+    }
+    if (!resolvedVideoId && generationId && /^s_[A-Za-z0-9_-]+$/i.test(candidate.candidateId)) {
+      score -= 40;
+    }
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestUrl = candidate.url;
+    }
+  }
+
+  if (bestUrl) {
+    return bestUrl;
+  }
+
+  return getPlaybackUrlFromRow(value);
+}
+
 export function normalizeCreatorProfile(profile: unknown, routeUrl: string): CreatorProfile | null {
   if (!profile || typeof profile !== "object") {
     return null;
@@ -255,7 +401,7 @@ export function normalizeCreatorProfile(profile: unknown, routeUrl: string): Cre
     ownerProfile?.user_id,
     ownerProfile?.userId
   ]);
-  const userId = characterUserId || canonicalUserId;
+  const userId = canonicalUserId || characterUserId;
   const username = pickFirstString([
     record.username,
     record.user_name,
@@ -275,6 +421,8 @@ export function normalizeCreatorProfile(profile: unknown, routeUrl: string): Cre
   return {
     profile_id: profileId,
     user_id: userId,
+    owner_user_id: canonicalUserId || (!userId.startsWith("ch_") ? userId : ""),
+    character_user_id: characterUserId || (userId.startsWith("ch_") ? userId : ""),
     username,
     display_name: pickFirstString([record.display_name, record.displayName, record.name, username, profileId]),
     permalink: normalizeAbsoluteUrl(pickFirstString([record.permalink, record.url, routeUrl])) || routeUrl,

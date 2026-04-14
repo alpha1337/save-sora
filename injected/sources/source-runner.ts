@@ -26,6 +26,11 @@ interface FetchEndpointCandidate {
   optional?: boolean;
   url: string;
 }
+interface EndpointAttemptFailure {
+  key: string;
+  request: string;
+  status: number | null;
+}
 /**
  * Executes typed background requests from inside the signed-in Sora page.
  */
@@ -130,10 +135,15 @@ async function fetchBatchPayload(
   const endpointCandidates = await buildFetchEndpointCandidates(request, cursor, offset, limit);
   const matchedCandidate = endpointKey ? endpointCandidates.find((candidate) => candidate.key === endpointKey) ?? null : null;
   if (matchedCandidate) {
-    return {
-      endpointKey: matchedCandidate.key,
-      payload: await fetchCandidatePayload(matchedCandidate)
-    };
+    try {
+      return {
+        endpointKey: matchedCandidate.key,
+        payload: await fetchCandidatePayload(matchedCandidate)
+      };
+    } catch (_error) {
+      // If a pinned endpoint fails, re-run endpoint selection so we can try all candidates and report attempts.
+      return selectBestBatchPayload(endpointCandidates, request, cursor);
+    }
   }
   return selectBestBatchPayload(endpointCandidates, request, cursor);
 }
@@ -156,13 +166,24 @@ async function selectBestBatchPayload(
   request: FetchBatchRequest,
   cursor: string | null
 ): Promise<{ endpointKey: string | null; payload: unknown }> {
+  const attemptFailures: EndpointAttemptFailure[] = [];
   let firstSuccessfulResult: { endpointKey: string | null; payload: unknown } | null = null;
   let bestResult: { endpointKey: string | null; payload: unknown } | null = null;
   let bestScore = -1;
   let bestPaginatedResult: { endpointKey: string | null; payload: unknown } | null = null;
   let bestPaginatedScore = -1;
   for (const candidate of candidates) {
-    const payload = await fetchCandidatePayload(candidate);
+    let payload: unknown;
+    try {
+      payload = await fetchCandidatePayload(candidate);
+    } catch (error) {
+      attemptFailures.push({
+        key: candidate.key,
+        request: describeRequestFromCandidateUrl(candidate.url),
+        status: extractStatusFromErrorMessage(error instanceof Error ? error.message : String(error))
+      });
+      continue;
+    }
     const rows = getPostListingRows(payload);
     const nextCursor = getNextCursorForRows(
       payload,
@@ -184,7 +205,11 @@ async function selectBestBatchPayload(
       bestPaginatedResult = result;
     }
   }
-  return bestPaginatedResult ?? bestResult ?? firstSuccessfulResult ?? { endpointKey: candidates[0]?.key ?? null, payload: { items: [] } };
+  const resolvedResult = bestPaginatedResult ?? bestResult ?? firstSuccessfulResult;
+  if (resolvedResult) {
+    return resolvedResult;
+  }
+  throw new Error(buildFetchBatchAttemptFailureMessage(request, attemptFailures));
 }
 async function resolveCreatorProfile(routeUrl: string) {
   const username = getUsernameFromRouteUrl(routeUrl);
@@ -238,20 +263,50 @@ async function resolveViewerIdentity() {
     display_name: displayName
   };
 }
-async function resolveCreatorId(explicitCreatorId: string, routeUrl: string, creatorUsername: string): Promise<string> {
-  if (explicitCreatorId) {
-    return explicitCreatorId;
+async function resolveCreatorTarget(
+  explicitCreatorId: string,
+  routeUrl: string,
+  creatorUsername: string
+): Promise<{ userId: string; username: string; identifiers: string[] }> {
+  const routeUsername = getUsernameFromRouteUrl(routeUrl);
+  const normalizedExplicitId = explicitCreatorId.trim();
+  const normalizedUsername = creatorUsername.trim() || routeUsername;
+  let resolvedUserId = normalizedExplicitId;
+  let resolvedUsername = normalizedUsername;
+
+  if (normalizedUsername) {
+    try {
+      const payload = (await fetchJson(`/backend/project_y/profile/username/${encodeURIComponent(normalizedUsername)}`)) as Record<string, unknown>;
+      resolvedUserId = pickFirstString([resolvedUserId, payload.user_id, payload.userId]);
+      resolvedUsername = pickFirstString([
+        resolvedUsername,
+        payload.username,
+        payload.user_name,
+        payload.userName,
+        routeUsername
+      ]);
+    } catch (_error) {
+      // Keep fallbacks from explicit id / route parsing.
+    }
   }
-  const username = creatorUsername || getUsernameFromRouteUrl(routeUrl);
-  if (!username) {
+
+  const identifiers = [...new Set([
+    resolvedUserId,
+    normalizedExplicitId,
+    resolvedUsername,
+    normalizedUsername,
+    routeUsername
+  ].map((value) => value.trim()).filter(Boolean))];
+
+  if (identifiers.length === 0) {
     throw new Error("Creator fetch requires a user id or creator route.");
   }
-  const payload = (await fetchJson(`/backend/project_y/profile/username/${encodeURIComponent(username)}`)) as Record<string, unknown>;
-  const resolvedId = pickFirstString([payload.user_id, payload.userId, username]);
-  if (!resolvedId) {
-    throw new Error(`Could not resolve a creator id for ${username}.`);
-  }
-  return resolvedId;
+
+  return {
+    userId: resolvedUserId,
+    username: resolvedUsername,
+    identifiers
+  };
 }
 async function resolveCharacterAccountId(
   explicitCharacterId: string,
@@ -376,20 +431,33 @@ async function buildFetchEndpointCandidates(
       request.route_url ?? "",
       request.creator_username ?? ""
     );
+    const encodedCharacterId = encodeURIComponent(resolvedCharacterId);
     return [
       {
-        key: "character-appearances",
-        optional: true,
-        url: buildUrl(`/backend/project_y/profile_feed/${encodeURIComponent(resolvedCharacterId)}`, {
-          limit,
-          cut: "appearances",
-          cursor
-        }).toString()
+        key: "character-post-listing-posts",
+        url: buildUrl(`/backend/project_y/profile/${encodedCharacterId}/post_listing/posts`, { limit, cursor }).toString()
       },
       {
-        key: "viewer-appearances-fallback",
+        key: "character-post-listing-profile",
+        url: buildUrl(`/backend/project_y/profile/${encodedCharacterId}/post_listing/profile`, { limit, cursor }).toString()
+      },
+      {
+        key: "character-post-listing-public",
+        url: buildUrl(`/backend/project_y/profile/${encodedCharacterId}/post_listing/public`, { limit, cursor }).toString()
+      },
+      {
+        key: "character-post-listing-published",
+        url: buildUrl(`/backend/project_y/profile/${encodedCharacterId}/post_listing/published`, { limit, cursor }).toString()
+      },
+      {
+        key: "character-feed-nf2",
         optional: true,
-        url: buildUrl("/backend/project_y/profile_feed/me", { limit, cut: "appearances", cursor }).toString()
+        url: buildUrl(`/backend/project_y/profile_feed/${encodedCharacterId}`, { limit, cut: "nf2", cursor }).toString()
+      },
+      {
+        key: "character-feed-appearances",
+        optional: true,
+        url: buildUrl(`/backend/project_y/profile_feed/${encodedCharacterId}`, { limit, cut: "appearances", cursor }).toString()
       }
     ];
   }
@@ -399,53 +467,92 @@ async function buildFetchEndpointCandidates(
       request.route_url ?? "",
       request.creator_username ?? ""
     );
+    const encodedCharacterId = encodeURIComponent(resolvedCharacterId);
     return [
       {
         key: "character-account-drafts",
         optional: true,
-        url: buildUrl(`/backend/project_y/profile/drafts/cameos/character/${encodeURIComponent(resolvedCharacterId)}`, {
+        url: buildUrl(`/backend/project_y/profile/drafts/cameos/character/${encodedCharacterId}`, {
           limit,
           cursor
         }).toString()
       },
       {
-        key: "viewer-character-drafts-fallback",
+        key: "character-post-listing-drafts",
         optional: true,
-        url: buildUrl("/backend/project_y/profile/drafts/cameos", { limit, cursor }).toString()
+        url: buildUrl(`/backend/project_y/profile/${encodedCharacterId}/post_listing/drafts`, { limit, cursor }).toString()
       }
     ];
   }
   if (request.source === "creatorPublished") {
-    const creatorId = await resolveCreatorId(request.creator_user_id ?? "", request.route_url ?? "", request.creator_username ?? "");
-    return [
-      {
-        key: "creator-post-listing-posts",
-        url: buildUrl(`/backend/project_y/profile/${encodeURIComponent(creatorId)}/post_listing/posts`, { limit, cursor }).toString()
-      },
-      {
-        key: "creator-post-listing-profile",
-        url: buildUrl(`/backend/project_y/profile/${encodeURIComponent(creatorId)}/post_listing/profile`, { limit, cursor }).toString()
-      },
-      {
-        key: "creator-post-listing-public",
-        url: buildUrl(`/backend/project_y/profile/${encodeURIComponent(creatorId)}/post_listing/public`, { limit, cursor }).toString()
-      },
-      {
-        key: "creator-post-listing-published",
-        url: buildUrl(`/backend/project_y/profile/${encodeURIComponent(creatorId)}/post_listing/published`, { limit, cursor }).toString()
-      },
-      {
-        key: "creator-feed-nf2",
-        url: buildUrl(`/backend/project_y/profile_feed/${encodeURIComponent(creatorId)}`, { limit, cut: "nf2", cursor }).toString()
-      }
-    ];
+    const creatorTarget = await resolveCreatorTarget(
+      request.creator_user_id ?? "",
+      request.route_url ?? "",
+      request.creator_username ?? ""
+    );
+    const endpointCandidates: FetchEndpointCandidate[] = [];
+    creatorTarget.identifiers.forEach((identifier, index) => {
+      const suffix = index === 0 ? "" : `-alt${index}`;
+      const encodedIdentifier = encodeURIComponent(identifier);
+      endpointCandidates.push(
+        {
+          key: `creator-post-listing-posts${suffix}`,
+          url: buildUrl(`/backend/project_y/profile/${encodedIdentifier}/post_listing/posts`, { limit, cursor }).toString()
+        },
+        {
+          key: `creator-post-listing-profile${suffix}`,
+          url: buildUrl(`/backend/project_y/profile/${encodedIdentifier}/post_listing/profile`, { limit, cursor }).toString()
+        },
+        {
+          key: `creator-post-listing-public${suffix}`,
+          url: buildUrl(`/backend/project_y/profile/${encodedIdentifier}/post_listing/public`, { limit, cursor }).toString()
+        },
+        {
+          key: `creator-post-listing-published${suffix}`,
+          url: buildUrl(`/backend/project_y/profile/${encodedIdentifier}/post_listing/published`, { limit, cursor }).toString()
+        },
+        {
+          key: `creator-feed-nf2${suffix}`,
+          url: buildUrl(`/backend/project_y/profile_feed/${encodedIdentifier}`, { limit, cut: "nf2", cursor }).toString()
+        }
+      );
+    });
+    if (creatorTarget.username) {
+      const encodedUsername = encodeURIComponent(creatorTarget.username);
+      endpointCandidates.push(
+        {
+          key: "creator-post-listing-posts-username",
+          url: buildUrl(`/backend/project_y/profile/username/${encodedUsername}/post_listing/posts`, { limit, cursor }).toString()
+        },
+        {
+          key: "creator-post-listing-profile-username",
+          url: buildUrl(`/backend/project_y/profile/username/${encodedUsername}/post_listing/profile`, { limit, cursor }).toString()
+        }
+      );
+    }
+    return endpointCandidates;
   }
   if (request.source === "creatorCameos") {
-    const creatorId = await resolveCreatorId(request.creator_user_id ?? "", request.route_url ?? "", request.creator_username ?? "");
-    return [{
-      key: "creator-appearances",
-      url: buildUrl(`/backend/project_y/profile_feed/${encodeURIComponent(creatorId)}`, { limit, cut: "appearances", cursor }).toString()
-    }];
+    const creatorTarget = await resolveCreatorTarget(
+      request.creator_user_id ?? "",
+      request.route_url ?? "",
+      request.creator_username ?? ""
+    );
+    const candidates: FetchEndpointCandidate[] = creatorTarget.identifiers.map((identifier, index) => ({
+      key: index === 0 ? "creator-appearances" : `creator-appearances-alt${index}`,
+      url: buildUrl(`/backend/project_y/profile_feed/${encodeURIComponent(identifier)}`, { limit, cut: "appearances", cursor }).toString()
+    }));
+    if (creatorTarget.username) {
+      candidates.push({
+        key: "creator-appearances-username",
+        url: buildUrl(`/backend/project_y/profile_feed/username/${encodeURIComponent(creatorTarget.username)}`, {
+          limit,
+          cut: "appearances",
+          cursor
+        }).toString()
+      });
+    }
+    return candidates;
   }
   throw new Error(`Unsupported fetch source: ${request.source}`);
 }
@@ -467,6 +574,20 @@ async function createSharedDraftReference(row: Record<string, unknown>, generati
 
   const detailUrl = resolveDraftDetailUrl(row, generationId);
   if (detailUrl) {
+    const detailPayload = await fetchJson(detailUrl).catch(() => null);
+    if (detailPayload) {
+      const recoveredFromPayload = resolveSharedVideoIdFromValue(detailPayload);
+      if (recoveredFromPayload) {
+        const metadata = extractResolvedDraftMetadataFromValue(detailPayload, recoveredFromPayload);
+        return {
+          video_id: recoveredFromPayload,
+          share_url: `${SORA_ORIGIN}/p/${recoveredFromPayload}`,
+          estimated_size_bytes: metadata.estimated_size_bytes,
+          thumbnail_url: metadata.thumbnail_url
+        };
+      }
+    }
+
     const detailHtml = await fetchText(detailUrl).catch(() => "");
     const recoveredId = extractSharedVideoId(detailHtml);
     if (recoveredId) {
@@ -523,7 +644,7 @@ async function fetchJsonWithMethod(url: string, method: "POST", jsonBody: unknow
       return response.json();
     }
     if (attempt >= DRAFT_SHARE_POST_RETRY_DELAYS_MS.length || !isRetriableSoraStatus(response.status)) {
-      throw new Error(`Draft share creation failed with status ${response.status}.`);
+      throw new Error(`Draft share creation failed with status ${response.status}. Request: POST /backend/project_y/post.`);
     }
     await sleepWithJitter(DRAFT_SHARE_POST_RETRY_DELAYS_MS[attempt]);
   }
@@ -602,15 +723,6 @@ function classifyDraftSkipReason(row: Record<string, unknown>): string {
   return "unresolved_draft_video_id";
 }
 function hasDraftEditedOrRemixStub(row: Record<string, unknown>): boolean {
-  const cVersion = pickFirstNumber([
-    row.c_version,
-    row.cVersion,
-    (row.draft as Record<string, unknown> | undefined)?.c_version,
-    (row.draft as Record<string, unknown> | undefined)?.cVersion
-  ]);
-  if ((cVersion ?? 0) > 0) {
-    return true;
-  }
   return pickFirstBoolean([
     row.remix_stub,
     row.remixStub,
@@ -766,15 +878,6 @@ function pickFirstString(candidates: unknown[]): string {
   }
   return "";
 }
-function pickFirstNumber(candidates: unknown[]): number | null {
-  for (const candidate of candidates) {
-    const numericValue = Number(candidate);
-    if (Number.isFinite(numericValue)) {
-      return numericValue;
-    }
-  }
-  return null;
-}
 function pickFirstBoolean(candidates: unknown[]): boolean {
   for (const candidate of candidates) {
     if (typeof candidate === "boolean") {
@@ -826,4 +929,48 @@ function getCursorKindForSource(source: FetchBatchRequest["source"]): string {
     return "sv2_created_at";
   }
   return "";
+}
+function buildFetchBatchAttemptFailureMessage(
+  request: FetchBatchRequest,
+  failures: EndpointAttemptFailure[]
+): string {
+  if (failures.length === 0) {
+    return `Sora fetch-batch failed for source=${request.source} with no successful endpoint candidates.`;
+  }
+  const summary = failures
+    .map((failure) => {
+      const statusLabel = typeof failure.status === "number" ? `status ${failure.status}` : "unknown status";
+      return `${failure.key} (${statusLabel}) ${failure.request}`;
+    })
+    .join(" | ");
+  return `Sora fetch-batch failed for source=${request.source}. Attempts: ${summary}`;
+}
+function describeRequestFromCandidateUrl(candidateUrl: string): string {
+  try {
+    const url = new URL(candidateUrl);
+    const filteredParams = new URLSearchParams();
+    const includeParam = (key: string) => {
+      const value = url.searchParams.get(key);
+      if (!value) {
+        return;
+      }
+      filteredParams.set(key, value.length > 48 ? `${value.slice(0, 48)}...` : value);
+    };
+    includeParam("cut");
+    includeParam("limit");
+    includeParam("cursor");
+    includeParam("offset");
+    const query = filteredParams.toString();
+    return `GET ${url.pathname}${query ? `?${query}` : ""}`;
+  } catch (_error) {
+    return `GET ${candidateUrl}`;
+  }
+}
+function extractStatusFromErrorMessage(message: string): number | null {
+  const match = message.match(/status\s+(\d{3})/i);
+  if (!match) {
+    return null;
+  }
+  const status = Number(match[1]);
+  return Number.isFinite(status) ? status : null;
 }

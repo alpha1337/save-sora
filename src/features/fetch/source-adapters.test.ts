@@ -132,7 +132,7 @@ describe("buildFetchJobs", () => {
     expect(draftsJob?.character_id).toBe("ch_crystal");
   });
 
-  it("routes character profiles by flag even when the id is not prefixed with ch_", () => {
+  it("skips character-style creator profiles when no ch_* id is available", () => {
     const jobs = buildFetchJobs(
       createState([
         {
@@ -151,11 +151,7 @@ describe("buildFetchJobs", () => {
       ])
     );
 
-    expect(jobs.map((job) => job.source)).toEqual([
-      "characterAccountAppearances",
-      "characterAccountDrafts"
-    ]);
-    expect(jobs.map((job) => job.expected_total_count)).toEqual([143852, 12]);
+    expect(jobs).toEqual([]);
   });
 
   it("keeps normal creator profiles on the creator fetch path", () => {
@@ -182,6 +178,33 @@ describe("buildFetchJobs", () => {
       "creatorCameos"
     ]);
     expect(jobs.map((job) => job.expected_total_count)).toEqual([1083, 3634]);
+  });
+
+  it("uses owner_user_id for creator jobs when present", () => {
+    const jobs = buildFetchJobs(
+      createState([
+        {
+          profile_id: "creator-hybrid",
+          user_id: "ch_crystal",
+          owner_user_id: "user_owner_123",
+          character_user_id: "ch_crystal",
+          username: "creator.sample",
+          display_name: "Crystal Sparkle",
+          permalink: "https://sora.chatgpt.com/profile/creator.sample",
+          profile_picture_url: null,
+          is_character_profile: false,
+          published_count: 1083,
+          appearance_count: 3634,
+          draft_count: null,
+          created_at: "2026-04-11T00:00:00.000Z"
+        }
+      ])
+    );
+
+    const publishedJob = jobs.find((job) => job.source === "creatorPublished");
+    const cameosJob = jobs.find((job) => job.source === "creatorCameos");
+    expect(publishedJob?.creator_user_id).toBe("user_owner_123");
+    expect(cameosJob?.creator_user_id).toBe("user_owner_123");
   });
 
   it("deduplicates character jobs selected through multiple source groups", () => {
@@ -248,6 +271,27 @@ describe("buildFetchJobs", () => {
     expect(jobs[0]?.label).toBe("Crystal Sparkle appearances");
     expect(jobs[1]?.label).toBe("Crystal Sparkle drafts");
     expect(jobs[0]?.character_display_name).toBe("Crystal Sparkle");
+  });
+
+  it("ignores selected character accounts that are not ch_* ids", () => {
+    const state = createState([]);
+    state.session_meta.active_sources.creators = false;
+    state.session_meta.active_sources.characterAccounts = true;
+    state.session_meta.selected_character_account_ids = ["user_owner_123"];
+    state.character_accounts = [
+      {
+        account_id: "user_owner_123",
+        username: "creator.sample",
+        display_name: "Owner Account",
+        profile_picture_url: null,
+        appearance_count: 99,
+        draft_count: 5
+      }
+    ];
+
+    const jobs = buildFetchJobs(state);
+
+    expect(jobs).toEqual([]);
   });
 
   it("falls back to profile_id and cached account display name for creator-character jobs", () => {

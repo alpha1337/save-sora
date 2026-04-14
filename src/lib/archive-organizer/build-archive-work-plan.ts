@@ -6,7 +6,7 @@ import { sanitizeFileNamePart, uniqueStrings } from "@lib/utils/string-utils";
  * that recreate the linked library layout after extraction.
  */
 export function buildArchiveWorkPlan(rows: VideoRow[], archiveName: string): ArchiveWorkPlan {
-  const downloadableRows = rows.filter((row) => row.video_id && row.is_downloadable);
+  const downloadableRows = dedupeRowsByVideoId(rows.filter((row) => row.video_id && row.is_downloadable));
   const organizerRows = downloadableRows.map(buildOrganizerRow);
   const supplementalEntries = buildArchiveSupplementalEntries(organizerRows);
 
@@ -16,6 +16,16 @@ export function buildArchiveWorkPlan(rows: VideoRow[], archiveName: string): Arc
     supplemental_entries: supplementalEntries,
     archive_name: sanitizeFileNamePart(archiveName, "save-sora-library")
   };
+}
+
+function dedupeRowsByVideoId(rows: VideoRow[]): VideoRow[] {
+  const rowByVideoId = new Map<string, VideoRow>();
+  for (const row of rows) {
+    if (!rowByVideoId.has(row.video_id)) {
+      rowByVideoId.set(row.video_id, row);
+    }
+  }
+  return [...rowByVideoId.values()];
 }
 
 function buildOrganizerRow(row: VideoRow): ArchiveOrganizerRow {

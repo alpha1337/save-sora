@@ -38,11 +38,14 @@ export function buildFetchJobs(state: AppStoreState): FetchJob[] {
   }
   if (selectedSources.characterAccounts) {
     for (const characterId of state.session_meta.selected_character_account_ids) {
+      if (!characterId.startsWith("ch_")) {
+        continue;
+      }
       const account = state.character_accounts.find((entry) => entry.account_id === characterId);
       const profileMatch = state.creator_profiles.find(
         (profile) =>
           profile.is_character_profile &&
-          (profile.user_id === characterId || profile.profile_id === characterId)
+          (profile.character_user_id === characterId || profile.user_id === characterId || profile.profile_id === characterId)
       );
       const labelPrefix = resolveCharacterLabel(account?.display_name, account?.username, profileMatch?.display_name, profileMatch?.username, characterId);
       jobs.push(withFetchWindow({
@@ -78,7 +81,7 @@ function buildCreatorJobs(
   fetchWindow: { sinceMs: number | null; untilMs: number | null }
 ): FetchJob[] {
   const baseJobData = {
-    creator_user_id: profile.user_id,
+    creator_user_id: profile.owner_user_id || profile.user_id,
     creator_username: profile.username,
     route_url: profile.permalink
   };
@@ -87,11 +90,16 @@ function buildCreatorJobs(
     const permalinkName = resolvePermalinkProfileName(profile.permalink);
     const matchedAccount = characterAccounts.find(
       (account) =>
+        account.account_id === profile.character_user_id ||
         account.account_id === profile.user_id ||
         account.account_id === profile.profile_id ||
         (profile.username && account.username === profile.username)
     );
     const resolvedCharacterId = resolveCharacterId(profile, matchedAccount?.account_id, permalinkName);
+    if (!resolvedCharacterId) {
+      return [];
+    }
+
     const resolvedCharacterDisplayName =
       matchedAccount?.display_name ||
       profile.display_name ||
@@ -142,10 +150,10 @@ function buildCreatorJobs(
 }
 
 function resolveCharacterId(profile: CreatorProfile, accountId: string | undefined, permalinkName: string): string {
-  const preferred = [profile.user_id, profile.profile_id, accountId, permalinkName].find(
+  const preferred = [profile.character_user_id, profile.user_id, profile.profile_id, accountId, permalinkName].find(
     (value) => Boolean(value && value.startsWith("ch_"))
   );
-  return preferred || profile.user_id || profile.profile_id || accountId || permalinkName || "Character";
+  return preferred || "";
 }
 
 function resolvePermalinkProfileName(permalink: string | null): string {

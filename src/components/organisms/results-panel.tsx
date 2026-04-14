@@ -7,6 +7,7 @@ import { Panel } from "@components/atoms/panel";
 import { SummaryStat } from "@components/atoms/summary-stat";
 import { ResultsToolbar } from "@components/molecules/results-toolbar";
 import { VideoMetadataCard } from "@components/molecules/video-metadata-card";
+import { getFetchJobStatusLabel } from "@lib/utils/fetch-status";
 import { formatBytes, formatCount } from "@lib/utils/format-utils";
 
 interface ResultsPanelProps {
@@ -155,15 +156,7 @@ export function ResultsPanel({
                 <div className="ss-download-worker-row" key={job.job_id}>
                   <div className="ss-download-worker-main">
                     <strong>{job.label}</strong>
-                    <span className="ss-muted">
-                      {job.active_item_title
-                        ? job.active_item_title
-                        : job.status === "completed"
-                          ? "Completed"
-                          : job.status === "running"
-                            ? "Running"
-                            : "Queued"}
-                    </span>
+                    <span className="ss-muted">{getFetchJobStatusLabel(job)}</span>
                     <div className="ss-download-worker-progress-track" aria-hidden="true">
                       <div
                         className="ss-download-worker-progress-fill"

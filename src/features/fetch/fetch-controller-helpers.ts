@@ -1,4 +1,4 @@
-import type { FetchJobCheckpoint, LowLevelSourceType } from "types/domain";
+import type { FetchJobCheckpoint, LowLevelSourceType, VideoRow } from "types/domain";
 import type { FetchJob } from "./source-adapters";
 
 export class FetchCancellationError extends Error {
@@ -124,4 +124,12 @@ export async function runWithConcurrency<T>(
 
 function isServerCursorOnlyAppearanceFeed(source: LowLevelSourceType): boolean {
   return source === "characters" || source === "characterAccountAppearances" || source === "creatorCameos";
+}
+
+export function dedupeVideoRowsById(rows: VideoRow[]): VideoRow[] {
+  const rowMap = new Map<string, VideoRow>();
+  for (const row of rows) {
+    rowMap.set(row.row_id, row);
+  }
+  return [...rowMap.values()];
 }

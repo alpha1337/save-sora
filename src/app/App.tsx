@@ -145,14 +145,6 @@ export function App() {
     }
   }
 
-  async function handleLoadCharacterAccounts(): Promise<void> {
-    try {
-      await loadCharacterAccountsIntoState();
-    } catch (error) {
-      setAppError(error);
-    }
-  }
-
   function handleToggleSelectedVideoId(videoId: string): void {
     if (state.selected_video_ids.includes(videoId)) {
       autoSelectAllDownloadableRef.current = false;
@@ -241,12 +233,10 @@ export function App() {
   }, [hasSidebar, sidebarCollapsed]);
 
   useEffect(() => {
-    if (!showCharacterSidebar) {
-      autoLoadCharacterAccountsRef.current = false;
+    if (autoLoadCharacterAccountsRef.current || state.character_accounts.length > 0) {
       return;
     }
-
-    if (autoLoadCharacterAccountsRef.current || state.character_accounts.length > 0 || state.phase === "fetching") {
+    if (state.phase === "fetching" || state.phase === "downloading") {
       return;
     }
 
@@ -254,7 +244,7 @@ export function App() {
     void loadCharacterAccountsIntoState().catch((error) => {
       setAppError(error);
     });
-  }, [showCharacterSidebar, state.character_accounts.length, state.phase]);
+  }, [state.character_accounts.length, state.phase]);
 
   useEffect(() => {
     if (!showCharacterSidebar || state.character_accounts.length === 0) {
@@ -301,7 +291,6 @@ export function App() {
           <CharacterAccountSelector
             accounts={state.character_accounts}
             disabled={state.phase === "fetching" || state.phase === "downloading"}
-            onLoadAccounts={() => void handleLoadCharacterAccounts()}
             onSetSelectedAccountIds={(accountIds) => state.setSelectedCharacterAccountIds([...new Set(accountIds)])}
             onToggleAccount={(accountId, checked) => {
               const selectedIds = checked
@@ -323,7 +312,7 @@ export function App() {
       header={
         <div className="ss-header-grid">
           <div>
-            <h1>Save Sora v2.0.148</h1>
+            <h1>Save Sora v2.0.165</h1>
             <p className="ss-muted">Download anything on Sora, remove watermarks, export metadata and organized ZIP files.</p>
           </div>
           <div className="ss-inline-actions">

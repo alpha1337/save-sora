@@ -27,7 +27,7 @@ export async function fetchJson(url: string): Promise<unknown> {
     }
 
     if (attempt >= FETCH_RETRY_DELAYS_MS.length || !isRetriableSoraStatus(response.status)) {
-      throw new Error(buildSoraRequestErrorMessage(response.status));
+      throw new Error(buildSoraRequestErrorMessage(response.status, resolvedUrl, "GET"));
     }
 
     await sleep(FETCH_RETRY_DELAYS_MS[attempt]);
@@ -37,13 +37,14 @@ export async function fetchJson(url: string): Promise<unknown> {
 }
 
 export async function fetchText(url: string): Promise<string> {
-  const response = await fetch(resolveSoraUrl(url), {
+  const resolvedUrl = resolveSoraUrl(url);
+  const response = await fetch(resolvedUrl, {
     credentials: "include",
     redirect: "follow"
   });
 
   if (!response.ok) {
-    throw new Error(buildSoraRequestErrorMessage(response.status));
+    throw new Error(buildSoraRequestErrorMessage(response.status, resolvedUrl, "GET"));
   }
 
   return response.text();
@@ -163,23 +164,46 @@ function sleep(durationMs: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, durationMs));
 }
 
-function buildSoraRequestErrorMessage(status: number): string {
+function buildSoraRequestErrorMessage(status: number, requestUrl: string, method: "GET" | "POST"): string {
+  const requestLabel = describeRequestForError(requestUrl, method);
   if (status === 400) {
-    return "Sora rejected this request. The item may be unavailable, no longer shareable, or still processing.";
+    return `Sora request failed with status 400. Request: ${requestLabel}.`;
   }
   if (status === 401 || status === 403) {
-    return "Your Sora session is no longer authorized. Refresh Sora, sign in again, and retry.";
+    return `Sora request failed with status ${status}. Request: ${requestLabel}.`;
   }
   if (status === 404) {
-    return "The requested Sora item could not be found.";
+    return `Sora request failed with status 404. Request: ${requestLabel}.`;
   }
   if (status === 429) {
-    return "Sora is rate-limiting requests right now. Please retry in a minute.";
+    return `Sora request failed with status 429. Request: ${requestLabel}.`;
   }
   if (status >= 500) {
-    return "Sora is temporarily unavailable. Please retry shortly.";
+    return `Sora request failed with status ${status}. Request: ${requestLabel}.`;
   }
-  return `Sora request failed (status ${status}).`;
+  return `Sora request failed with status ${status}. Request: ${requestLabel}.`;
+}
+
+function describeRequestForError(requestUrl: string, method: "GET" | "POST"): string {
+  try {
+    const url = new URL(requestUrl);
+    const filteredParams = new URLSearchParams();
+    const includeParam = (key: string) => {
+      const value = url.searchParams.get(key);
+      if (!value) {
+        return;
+      }
+      filteredParams.set(key, value.length > 48 ? `${value.slice(0, 48)}...` : value);
+    };
+    includeParam("cut");
+    includeParam("limit");
+    includeParam("cursor");
+    includeParam("offset");
+    const query = filteredParams.toString();
+    return `${method} ${url.pathname}${query ? `?${query}` : ""}`;
+  } catch (_error) {
+    return `${method} ${requestUrl}`;
+  }
 }
 
 export function resolveSharedVideoIdFromValue(value: unknown, depth = 0): string {
@@ -206,6 +230,19 @@ export function resolveSharedVideoIdFromValue(value: unknown, depth = 0): string
   }
 
   const record = value as Record<string, unknown>;
+  const typeHint = pickFirstString([
+    record.kind,
+    record.type,
+    record.role,
+    record.asset_type,
+    record.assetType,
+    record.media_type,
+    record.mediaType
+  ]).toLowerCase();
+  const isSourceLikeRecord = typeHint.includes("source") || typeHint.includes("reference") || typeHint.includes("input");
+  if (isSourceLikeRecord) {
+    return "";
+  }
   const directMatch = pickFirstString([
     record.shared_post_id,
     record.sharedPostId,

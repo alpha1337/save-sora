@@ -975,7 +975,7 @@ function addCharacterIdentity(
 ): void {
   const username = normalizeCharacterUsername(usernameCandidate);
   const displayName = compactWhitespace(displayNameCandidate);
-  const label = username || displayName;
+  const label = displayName || username;
   if (!label) {
     return;
   }
@@ -990,7 +990,7 @@ function addCharacterIdentity(
   identityMap.set(key, {
     username: existing.username || username,
     displayName: existing.displayName || displayName,
-    label: existing.username || username || existing.displayName || displayName
+    label: existing.displayName || displayName || existing.username || username
   });
 }
 

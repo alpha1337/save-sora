@@ -11,14 +11,14 @@ describe("draft sharing guards", () => {
     ).toBe(true);
   });
 
-  it("skips edited drafts", () => {
+  it("keeps revision drafts eligible", () => {
     expect(
       shouldSkipDraftRow({
         id: "gen_edit",
         kind: "sora_draft",
         c_version: 1
       })
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("skips remix/editor stubs", () => {
@@ -57,6 +57,24 @@ describe("draft sharing guards", () => {
         resolved_share_url: "https://sora.chatgpt.com/p/s_existing123"
       })
     ).toBe("s_existing123");
+  });
+
+  it("prefers an output shared id over remix source ids", () => {
+    expect(
+      resolveExistingDraftVideoId({
+        id: "gen_remix_out",
+        attachments: [
+          {
+            id: "s_source_video",
+            kind: "source"
+          },
+          {
+            kind: "output",
+            share_url: "https://sora.chatgpt.com/p/s_generated_out"
+          }
+        ]
+      })
+    ).toBe("s_generated_out");
   });
 
   it("extracts resolved s_* file size from listing payload rows", () => {

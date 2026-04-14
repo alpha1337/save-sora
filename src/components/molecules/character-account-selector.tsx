@@ -7,18 +7,16 @@ interface CharacterAccountSelectorProps {
   accounts: CharacterAccount[];
   disabled?: boolean;
   selectedAccountIds: string[];
-  onLoadAccounts: () => void;
   onSetSelectedAccountIds: (accountIds: string[]) => void;
   onToggleAccount: (accountId: string, checked: boolean) => void;
 }
 
 /**
- * Character-account checklist with an explicit refresh action.
+ * Character-account checklist with bulk select controls.
  */
 export function CharacterAccountSelector({
   accounts,
   disabled = false,
-  onLoadAccounts,
   onSetSelectedAccountIds,
   onToggleAccount,
   selectedAccountIds
@@ -38,9 +36,6 @@ export function CharacterAccountSelector({
 
   return (
     <div className="ss-stack">
-      <Button disabled={disabled} onClick={onLoadAccounts} tone="secondary" type="button">
-        Refresh Character Accounts
-      </Button>
       <div className="ss-character-account-controls">
         <div className="ss-segmented-toggle" role="group" aria-label="Character account selection">
           <Button

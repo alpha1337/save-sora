@@ -6,6 +6,7 @@ describe("hidden-tab-pool recovery policy", () => {
     expect(shouldRetryWorkerTask(new Error("A listener indicated an asynchronous response by returning true, but the message channel closed before a response was received"))).toBe(true);
     expect(shouldRetryWorkerTask(new Error("The message port closed before a response was received."))).toBe(true);
     expect(shouldRetryWorkerTask(new Error("Could not establish connection. Receiving end does not exist."))).toBe(true);
+    expect(shouldRetryWorkerTask(new Error("No tab with id: 1536710878"))).toBe(true);
   });
 
   it("retries when worker preparation loses auth or lands on an error page", () => {

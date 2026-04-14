@@ -1,8 +1,7 @@
 import type {
   BackgroundResponse,
   FetchBatchResponse,
-  FetchDetailHtmlResponse,
-  ResolveDraftReferenceResponse
+  FetchDetailHtmlResponse
 } from "types/background";
 import type { DraftResolutionRecord, FetchJobCheckpoint, LowLevelSourceType, VideoRow } from "types/domain";
 import { useAppStore } from "@app/store/use-app-store";
@@ -19,6 +18,17 @@ import {
 } from "@lib/db/session-db";
 import { createLogger } from "@lib/logging/logger";
 import { getCharacterNames } from "@lib/normalize/shared";
+import {
+  buildFetchBatchErrorWithContext,
+  getFetchCompleteLabel,
+  getFetchPageLabel,
+  getFetchProcessingCompleteLabel,
+  getFetchQueuedLabel,
+  getFetchSkippedUnavailableLabel,
+  getFetchSuccessfulLabel,
+  getUnknownErrorMessage,
+  pickFetchActiveItemTitle
+} from "@lib/utils/fetch-status";
 import { normalizeCreatorProfileInput } from "@lib/utils/creator-profile-input";
 import { stripRawPayloadFromRows } from "@lib/utils/video-row-utils";
 import { extractVideoIdFromDetailHtml, normalizeCharacterAccounts, normalizeCreatorProfile, normalizeDraftRows, normalizePostRows } from "@lib/normalize/video-row-normalizer";
@@ -32,6 +42,7 @@ import {
 } from "./fetch-runtime-utils";
 import {
   buildInitialFetchProgress,
+  dedupeVideoRowsById,
   getFetchBatchLimit,
   getPageSignature,
   isDraftSource,
@@ -40,6 +51,7 @@ import {
   shouldRefreshCreatorProfile,
   throwIfFetchCanceled
 } from "./fetch-controller-helpers";
+import { applyCharacterRowContext, filterRowsForCharacterScope } from "./character-row-scope";
 import type { FetchResumeState } from "./fetch-runtime-utils";
 import type { FetchJob } from "./source-adapters";
 import { buildFetchJobs } from "./source-adapters";
@@ -202,62 +214,88 @@ async function runFetchJob(
   logger.info("running fetch job", runtimeJob.id);
   markFetchJobRunning(runtimeJob, checkpoint);
   throwIfFetchCanceled(signal);
-  const fetchedAt = new Date().toISOString();
-  const recoveryTasks: Array<Promise<void>> = [];
-  const finalCheckpoint = await streamFetchBatches(runtimeJob.source, runtimeJob, signal, checkpoint, selectionSignature, async (rows) => {
-    const rowsWithContext = applyFetchJobRowContext(rows, runtimeJob);
-    const normalizedRows = isDraftSource(runtimeJob.source)
-      ? normalizeDraftRows(runtimeJob.source, rowsWithContext, fetchedAt)
-      : normalizePostRows(runtimeJob.source, rowsWithContext, fetchedAt);
-    const inRangeRows = filterRowsByFetchWindow(normalizedRows, runtimeJob.fetch_since_ms, runtimeJob.fetch_until_ms);
-    const draftResolutionRecords = buildDraftResolutionRecords(rowsWithContext);
-    if (inRangeRows.length > 0) {
-      useAppStore.getState().upsertVideoRows(stripRawPayloadFromRows(inRangeRows));
-    }
-    const recoverableRows = getRecoverableRows(inRangeRows);
-    if (recoverableRows.length > 0) {
-      if (isDraftSource(runtimeJob.source)) {
-        setFetchJobActiveStatus(runtimeJob.id, "Fetch successful!");
+  try {
+    const fetchedAt = new Date().toISOString();
+    const recoveryTasks: Array<Promise<void>> = [];
+    const finalCheckpoint = await streamFetchBatches(runtimeJob.source, runtimeJob, signal, checkpoint, selectionSignature, async (rows) => {
+      const scopedRows = filterRowsForCharacterScope(rows, runtimeJob);
+      const rowsWithContext = applyCharacterRowContext(scopedRows, runtimeJob);
+      const normalizedRows = isDraftSource(runtimeJob.source)
+        ? normalizeDraftRows(runtimeJob.source, rowsWithContext, fetchedAt)
+        : normalizePostRows(runtimeJob.source, rowsWithContext, fetchedAt);
+      const inRangeRows = filterRowsByFetchWindow(normalizedRows, runtimeJob.fetch_since_ms, runtimeJob.fetch_until_ms);
+      setFetchJobActiveStatus(runtimeJob.id, getFetchSuccessfulLabel());
+      const draftResolutionRecords = buildDraftResolutionRecords(rowsWithContext);
+      if (inRangeRows.length > 0) {
+        useAppStore.getState().upsertVideoRows(stripRawPayloadFromRows(inRangeRows));
       }
-      recoveryTasks.push(
-        recoverMissingVideoIds(
-          recoverableRows,
-          signal,
-          new Map(),
-          (statusLabel) => setFetchJobActiveStatus(runtimeJob.id, statusLabel)
-        ).then(async (recoveredRows) => {
-          if (recoveredRows.length === 0) {
-            return;
-          }
-          await upsertVideoRows(recoveredRows);
-          useAppStore.getState().upsertVideoRows(stripRawPayloadFromRows(recoveredRows));
-        })
-      );
+      const recoverableRows = getRecoverableRows(inRangeRows);
+      if (recoverableRows.length > 0) {
+        recoveryTasks.push(
+          recoverMissingVideoIds(
+            recoverableRows,
+            signal,
+            new Map(),
+            (statusLabel) => setFetchJobActiveStatus(runtimeJob.id, statusLabel)
+          ).then(async (recoveredRows) => {
+            if (recoveredRows.length === 0) {
+              return;
+            }
+            await upsertVideoRows(recoveredRows);
+            useAppStore.getState().upsertVideoRows(stripRawPayloadFromRows(recoveredRows));
+          })
+        );
+      }
+      const persistenceTasks: Array<Promise<void>> = [];
+      if (draftResolutionRecords.length > 0) {
+        persistenceTasks.push(saveDraftResolutionRecords(draftResolutionRecords));
+      }
+      if (inRangeRows.length > 0) {
+        persistenceTasks.push(upsertVideoRows(inRangeRows));
+      }
+      return {
+        active_item_title: pickFetchActiveItemTitle(inRangeRows, runtimeJob.source),
+        draftResolutionRecords,
+        persistencePromise: persistenceTasks.length > 0 ? Promise.all(persistenceTasks).then(() => undefined) : Promise.resolve(),
+        stored_row_ids: inRangeRows.map((row) => row.row_id)
+      };
+    });
+    await Promise.all(recoveryTasks);
+    throwIfFetchCanceled(signal);
+    await saveFetchJobCheckpoint(
+      finalizeFetchJobCheckpoint(runtimeJob, selectionSignature, finalCheckpoint ?? checkpoint, {
+        fetched_rows: useAppStore.getState().fetch_progress.job_progress.find((entry) => entry.job_id === runtimeJob.id)?.fetched_rows ?? 0,
+        processed_batches: useAppStore.getState().fetch_progress.job_progress.find((entry) => entry.job_id === runtimeJob.id)?.processed_batches ?? 0,
+        status: "completed"
+      })
+    );
+    setFetchJobActiveStatus(runtimeJob.id, getFetchCompleteLabel());
+    incrementCompletedJobs(runtimeJob);
+  } catch (error) {
+    if (isFetchCancellationError(error)) {
+      throw error;
     }
-    const persistenceTasks: Array<Promise<void>> = [];
-    if (draftResolutionRecords.length > 0) {
-      persistenceTasks.push(saveDraftResolutionRecords(draftResolutionRecords));
+    if (!isNonFatalItemLookupError(error)) {
+      throw error;
     }
-    if (inRangeRows.length > 0) {
-      persistenceTasks.push(upsertVideoRows(inRangeRows));
-    }
-    return {
-      active_item_title: pickActiveItemTitle(inRangeRows, runtimeJob.source),
-      draftResolutionRecords,
-      persistencePromise: persistenceTasks.length > 0 ? Promise.all(persistenceTasks).then(() => undefined) : Promise.resolve(),
-      stored_row_ids: inRangeRows.map((row) => row.row_id)
-    };
-  });
-  await Promise.all(recoveryTasks);
-  throwIfFetchCanceled(signal);
-  await saveFetchJobCheckpoint(
-    finalizeFetchJobCheckpoint(runtimeJob, selectionSignature, finalCheckpoint ?? checkpoint, {
-      fetched_rows: useAppStore.getState().fetch_progress.job_progress.find((entry) => entry.job_id === runtimeJob.id)?.fetched_rows ?? 0,
-      processed_batches: useAppStore.getState().fetch_progress.job_progress.find((entry) => entry.job_id === runtimeJob.id)?.processed_batches ?? 0,
-      status: "completed"
-    })
-  );
-  incrementCompletedJobs(runtimeJob);
+
+    logger.warn("continuing fetch job after non-fatal item lookup error", {
+      job_id: runtimeJob.id,
+      source: runtimeJob.source,
+      error: getUnknownErrorMessage(error)
+    });
+
+    setFetchJobActiveStatus(runtimeJob.id, getFetchSkippedUnavailableLabel());
+    await saveFetchJobCheckpoint(
+      finalizeFetchJobCheckpoint(runtimeJob, selectionSignature, checkpoint, {
+        fetched_rows: useAppStore.getState().fetch_progress.job_progress.find((entry) => entry.job_id === runtimeJob.id)?.fetched_rows ?? 0,
+        processed_batches: useAppStore.getState().fetch_progress.job_progress.find((entry) => entry.job_id === runtimeJob.id)?.processed_batches ?? 0,
+        status: "completed"
+      })
+    );
+    setFetchJobActiveStatus(runtimeJob.id, getFetchCompleteLabel());
+    incrementCompletedJobs(runtimeJob);
+  }
 }
 async function resolveFetchJobLabel(job: FetchJob): Promise<FetchJob> {
   const currentLabel = resolveCharacterLabelFromJobText(job);
@@ -412,32 +450,6 @@ function resolveCharacterDisplayFromRows(rows: unknown[], characterId: string): 
   }
   return "";
 }
-function applyFetchJobRowContext(rows: unknown[], job: FetchJob): unknown[] {
-  if (!job.character_id || (job.source !== "characterAccountDrafts" && job.source !== "characterAccountAppearances")) {
-    return rows;
-  }
-  const characterLabel = getCharacterLabelFromJob(job.character_display_name ?? "", job.label);
-  return rows.map((row) => {
-    if (!row || typeof row !== "object") {
-      return row;
-    }
-    const record = row as Record<string, unknown>;
-    return {
-      ...record,
-      character_id: record.character_id ?? job.character_id,
-      character_account_id: record.character_account_id ?? job.character_id,
-      __character_context_display_name: record.__character_context_display_name ?? characterLabel
-    };
-  });
-}
-function getCharacterLabelFromJob(displayName: string, jobLabel: string): string {
-  const direct = displayName.trim();
-  if (direct) {
-    return direct;
-  }
-  const fromLabel = jobLabel.replace(/\s+(drafts|appearances)$/i, "").trim();
-  return fromLabel.startsWith("ch_") ? "" : fromLabel;
-}
 async function collectAllRows(source: LowLevelSourceType, job: FetchJob | { label: string }, signal: AbortSignal): Promise<unknown[]> {
   const collectedRows: unknown[] = [];
   await streamFetchBatches(source, job, signal, null, "", async (rows) => {
@@ -475,27 +487,46 @@ async function streamFetchBatches(
   while (!done) {
     throwIfFetchCanceled(signal);
     const requestCursor = cursor;
-    const response: FetchBatchResponse = await sendBackgroundRequest({
-      type: "fetch-batch",
-      source,
-      since_ms: "fetch_since_ms" in job ? (job.fetch_since_ms ?? null) : null,
-      until_ms: "fetch_until_ms" in job ? (job.fetch_until_ms ?? null) : null,
-      cursor,
-      offset,
-      limit: getFetchBatchLimit(source, FETCH_BATCH_LIMIT, APPEARANCE_FEED_BATCH_LIMIT),
-      page_budget: getPageBudgetForSource(source),
-      endpoint_key: endpointKey,
-      route_url: "route_url" in job ? job.route_url : undefined,
-      creator_user_id: "creator_user_id" in job ? job.creator_user_id : undefined,
-      creator_username: "creator_username" in job ? job.creator_username : undefined,
-      character_id: "character_id" in job ? job.character_id : undefined,
-      draft_resolution_entries: [...draftResolutionMap.entries()].map(([generation_id, video_id]) => ({ generation_id, video_id }))
-    });
+    const nextBatchNumber = processedBatches + 1;
+    if ("id" in job) {
+      setFetchJobActiveStatus(job.id, getFetchPageLabel(nextBatchNumber));
+    }
+    let response: FetchBatchResponse;
+    try {
+      response = await sendBackgroundRequest({
+        type: "fetch-batch",
+        source,
+        since_ms: "fetch_since_ms" in job ? (job.fetch_since_ms ?? null) : null,
+        until_ms: "fetch_until_ms" in job ? (job.fetch_until_ms ?? null) : null,
+        cursor,
+        offset,
+        limit: getFetchBatchLimit(source, FETCH_BATCH_LIMIT, APPEARANCE_FEED_BATCH_LIMIT),
+        page_budget: getPageBudgetForSource(source),
+        endpoint_key: endpointKey,
+        route_url: "route_url" in job ? job.route_url : undefined,
+        creator_user_id: "creator_user_id" in job ? job.creator_user_id : undefined,
+        creator_username: "creator_username" in job ? job.creator_username : undefined,
+        character_id: "character_id" in job ? job.character_id : undefined,
+        draft_resolution_entries: [...draftResolutionMap.entries()].map(([generation_id, video_id]) => ({ generation_id, video_id }))
+      });
+    } catch (error) {
+      throw buildFetchBatchErrorWithContext(error, {
+        batchNumber: nextBatchNumber,
+        cursor: requestCursor,
+        endpointKey,
+        jobLabel: job.label,
+        offset,
+        source
+      });
+    }
     throwIfFetchCanceled(signal);
     const batchRows = response.payload.rows;
     endpointKey = response.payload.endpoint_key;
     cursor = response.payload.next_cursor;
     offset = response.payload.next_offset;
+    if ("id" in job) {
+      setFetchJobActiveStatus(job.id, getFetchSuccessfulLabel());
+    }
     const batchResult = batchRows.length > 0
       ? await onBatch(batchRows)
       : { active_item_title: "", draftResolutionRecords: [], persistencePromise: Promise.resolve(), stored_row_ids: [] };
@@ -519,7 +550,7 @@ async function streamFetchBatches(
       streamedRowCount,
       newJobRowIds.length,
       processedBatches,
-      batchResult.active_item_title,
+      batchResult.active_item_title || getFetchProcessingCompleteLabel(),
       endpointKey,
       batchRows
     );
@@ -552,7 +583,7 @@ async function recoverMissingVideoIds(
   attemptByRowId: Map<string, number> = new Map(),
   onStatusLabel?: (statusLabel: string) => void
 ): Promise<VideoRow[]> {
-  const pendingRows = dedupeRowsById(rows);
+  const pendingRows = dedupeVideoRowsById(rows);
   if (pendingRows.length === 0) {
     return [];
   }
@@ -567,55 +598,6 @@ async function recoverMissingVideoIds(
       attemptByRowId.set(row.row_id, attempts);
       await sleepWithJitter(DRAFT_RECOVERY_REQUEST_DELAY_MS, signal);
       try {
-        const generationId = extractGenerationIdFromRow(row);
-        const shouldRecoverDraftReference =
-          Boolean(generationId) &&
-          row.skip_reason === "unresolved_draft_video_id";
-        if (shouldRecoverDraftReference && generationId) {
-          onStatusLabel?.("Processing draft...");
-          onStatusLabel?.("Generating a shared URL...");
-          const draftReferenceResponse = await sendBackgroundRequest<ResolveDraftReferenceResponse>({
-            type: "resolve-draft-reference",
-            generation_id: generationId,
-            detail_url: row.detail_url || undefined,
-            row_payload: safeParseRawPayload(row.raw_payload_json)
-          });
-          const resolvedVideoId = draftReferenceResponse.payload.video_id || row.video_id;
-          const resolvedThumbnailUrl = draftReferenceResponse.payload.thumbnail_url || row.thumbnail_url;
-          const resolvedDetailUrl = draftReferenceResponse.payload.share_url || row.detail_url;
-          const resolvedEstimatedSize = draftReferenceResponse.payload.estimated_size_bytes ?? row.estimated_size_bytes;
-          if (
-            resolvedVideoId &&
-            (
-              resolvedVideoId !== row.video_id ||
-              resolvedThumbnailUrl !== row.thumbnail_url ||
-              resolvedDetailUrl !== row.detail_url ||
-              resolvedEstimatedSize !== row.estimated_size_bytes ||
-              row.skip_reason === "unresolved_draft_video_id"
-            )
-          ) {
-            recoveredRows.push({
-              ...row,
-              video_id: resolvedVideoId,
-              thumbnail_url: resolvedThumbnailUrl,
-              detail_url: resolvedDetailUrl,
-              estimated_size_bytes: resolvedEstimatedSize,
-              playback_url: row.playback_url,
-              is_downloadable: true,
-              skip_reason: ""
-            });
-            onStatusLabel?.("Processing complete!");
-            onStatusLabel?.("Complete!");
-            continue;
-          }
-          if (draftReferenceResponse.payload.skip_reason && draftReferenceResponse.payload.skip_reason !== row.skip_reason) {
-            recoveredRows.push({
-              ...row,
-              skip_reason: draftReferenceResponse.payload.skip_reason
-            });
-            continue;
-          }
-        }
         if (!row.detail_url) {
           continue;
         }
@@ -675,8 +657,7 @@ async function recoverUnresolvedDraftRows(signal: AbortSignal): Promise<void> {
 }
 function getRecoverableRows(rows: VideoRow[]): VideoRow[] {
   return rows.filter((row) => {
-    const generationId = extractGenerationIdFromRow(row);
-    const hasRecoveryHandle = Boolean(row.detail_url) || Boolean(generationId);
+    const hasRecoveryHandle = Boolean(row.detail_url);
     if (!hasRecoveryHandle) {
       return false;
     }
@@ -685,36 +666,6 @@ function getRecoverableRows(rows: VideoRow[]): VideoRow[] {
       (row.skip_reason === "missing_video_id" || row.skip_reason === "unresolved_draft_video_id");
     return needsVideoIdRecovery;
   });
-}
-function pickActiveItemTitle(rows: VideoRow[], source: LowLevelSourceType): string {
-  for (const row of rows) {
-    const candidate = row.title?.trim();
-    if (!candidate) {
-      continue;
-    }
-    if (candidate === row.video_id || candidate === row.row_id) {
-      continue;
-    }
-    return isDraftSource(source) ? `Fetching draft ${candidate}...` : `Fetching ${candidate}...`;
-  }
-  return "";
-}
-function dedupeRowsById(rows: VideoRow[]): VideoRow[] {
-  const rowMap = new Map<string, VideoRow>();
-  for (const row of rows) {
-    rowMap.set(row.row_id, row);
-  }
-  return [...rowMap.values()];
-}
-function safeParseRawPayload(rawPayloadJson: string): unknown {
-  if (!rawPayloadJson) {
-    return null;
-  }
-  try {
-    return JSON.parse(rawPayloadJson);
-  } catch (_error) {
-    return null;
-  }
 }
 function filterRowsByFetchWindow(rows: VideoRow[], sinceMs?: number | null, untilMs?: number | null): VideoRow[] {
   if (sinceMs == null && untilMs == null) {
@@ -739,11 +690,11 @@ function parseRowTimestampMs(row: VideoRow): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 function isExpectedCharacterLookupError(error: unknown): boolean {
-  const message = getErrorMessage(error).toLowerCase();
+  const message = getUnknownErrorMessage(error).toLowerCase();
   return message.includes("status 404") || message.includes("failed to fetch");
 }
 function isExpectedDetailFallbackError(error: unknown): boolean {
-  const message = getErrorMessage(error).toLowerCase();
+  const message = getUnknownErrorMessage(error).toLowerCase();
   return (
     message.includes("failed to fetch") ||
     message.includes("status 403") ||
@@ -752,11 +703,9 @@ function isExpectedDetailFallbackError(error: unknown): boolean {
     message.includes("could not establish connection. receiving end does not exist")
   );
 }
-function getErrorMessage(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
-  return String(error ?? "");
+function isNonFatalItemLookupError(error: unknown): boolean {
+  const message = getUnknownErrorMessage(error).toLowerCase();
+  return message.includes("requested sora item could not be found") || message.includes("status 404");
 }
 async function sleepWithJitter(durationMs: number, signal: AbortSignal): Promise<void> {
   const jitterMs = Math.floor(Math.random() * 120);
@@ -773,14 +722,6 @@ async function sleepWithJitter(durationMs: number, signal: AbortSignal): Promise
       );
     }
   });
-}
-function extractGenerationIdFromRow(row: VideoRow): string {
-  const fromDetail = row.detail_url.match(/gen_[A-Za-z0-9_-]+/i)?.[0] ?? "";
-  if (fromDetail) {
-    return fromDetail;
-  }
-  const fromRaw = row.raw_payload_json.match(/gen_[A-Za-z0-9_-]+/i)?.[0] ?? "";
-  return fromRaw;
 }
 /**
  * Requests a cooperative stop for the currently running fetch. The current
@@ -864,7 +805,7 @@ function markFetchJobRunning(job: FetchJob, checkpoint: FetchJobCheckpoint | nul
           ? {
               ...entry,
               status: "running" as const,
-              active_item_title: entry.active_item_title,
+              active_item_title: entry.active_item_title || getFetchQueuedLabel(),
               fetched_rows: checkpoint?.fetched_rows ?? entry.fetched_rows,
               processed_batches: checkpoint?.processed_batches ?? entry.processed_batches,
               expected_total_count: entry.expected_total_count ?? job.expected_total_count

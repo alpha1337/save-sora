@@ -11,6 +11,7 @@ const ZIP_FETCH_CONCURRENCY = 1;
 const WATERMARK_FETCH_MAX_ATTEMPTS = 6;
 const WATERMARK_FETCH_BASE_RETRY_MS = 1200;
 const WATERMARK_FETCH_MAX_RETRY_MS = 20000;
+const SHARED_VIDEO_ID_PATTERN = /^s_[A-Za-z0-9_-]+$/;
 let globalRateLimitCooldownUntilMs = 0;
 let watermarkRateLimitStreak = 0;
 
@@ -77,15 +78,15 @@ async function buildArchive(workPlan: ArchiveWorkPlan): Promise<void> {
       const itemTitle = row.title?.trim();
       const itemLabel = itemTitle ? `${itemTitle} · ${row.video_id}` : row.video_id;
       worker.status = "running";
-      worker.active_item_label = "Attempting to remove watermark";
+      worker.active_item_label = "Preparing download";
       activeLabel = `Bundling ${itemLabel}`;
       publishProgress();
-      const bytes = await fetchWatermarkFreeVideoBytes(row.video_id, (statusLabel) => {
+      const bytes = await fetchPreferredVideoBytes(row, (statusLabel) => {
         worker.active_item_label = statusLabel;
         activeLabel = `${itemLabel} · ${statusLabel}`;
         publishProgress();
       });
-      worker.active_item_label = "Watermark removed!";
+      worker.active_item_label = "Download ready";
       publishProgress();
       const entry = new ZipPassThrough(libraryPathByVideoId.get(row.video_id) ?? `library/${row.video_id}.mp4`);
       zip.add(entry);
@@ -151,6 +152,26 @@ async function runWithConcurrency<T>(
   }
 
   await Promise.all(Array.from({ length: Math.min(concurrency, values.length) }, (_value, workerIndex) => worker(workerIndex)));
+}
+
+async function fetchPreferredVideoBytes(
+  row: ArchiveWorkPlan["rows"][number],
+  onStatusLabel?: (statusLabel: string) => void
+): Promise<Uint8Array> {
+  if (!SHARED_VIDEO_ID_PATTERN.test(row.video_id) && row.playback_url) {
+    onStatusLabel?.("Using source download URL");
+    return fetchDirectVideoBytes(row.playback_url);
+  }
+
+  return fetchWatermarkFreeVideoBytes(row.video_id, onStatusLabel);
+}
+
+async function fetchDirectVideoBytes(url: string): Promise<Uint8Array> {
+  const response = await fetch(url, { credentials: "include" });
+  if (!response.ok) {
+    throw new Error(`Source video download failed (status ${response.status}).`);
+  }
+  return new Uint8Array(await response.arrayBuffer());
 }
 
 async function fetchWatermarkFreeVideoBytes(

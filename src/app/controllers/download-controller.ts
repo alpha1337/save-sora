@@ -85,6 +85,9 @@ export async function downloadSelectedRows(): Promise<void> {
   downloadBlob(`${workPlan.archive_name}.zip`, archiveBlob);
 
   for (const row of targetRows) {
+    if (!row.video_id.startsWith("s_")) {
+      continue;
+    }
     await appendDownloadHistoryId(row.video_id);
     state.appendDownloadHistoryId(row.video_id);
   }
