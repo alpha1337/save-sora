@@ -62,14 +62,14 @@ describe("buildArchiveWorkPlan", () => {
     expect(plan.organizer_rows).toHaveLength(1);
     expect(plan.organizer_rows[0]).toMatchObject({
       video_id: "s_alpha123",
-      library_path: "library/Nebula Run-s_alpha123.mp4"
+      library_path: "library/space dogfight-s_alpha123.mp4"
     });
     expect(plan.organizer_rows[0].link_paths).toEqual([
-      "organized/by-category/featured/Nebula Run-s_alpha123.mp4",
-      "organized/by-category/published/Nebula Run-s_alpha123.mp4",
-      "organized/by-character/Nova/Nebula Run-s_alpha123.mp4",
-      "organized/by-creator/Alex Mercer/Nebula Run-s_alpha123.mp4",
-      "organized/by-source/profile/Nebula Run-s_alpha123.mp4"
+      "organized/by-category/featured/space dogfight-s_alpha123.mp4",
+      "organized/by-category/published/space dogfight-s_alpha123.mp4",
+      "organized/by-character/Nova/space dogfight-s_alpha123.mp4",
+      "organized/by-creator/Alex Mercer/space dogfight-s_alpha123.mp4",
+      "organized/by-source/profile/space dogfight-s_alpha123.mp4"
     ]);
 
     expect(plan.supplemental_entries.map((entry) => entry.archive_path)).toEqual([
@@ -80,5 +80,26 @@ describe("buildArchiveWorkPlan", () => {
       "organizer/Run Organizer.bat",
       "organizer/README.txt"
     ]);
+  });
+
+  it("falls back to character.creator.id when discovery phrase is missing", () => {
+    const row = createRow({
+      discovery_phrase: "",
+      character_username: "freakymrc",
+      creator_username: "saintglimm",
+      title: "Very long title that should never be used when discovery phrase is unavailable"
+    });
+
+    const plan = buildArchiveWorkPlan([row], "Sora Library");
+    expect(plan.organizer_rows[0].file_name).toBe("freakymrc.saintglimm.s_alpha123-s_alpha123.mp4");
+  });
+
+  it("truncates discovery phrase stems to keep Windows-safe filename lengths", () => {
+    const row = createRow({
+      discovery_phrase: "a".repeat(120)
+    });
+
+    const plan = buildArchiveWorkPlan([row], "Sora Library");
+    expect(plan.organizer_rows[0].file_name).toBe(`${"a".repeat(48)}-s_alpha123.mp4`);
   });
 });

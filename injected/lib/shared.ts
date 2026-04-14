@@ -340,7 +340,7 @@ function pickFirstArray<T>(candidates: unknown[]): T[] {
   return [];
 }
 
-function pickFirstString(candidates: unknown[]): string {
+export function pickFirstString(candidates: unknown[]): string {
   for (const candidate of candidates) {
     if (typeof candidate === "string" && candidate.trim()) {
       return candidate.trim();

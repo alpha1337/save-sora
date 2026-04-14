@@ -13,6 +13,7 @@ import {
   getRawRowKey,
   isRetriableSoraStatus,
   getUsernameFromRouteUrl,
+  pickFirstString,
   resolveSharedVideoIdFromValue
 } from "../lib/shared";
 import {
@@ -31,9 +32,6 @@ interface EndpointAttemptFailure {
   request: string;
   status: number | null;
 }
-/**
- * Executes typed background requests from inside the signed-in Sora page.
- */
 export async function runSourceRequest(request: BackgroundRequest): Promise<unknown> {
   if (request.type === "fetch-detail-html") {
     return { detail_url: request.detail_url, html: await fetchText(request.detail_url) };
@@ -66,6 +64,7 @@ export async function runSourceRequest(request: BackgroundRequest): Promise<unkn
   throw new Error(`Unsupported injected request type: ${String((request as { type?: string }).type)}`);
 }
 async function runFetchBatch(request: FetchBatchRequest) {
+  const viewerUserId = isDraftSource(request.source) ? await deriveViewerUserId().catch(() => "") : "";
   let cursor = request.cursor ?? null;
   let previousCursor: string | null = null;
   let offset: number | null = request.offset ?? 0;
@@ -79,7 +78,7 @@ async function runFetchBatch(request: FetchBatchRequest) {
     const pageRows = getPostListingRows(payload);
     const inRangeRows = filterRowsByTimeWindow(pageRows, request.since_ms, request.until_ms);
     const enrichedRows = isDraftSource(request.source)
-      ? enrichDraftRows(inRangeRows, request.draft_resolution_entries ?? [])
+      ? await enrichDraftRows(inRangeRows, request.draft_resolution_entries ?? [], request.source, viewerUserId)
       : inRangeRows;
     rows.push(...enrichedRows);
     rowKeys.push(...enrichedRows.map((row) => getRawRowKey(row)).filter(Boolean));
@@ -94,7 +93,7 @@ async function runFetchBatch(request: FetchBatchRequest) {
     );
     const requestLimit = getFetchLimitForSource(request.source, request.limit);
     const hasMoreRows = pageRows.length >= requestLimit;
-    const nextOffset: number | null = supportsOffsetPagination(request.source)
+    const nextOffset: number | null = request.source === "drafts"
       ? (nextCursor ? offset : (offset ?? 0) + requestLimit)
       : null;
     const isDone =
@@ -336,10 +335,12 @@ async function resolveCharacterAccountId(
     return trimmedCharacterId;
   }
 }
-function enrichDraftRows(
+async function enrichDraftRows(
   rows: unknown[],
-  knownResolutionEntries: Array<{ generation_id: string; video_id: string }>
-): unknown[] {
+  knownResolutionEntries: Array<{ generation_id: string; video_id: string }>,
+  source: FetchBatchRequest["source"],
+  viewerUserId: string
+): Promise<unknown[]> {
   const knownResolutionMap = new Map(knownResolutionEntries.map((entry) => [entry.generation_id, entry.video_id]));
   for (const row of rows) {
     if (!row || typeof row !== "object") {
@@ -348,6 +349,37 @@ function enrichDraftRows(
     const record = row as Record<string, unknown>;
     const generationId = extractDraftGenerationId(record);
     if (!generationId) {
+      continue;
+    }
+    const draftRecord = record.draft && typeof record.draft === "object" ? record.draft as Record<string, unknown> : record;
+    const profile = record.profile && typeof record.profile === "object" ? record.profile as Record<string, unknown> : {};
+    const isOwnedCharacterDraft = source === "characterAccountDrafts" &&
+      viewerUserId &&
+      pickFirstString([profile.user_id, profile.userId]) === viewerUserId;
+    if (source === "characterAccountDrafts" && !isOwnedCharacterDraft) {
+      const downloadUrls = draftRecord.download_urls && typeof draftRecord.download_urls === "object"
+        ? draftRecord.download_urls as Record<string, unknown>
+        : null;
+      const downloadUrlsCamel = draftRecord.downloadUrls && typeof draftRecord.downloadUrls === "object"
+        ? draftRecord.downloadUrls as Record<string, unknown>
+        : null;
+      const watermarkUrl = pickFirstString([downloadUrls?.watermark, downloadUrlsCamel?.watermark]);
+      if (watermarkUrl) {
+        draftRecord.downloadable_url = watermarkUrl;
+        draftRecord.downloadableUrl = watermarkUrl;
+      }
+      record.post = null;
+      draftRecord.post = null;
+      delete record.resolved_video_id;
+      delete record.resolvedVideoId;
+      delete draftRecord.resolved_video_id;
+      delete draftRecord.resolvedVideoId;
+      continue;
+    }
+    const postVideoId = resolveSharedVideoIdFromValue((record.post as unknown) ?? null);
+    if (postVideoId) {
+      record.resolved_video_id = postVideoId;
+      record.resolved_share_url = `${SORA_ORIGIN}/p/${postVideoId}`;
       continue;
     }
     const cachedVideoId = knownResolutionMap.get(generationId);
@@ -360,6 +392,14 @@ function enrichDraftRows(
     if (directVideoId) {
       record.resolved_video_id = directVideoId;
       record.resolved_share_url = `${SORA_ORIGIN}/p/${directVideoId}`;
+      continue;
+    }
+    if (source === "drafts" && getDraftKind(record) === "sora_draft" && !record.post) {
+      const createdReference = await createSharedDraftReference(record, generationId).catch(() => null);
+      if (createdReference?.video_id) {
+        record.resolved_video_id = createdReference.video_id;
+        record.resolved_share_url = createdReference.share_url;
+      }
     }
   }
   return rows;
@@ -870,14 +910,6 @@ function buildUrl(pathname: string, params: Record<string, string | number | nul
   }
   return url;
 }
-function pickFirstString(candidates: unknown[]): string {
-  for (const candidate of candidates) {
-    if (typeof candidate === "string" && candidate.trim()) {
-      return candidate.trim();
-    }
-  }
-  return "";
-}
 function pickFirstBoolean(candidates: unknown[]): boolean {
   for (const candidate of candidates) {
     if (typeof candidate === "boolean") {
@@ -893,18 +925,7 @@ function sleepWithJitter(durationMs: number): Promise<void> {
 function isDraftSource(source: FetchBatchRequest["source"]): boolean {
   return source === "drafts" || source === "characterDrafts" || source === "characterAccountDrafts";
 }
-function supportsOffsetPagination(source: FetchBatchRequest["source"]): boolean {
-  return source === "drafts";
-}
-export function shouldFinishFetchPage(
-  source: FetchBatchRequest["source"],
-  _pageRowCount: number,
-  nextCursor: string | null,
-  hasMoreRows: boolean
-): boolean {
-  if (supportsOffsetPagination(source)) {
-    return !nextCursor && !hasMoreRows;
-  }
+export function shouldFinishFetchPage(_source: FetchBatchRequest["source"], _pageRowCount: number, nextCursor: string | null, hasMoreRows: boolean): boolean {
   return !nextCursor && !hasMoreRows;
 }
 export function getFetchLimitForSource(

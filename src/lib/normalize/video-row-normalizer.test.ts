@@ -553,6 +553,114 @@ describe("video-row-normalizer", () => {
     expect(row.created_at).toBe(new Date(draftCreatedAtSeconds * 1000).toISOString());
   });
 
+  it("uses source encoding path when draft downloadable URLs are missing", () => {
+    const [row] = normalizeDraftRows(
+      "drafts",
+      [
+        {
+          id: "gen_extended_source_only_123",
+          kind: "sora_draft",
+          url: "https://videos.openai.com/az/files/file-id/drvs/md/raw",
+          downloadable_url: null,
+          download_urls: null,
+          encodings: {
+            source: {
+              path: "https://videos.openai.com/az/files/file-id/raw"
+            },
+            source_wm: {
+              path: "https://videos.openai.com/az/files/file-id/raw"
+            },
+            md: {
+              path: "https://videos.openai.com/az/files/file-id/drvs/md/raw"
+            }
+          }
+        }
+      ],
+      FETCHED_AT
+    );
+
+    expect(row.playback_url).toBe("https://videos.openai.com/az/files/file-id/raw");
+  });
+
+  it("filters out top-level content violation drafts from normalized results", () => {
+    const rows = normalizeDraftRows(
+      "drafts",
+      [
+        {
+          id: "68fc8e8df2e48191953c00a6d702107e",
+          kind: "sora_content_violation",
+          prompt: "Blocked draft prompt",
+          reason_str: "This content may violate our guardrails concerning third-party likeness."
+        },
+        {
+          id: "gen_allowed_123",
+          kind: "sora_draft",
+          prompt: "Allowed draft prompt",
+          download_urls: {
+            watermark: "https://videos.openai.com/allowed-draft.mp4"
+          },
+          encodings: {
+            thumbnail: {
+              path: "https://videos.openai.com/allowed-thumb.jpg"
+            }
+          }
+        }
+      ],
+      FETCHED_AT
+    );
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      video_id: "gen_allowed_123",
+      prompt: "Allowed draft prompt",
+      playback_url: "https://videos.openai.com/allowed-draft.mp4",
+      thumbnail_url: "https://videos.openai.com/allowed-thumb.jpg"
+    });
+  });
+
+  it("filters out nested characterAccountDrafts content violations", () => {
+    const rows = normalizeDraftRows(
+      "characterAccountDrafts",
+      [
+        {
+          profile: {
+            display_name: "Creator A",
+            username: "creator_a"
+          },
+          draft: {
+            id: "gen_nested_blocked_123",
+            kind: "sora_content_violation",
+            prompt: "Nested blocked prompt",
+            reason_str: "This content may violate our guardrails around nudity, sexuality, or erotic content."
+          }
+        },
+        {
+          profile: {
+            display_name: "Creator B",
+            username: "creator_b"
+          },
+          draft: {
+            id: "gen_nested_allowed_123",
+            kind: "sora_draft",
+            prompt: "Nested allowed prompt",
+            download_urls: {
+              watermark: "https://videos.openai.com/nested-allowed.mp4"
+            }
+          }
+        }
+      ],
+      FETCHED_AT
+    );
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      video_id: "gen_nested_allowed_123",
+      prompt: "Nested allowed prompt",
+      creator_name: "Creator B",
+      creator_username: "creator_b"
+    });
+  });
+
   it("keeps missing-id posts distinct when payload differs", () => {
     const [first, second] = normalizePostRows(
       "profile",

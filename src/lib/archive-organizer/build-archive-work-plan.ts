@@ -1,5 +1,7 @@
 import type { ArchiveOrganizerRow, ArchiveSupplementalEntry, ArchiveWorkPlan, VideoRow } from "types/domain";
-import { sanitizeFileNamePart, uniqueStrings } from "@lib/utils/string-utils";
+import { compactWhitespace, sanitizeFileNamePart, uniqueStrings } from "@lib/utils/string-utils";
+
+const MAX_LIBRARY_FILE_STEM_LENGTH = 48;
 
 /**
  * Creates the single-storage archive plan and the organizer manifest/scripts
@@ -29,7 +31,7 @@ function dedupeRowsByVideoId(rows: VideoRow[]): VideoRow[] {
 }
 
 function buildOrganizerRow(row: VideoRow): ArchiveOrganizerRow {
-  const fileName = `${sanitizeFileNamePart(row.title || row.video_id, row.video_id)}-${row.video_id}.mp4`;
+  const fileName = buildLibraryFileName(row);
   const linkPaths = new Set<string>([
     `organized/by-source/${sanitizeFileNamePart(row.source_type, "source")}/${fileName}`,
     `organized/by-category/${sanitizeFileNamePart(row.source_bucket, "category")}/${fileName}`
@@ -55,6 +57,48 @@ function buildOrganizerRow(row: VideoRow): ArchiveOrganizerRow {
     character_names: uniqueStrings(row.character_names),
     category_tags: uniqueStrings(row.category_tags)
   };
+}
+
+function buildLibraryFileName(row: VideoRow): string {
+  const stem = resolveLibraryFileStem(row);
+  return `${stem}-${row.video_id}.mp4`;
+}
+
+function resolveLibraryFileStem(row: VideoRow): string {
+  const discoveryPhrase = compactWhitespace(row.discovery_phrase);
+  if (discoveryPhrase) {
+    return sanitizeFileNamePart(truncateFileStem(discoveryPhrase), "video");
+  }
+
+  const fallbackId = buildCharacterCreatorId(row);
+  if (fallbackId) {
+    return sanitizeFileNamePart(truncateFileStem(fallbackId), "video");
+  }
+
+  return sanitizeFileNamePart(row.video_id, "video");
+}
+
+function buildCharacterCreatorId(row: VideoRow): string {
+  const parts = [
+    normalizeIdPart(row.character_username || row.character_name),
+    normalizeIdPart(row.creator_username || row.creator_name),
+    normalizeIdPart(row.video_id)
+  ].filter(Boolean);
+  return parts.join(".");
+}
+
+function normalizeIdPart(value: string): string {
+  return sanitizeFileNamePart(value, "")
+    .replace(/\s+/g, "-")
+    .replace(/\.+/g, ".")
+    .replace(/-+/g, "-");
+}
+
+function truncateFileStem(value: string): string {
+  if (value.length <= MAX_LIBRARY_FILE_STEM_LENGTH) {
+    return value;
+  }
+  return value.slice(0, MAX_LIBRARY_FILE_STEM_LENGTH).trim();
 }
 
 function buildArchiveSupplementalEntries(organizerRows: ArchiveOrganizerRow[]): ArchiveSupplementalEntry[] {

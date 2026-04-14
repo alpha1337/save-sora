@@ -12,6 +12,8 @@ const WATERMARK_FETCH_MAX_ATTEMPTS = 6;
 const WATERMARK_FETCH_BASE_RETRY_MS = 1200;
 const WATERMARK_FETCH_MAX_RETRY_MS = 20000;
 const SHARED_VIDEO_ID_PATTERN = /^s_[A-Za-z0-9_-]+$/;
+const MIN_VIDEO_BYTES_FALLBACK_THRESHOLD = 256 * 1024;
+const ESTIMATED_SIZE_FALLBACK_RATIO = 0.2;
 let globalRateLimitCooldownUntilMs = 0;
 let watermarkRateLimitStreak = 0;
 
@@ -158,12 +160,32 @@ async function fetchPreferredVideoBytes(
   row: ArchiveWorkPlan["rows"][number],
   onStatusLabel?: (statusLabel: string) => void
 ): Promise<Uint8Array> {
-  if (!SHARED_VIDEO_ID_PATTERN.test(row.video_id) && row.playback_url) {
+  if (SHARED_VIDEO_ID_PATTERN.test(row.video_id)) {
+    try {
+      const bytes = await fetchWatermarkFreeVideoBytes(row.video_id, onStatusLabel);
+      if (shouldFallbackToSourceDownload(row, bytes)) {
+        if (!row.playback_url) {
+          throw new Error("Watermark-free payload is unexpectedly small and source URL is unavailable.");
+        }
+        onStatusLabel?.("Watermark payload too small, using source URL");
+        return fetchDirectVideoBytes(row.playback_url);
+      }
+      return bytes;
+    } catch (error) {
+      if (!row.playback_url) {
+        throw error;
+      }
+      onStatusLabel?.("Watermark unavailable, using source URL");
+      return fetchDirectVideoBytes(row.playback_url);
+    }
+  }
+
+  if (row.playback_url) {
     onStatusLabel?.("Using source download URL");
     return fetchDirectVideoBytes(row.playback_url);
   }
 
-  return fetchWatermarkFreeVideoBytes(row.video_id, onStatusLabel);
+  throw new Error("Draft is unresolved: missing shared post id (s_*). Re-fetch drafts to resolve before building ZIP.");
 }
 
 async function fetchDirectVideoBytes(url: string): Promise<Uint8Array> {
@@ -183,9 +205,14 @@ async function fetchWatermarkFreeVideoBytes(
     await waitForGlobalRateLimitCooldown();
     const response = await fetch(`https://soravdl.com/api/proxy/video/${encodeURIComponent(videoId)}`);
     if (response.ok) {
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      const contentType = (response.headers.get("content-type") ?? "").toLowerCase();
+      if (!isLikelyVideoPayload(bytes, contentType)) {
+        throw new Error("Watermark removal returned a non-video payload.");
+      }
       watermarkRateLimitStreak = 0;
       onStatusLabel?.("Watermark removed!");
-      return new Uint8Array(await response.arrayBuffer());
+      return bytes;
     }
     const status = response.status;
     if (status === 429 && attempt + 1 < WATERMARK_FETCH_MAX_ATTEMPTS) {
@@ -199,6 +226,52 @@ async function fetchWatermarkFreeVideoBytes(
     throw new Error(buildWatermarkRemovalErrorMessage(status));
   }
   throw new Error("Watermark removal failed after retries. Please try again.");
+}
+
+function shouldFallbackToSourceDownload(
+  row: ArchiveWorkPlan["rows"][number],
+  bytes: Uint8Array
+): boolean {
+  if (!row.playback_url) {
+    return false;
+  }
+  if (!Number.isFinite(row.estimated_size_bytes ?? NaN) || (row.estimated_size_bytes ?? 0) <= 0) {
+    return bytes.byteLength < MIN_VIDEO_BYTES_FALLBACK_THRESHOLD;
+  }
+  const estimatedSizeBytes = row.estimated_size_bytes ?? 0;
+  const minimumExpectedBytes = Math.max(
+    MIN_VIDEO_BYTES_FALLBACK_THRESHOLD,
+    Math.floor(estimatedSizeBytes * ESTIMATED_SIZE_FALLBACK_RATIO)
+  );
+  return bytes.byteLength < minimumExpectedBytes;
+}
+
+function isLikelyVideoPayload(bytes: Uint8Array, contentType: string): boolean {
+  if (contentType.includes("video/")) {
+    return true;
+  }
+  if (contentType.includes("application/octet-stream") || !contentType) {
+    return hasVideoContainerSignature(bytes);
+  }
+  return hasVideoContainerSignature(bytes);
+}
+
+function hasVideoContainerSignature(bytes: Uint8Array): boolean {
+  return hasMp4FtypSignature(bytes) || hasWebmSignature(bytes);
+}
+
+function hasMp4FtypSignature(bytes: Uint8Array): boolean {
+  if (bytes.byteLength < 12) {
+    return false;
+  }
+  return bytes[4] === 0x66 && bytes[5] === 0x74 && bytes[6] === 0x79 && bytes[7] === 0x70;
+}
+
+function hasWebmSignature(bytes: Uint8Array): boolean {
+  if (bytes.byteLength < 4) {
+    return false;
+  }
+  return bytes[0] === 0x1a && bytes[1] === 0x45 && bytes[2] === 0xdf && bytes[3] === 0xa3;
 }
 
 function buildWatermarkRemovalErrorMessage(status: number): string {

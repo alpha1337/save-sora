@@ -105,9 +105,14 @@ export function normalizePostRows(source: LowLevelSourceType, rows: unknown[], f
 }
 
 export function normalizeDraftRows(source: LowLevelSourceType, rows: unknown[], fetchedAt: string): VideoRow[] {
-  return rows.map((row) => {
+  const normalizedRows: VideoRow[] = [];
+
+  for (const row of rows) {
     const rowRecord = asRecord(row);
     const draftRecord = resolveNestedDraftRecord(rowRecord);
+    if (isDraftContentViolationRow(rowRecord, draftRecord)) {
+      continue;
+    }
     const metadataRecord = buildDraftMetadataRecord(rowRecord, draftRecord);
     const generationId = pickFirstString([getDraftGenerationId(draftRecord), getDraftGenerationId(row)]);
     const resolvedVideoIdCandidate = pickFirstString([
@@ -137,7 +142,7 @@ export function normalizeDraftRows(source: LowLevelSourceType, rows: unknown[], 
     const dimensions = getDimensions(draftRecord);
     const characterNames = getCharacterNames(metadataRecord);
 
-    return {
+    normalizedRows.push({
       row_id: effectiveVideoId || generationId
         ? buildRowId(source, effectiveVideoId || generationId, title)
         : buildRowIdFromPayload(source, "", title, row),
@@ -173,8 +178,10 @@ export function normalizeDraftRows(source: LowLevelSourceType, rows: unknown[], 
       is_downloadable: isDownloadable,
       skip_reason: isDownloadable ? "" : "unresolved_draft_video_id",
       fetched_at: fetchedAt
-    };
-  });
+    });
+  }
+
+  return normalizedRows;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -202,6 +209,77 @@ function buildDraftMetadataRecord(
   };
 }
 
+function isDraftContentViolationRow(
+  rowRecord: Record<string, unknown>,
+  draftRecord: Record<string, unknown>
+): boolean {
+  const rowOutputRecord = getNestedRecord(rowRecord, "output");
+  const draftOutputRecord = getNestedRecord(draftRecord, "output");
+  const kind = pickFirstString([
+    rowRecord.kind,
+    draftRecord.kind,
+    getNestedRecord(rowRecord, "draft").kind,
+    getNestedRecord(rowRecord, "item").kind,
+    getNestedRecord(rowRecord, "data").kind,
+    rowOutputRecord.kind,
+    draftOutputRecord.kind
+  ]).toLowerCase();
+  if (kind.includes("content_violation")) {
+    return true;
+  }
+
+  if (hasTrueBoolean([
+    rowRecord.output_blocked,
+    rowRecord.outputBlocked,
+    rowRecord.content_violation,
+    rowRecord.contentViolation,
+    draftRecord.output_blocked,
+    draftRecord.outputBlocked,
+    draftRecord.content_violation,
+    draftRecord.contentViolation,
+    rowOutputRecord.output_blocked,
+    rowOutputRecord.outputBlocked,
+    rowOutputRecord.content_violation,
+    rowOutputRecord.contentViolation,
+    draftOutputRecord.output_blocked,
+    draftOutputRecord.outputBlocked,
+    draftOutputRecord.content_violation,
+    draftOutputRecord.contentViolation
+  ])) {
+    return true;
+  }
+
+  const reason = pickFirstString([
+    rowRecord.reason_str,
+    rowRecord.reasonStr,
+    rowRecord.markdown_reason_str,
+    rowRecord.markdownReasonStr,
+    rowRecord.reason,
+    draftRecord.reason_str,
+    draftRecord.reasonStr,
+    draftRecord.markdown_reason_str,
+    draftRecord.markdownReasonStr,
+    draftRecord.reason,
+    rowOutputRecord.reason_str,
+    rowOutputRecord.reasonStr,
+    rowOutputRecord.markdown_reason_str,
+    rowOutputRecord.markdownReasonStr,
+    rowOutputRecord.reason,
+    draftOutputRecord.reason_str,
+    draftOutputRecord.reasonStr,
+    draftOutputRecord.markdown_reason_str,
+    draftOutputRecord.markdownReasonStr,
+    draftOutputRecord.reason
+  ]).toLowerCase();
+  if (!reason) {
+    return false;
+  }
+
+  return reason.includes("guardrail") ||
+    reason.includes("content violation") ||
+    reason.includes("third-party likeness");
+}
+
 function extractCreationConfigCameoProfiles(draftRecord: Record<string, unknown>): unknown[] {
   const creationConfig =
     draftRecord.creation_config && typeof draftRecord.creation_config === "object"
@@ -210,6 +288,20 @@ function extractCreationConfigCameoProfiles(draftRecord: Record<string, unknown>
         ? draftRecord.creationConfig as Record<string, unknown>
         : null;
   return Array.isArray(creationConfig?.cameo_profiles) ? creationConfig.cameo_profiles : [];
+}
+
+function getNestedRecord(record: Record<string, unknown>, key: string): Record<string, unknown> {
+  const value = record[key];
+  return value && typeof value === "object" ? value as Record<string, unknown> : {};
+}
+
+function hasTrueBoolean(candidates: unknown[]): boolean {
+  for (const candidate of candidates) {
+    if (candidate === true) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function isSourceResolvedDraftId(value: unknown, resolvedVideoId: string): boolean {
@@ -328,8 +420,14 @@ function getPlaybackUrlFromRow(value: unknown): string {
     const sourceEncoding = encodings?.source && typeof encodings.source === "object"
       ? encodings.source as Record<string, unknown>
       : null;
+    const sourceWmEncoding = encodings?.source_wm && typeof encodings.source_wm === "object"
+      ? encodings.source_wm as Record<string, unknown>
+      : null;
     const mdEncoding = encodings?.md && typeof encodings.md === "object"
       ? encodings.md as Record<string, unknown>
+      : null;
+    const ldEncoding = encodings?.ld && typeof encodings.ld === "object"
+      ? encodings.ld as Record<string, unknown>
       : null;
     const downloadUrls = candidate.download_urls && typeof candidate.download_urls === "object"
       ? candidate.download_urls as Record<string, unknown>
@@ -347,9 +445,11 @@ function getPlaybackUrlFromRow(value: unknown): string {
         downloadUrlsCamel?.watermark,
         downloadUrlsCamel?.no_watermark,
         downloadUrlsCamel?.endcard_watermark,
-        candidate.url,
+        sourceWmEncoding?.path,
         sourceEncoding?.path,
-        mdEncoding?.path
+        candidate.url,
+        mdEncoding?.path,
+        ldEncoding?.path
       ])
     );
     if (resolved) {
@@ -374,8 +474,14 @@ function getDraftPlaybackUrlFromRow(value: unknown, generationId: string, resolv
     const sourceEncoding = encodings?.source && typeof encodings.source === "object"
       ? encodings.source as Record<string, unknown>
       : null;
+    const sourceWmEncoding = encodings?.source_wm && typeof encodings.source_wm === "object"
+      ? encodings.source_wm as Record<string, unknown>
+      : null;
     const mdEncoding = encodings?.md && typeof encodings.md === "object"
       ? encodings.md as Record<string, unknown>
+      : null;
+    const ldEncoding = encodings?.ld && typeof encodings.ld === "object"
+      ? encodings.ld as Record<string, unknown>
       : null;
     const downloadUrls = candidate.download_urls && typeof candidate.download_urls === "object"
       ? candidate.download_urls as Record<string, unknown>
@@ -393,9 +499,11 @@ function getDraftPlaybackUrlFromRow(value: unknown, generationId: string, resolv
         downloadUrlsCamel?.watermark,
         downloadUrlsCamel?.no_watermark,
         downloadUrlsCamel?.endcard_watermark,
-        candidate.url,
+        sourceWmEncoding?.path,
         sourceEncoding?.path,
-        mdEncoding?.path
+        candidate.url,
+        mdEncoding?.path,
+        ldEncoding?.path
       ])
     );
     const candidateId = pickFirstString([
