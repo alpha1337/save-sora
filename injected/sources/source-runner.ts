@@ -880,6 +880,14 @@ function hasDraftEditedOrRemixStub(row: Record<string, unknown>): boolean {
     row.isEditorStub
   ]);
 }
+function pickFirstBoolean(candidates: unknown[]): boolean {
+  for (const candidate of candidates) {
+    if (typeof candidate === "boolean") {
+      return candidate;
+    }
+  }
+  return false;
+}
 function resolveDraftDetailUrl(row: Record<string, unknown>, generationId: string): string {
   const directUrl = typeof row.detail_url === "string"
     ? row.detail_url
