@@ -228,7 +228,10 @@ function extractDraftRowKind(
 }
 
 function isVisibleDraftKind(kind: string): boolean {
-  return !kind || kind === "sora_draft" || kind === "draft";
+  if (!kind) {
+    return true;
+  }
+  return kind === "sora_draft" || kind === "draft";
 }
 
 function isDraftContentViolationRow(
@@ -481,72 +484,10 @@ function getDraftPlaybackUrlFromRow(value: unknown, generationId: string, resolv
 
   const record = value as Record<string, unknown>;
   const candidateObjects = [record, ...getAttachmentObjects(record)];
-  const candidates = candidateObjects.map((candidate) => {
-    const encodings = candidate.encodings && typeof candidate.encodings === "object"
-      ? candidate.encodings as Record<string, unknown>
-      : null;
-    const sourceEncoding = encodings?.source && typeof encodings.source === "object"
-      ? encodings.source as Record<string, unknown>
-      : null;
-    const sourceWmEncoding = encodings?.source_wm && typeof encodings.source_wm === "object"
-      ? encodings.source_wm as Record<string, unknown>
-      : null;
-    const mdEncoding = encodings?.md && typeof encodings.md === "object"
-      ? encodings.md as Record<string, unknown>
-      : null;
-    const ldEncoding = encodings?.ld && typeof encodings.ld === "object"
-      ? encodings.ld as Record<string, unknown>
-      : null;
-    const downloadUrls = candidate.download_urls && typeof candidate.download_urls === "object"
-      ? candidate.download_urls as Record<string, unknown>
-      : null;
-    const downloadUrlsCamel = candidate.downloadUrls && typeof candidate.downloadUrls === "object"
-      ? candidate.downloadUrls as Record<string, unknown>
-      : null;
-    const url = normalizeAbsoluteUrl(
-      pickFirstString([
-        candidate.downloadable_url,
-        candidate.downloadableUrl,
-        downloadUrls?.watermark,
-        downloadUrls?.no_watermark,
-        downloadUrls?.endcard_watermark,
-        downloadUrlsCamel?.watermark,
-        downloadUrlsCamel?.no_watermark,
-        downloadUrlsCamel?.endcard_watermark,
-        sourceWmEncoding?.path,
-        sourceEncoding?.path,
-        candidate.url,
-        mdEncoding?.path,
-        ldEncoding?.path
-      ])
-    );
-    const candidateId = pickFirstString([
-      candidate.id,
-      candidate.post_id,
-      candidate.postId,
-      candidate.public_id,
-      candidate.publicId,
-      candidate.generation_id,
-      candidate.generationId
-    ]);
-    const candidateGenerationId = pickFirstString([candidate.generation_id, candidate.generationId]);
-    const typeHint = pickFirstString([
-      candidate.kind,
-      candidate.type,
-      candidate.role,
-      candidate.asset_type,
-      candidate.assetType,
-      candidate.media_type,
-      candidate.mediaType
-    ]).toLowerCase();
-
-    return {
-      candidateGenerationId,
-      candidateId,
-      typeHint,
-      url
-    };
-  }).filter((entry) => entry.url);
+  const sourceOperationGenerationIds = extractSourceOperationGenerationIds(record);
+  const candidates = candidateObjects.flatMap((candidate, index) =>
+    collectDraftPlaybackCandidates(candidate, index === 0)
+  );
 
   let bestScore = Number.NEGATIVE_INFINITY;
   let bestUrl = "";
@@ -565,11 +506,15 @@ function getDraftPlaybackUrlFromRow(value: unknown, generationId: string, resolv
       score += 50;
     }
     if (candidate.typeHint.includes("source") || candidate.typeHint.includes("reference") || candidate.typeHint.includes("input")) {
-      score -= 80;
+      score -= 160;
+    }
+    if (candidate.candidateGenerationId && sourceOperationGenerationIds.has(candidate.candidateGenerationId)) {
+      score -= 140;
     }
     if (!resolvedVideoId && generationId && /^s_[A-Za-z0-9_-]+$/i.test(candidate.candidateId)) {
       score -= 40;
     }
+    score += getDraftPlaybackUrlSourceScore(candidate.urlSource);
 
     if (score > bestScore) {
       bestScore = score;
@@ -582,6 +527,155 @@ function getDraftPlaybackUrlFromRow(value: unknown, generationId: string, resolv
   }
 
   return getPlaybackUrlFromRow(value);
+}
+
+interface DraftPlaybackCandidate {
+  candidateGenerationId: string;
+  candidateId: string;
+  typeHint: string;
+  url: string;
+  urlSource: string;
+}
+
+function collectDraftPlaybackCandidates(candidate: Record<string, unknown>, includeResolvedFields: boolean): DraftPlaybackCandidate[] {
+  const encodings = candidate.encodings && typeof candidate.encodings === "object"
+    ? candidate.encodings as Record<string, unknown>
+    : null;
+  const sourceEncoding = encodings?.source && typeof encodings.source === "object"
+    ? encodings.source as Record<string, unknown>
+    : null;
+  const sourceWmEncoding = encodings?.source_wm && typeof encodings.source_wm === "object"
+    ? encodings.source_wm as Record<string, unknown>
+    : null;
+  const mdEncoding = encodings?.md && typeof encodings.md === "object"
+    ? encodings.md as Record<string, unknown>
+    : null;
+  const ldEncoding = encodings?.ld && typeof encodings.ld === "object"
+    ? encodings.ld as Record<string, unknown>
+    : null;
+  const gifEncoding = encodings?.gif && typeof encodings.gif === "object"
+    ? encodings.gif as Record<string, unknown>
+    : null;
+  const downloadUrls = candidate.download_urls && typeof candidate.download_urls === "object"
+    ? candidate.download_urls as Record<string, unknown>
+    : null;
+  const downloadUrlsCamel = candidate.downloadUrls && typeof candidate.downloadUrls === "object"
+    ? candidate.downloadUrls as Record<string, unknown>
+    : null;
+  const candidateId = pickFirstString([
+    candidate.id,
+    candidate.post_id,
+    candidate.postId,
+    candidate.public_id,
+    candidate.publicId,
+    candidate.generation_id,
+    candidate.generationId
+  ]);
+  const candidateGenerationId = pickFirstString([candidate.generation_id, candidate.generationId]);
+  const typeHint = pickFirstString([
+    candidate.kind,
+    candidate.type,
+    candidate.role,
+    candidate.asset_type,
+    candidate.assetType,
+    candidate.media_type,
+    candidate.mediaType
+  ]).toLowerCase();
+
+  const urlCandidates: Array<{ source: string; value: unknown }> = [
+    ...(includeResolvedFields
+      ? [
+          { source: "resolved_playback_url", value: candidate.resolved_playback_url },
+          { source: "resolved_playback_url", value: candidate.resolvedPlaybackUrl }
+        ]
+      : []),
+    { source: "downloadable_url", value: candidate.downloadable_url },
+    { source: "downloadable_url", value: candidate.downloadableUrl },
+    { source: "download_urls_no_watermark", value: downloadUrls?.no_watermark },
+    { source: "download_urls_no_watermark", value: downloadUrlsCamel?.no_watermark },
+    { source: "download_urls_watermark", value: downloadUrls?.watermark },
+    { source: "download_urls_watermark", value: downloadUrlsCamel?.watermark },
+    { source: "download_urls_endcard_watermark", value: downloadUrls?.endcard_watermark },
+    { source: "download_urls_endcard_watermark", value: downloadUrlsCamel?.endcard_watermark },
+    { source: "source_wm_encoding", value: sourceWmEncoding?.path },
+    { source: "source_encoding", value: sourceEncoding?.path },
+    { source: "direct_url", value: candidate.url },
+    { source: "md_encoding", value: mdEncoding?.path },
+    { source: "ld_encoding", value: ldEncoding?.path },
+    { source: "gif_encoding", value: gifEncoding?.path }
+  ];
+
+  return urlCandidates
+    .map((entry) => ({ ...entry, url: normalizeAbsoluteUrl(entry.value) }))
+    .filter((entry) => entry.url)
+    .map((entry) => ({
+      candidateGenerationId,
+      candidateId,
+      typeHint,
+      url: entry.url,
+      urlSource: entry.source
+    }));
+}
+
+function getDraftPlaybackUrlSourceScore(urlSource: string): number {
+  switch (urlSource) {
+    case "resolved_playback_url":
+      return 160;
+    case "downloadable_url":
+      return 125;
+    case "download_urls_no_watermark":
+      return 120;
+    case "download_urls_watermark":
+      return 115;
+    case "download_urls_endcard_watermark":
+      return 110;
+    case "source_wm_encoding":
+      return 105;
+    case "source_encoding":
+      return 95;
+    case "direct_url":
+      return 50;
+    case "md_encoding":
+      return 35;
+    case "ld_encoding":
+      return 25;
+    case "gif_encoding":
+      return 5;
+    default:
+      return 0;
+  }
+}
+
+function extractSourceOperationGenerationIds(record: Record<string, unknown>): Set<string> {
+  const operationArrays = [
+    record.operations,
+    record.operation_history,
+    record.operationHistory,
+    getNestedRecord(record, "draft").operations
+  ];
+
+  const sourceGenerationIds = new Set<string>();
+  for (const operationArray of operationArrays) {
+    if (!Array.isArray(operationArray)) {
+      continue;
+    }
+    for (const operationEntry of operationArray) {
+      if (!operationEntry || typeof operationEntry !== "object") {
+        continue;
+      }
+      const operation = operationEntry as Record<string, unknown>;
+      const operationType = pickFirstString([operation.operation, operation.type, operation.kind]).toLowerCase();
+      if (operationType && !operationType.includes("extend") && !operationType.includes("remix")) {
+        continue;
+      }
+      const sourceGenerationId = pickFirstString([operation.generation_id, operation.generationId]);
+      if (sourceGenerationId) {
+        sourceGenerationIds.add(sourceGenerationId);
+      }
+    }
+  }
+
+  return sourceGenerationIds;
 }
 
 export function normalizeCreatorProfile(profile: unknown, routeUrl: string): CreatorProfile | null {

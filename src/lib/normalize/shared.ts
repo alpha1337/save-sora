@@ -370,6 +370,8 @@ export function getThumbnailUrl(value: unknown): string {
   const attachmentObjects = getAttachmentObjects(record);
   return normalizeAbsoluteUrl(
     pickFirstString([
+      record.resolved_thumbnail_url,
+      record.resolvedThumbnailUrl,
       typeof recordThumbnailEncoding?.path === "string" ? recordThumbnailEncoding.path : null,
       record.thumbnail_url,
       record.thumbnailUrl,
@@ -390,6 +392,8 @@ export function getThumbnailUrl(value: unknown): string {
           : null,
         candidate.thumbnail_url,
         candidate.thumbnailUrl,
+        candidate.resolved_thumbnail_url,
+        candidate.resolvedThumbnailUrl,
         candidate.preview_image_url,
         candidate.previewImageUrl,
         candidate.cover_photo_url,
@@ -402,6 +406,8 @@ export function getThumbnailUrl(value: unknown): string {
       ...attachmentObjects.flatMap((attachment) => [
         attachment.thumbnail_url,
         attachment.thumbnailUrl,
+        attachment.resolved_thumbnail_url,
+        attachment.resolvedThumbnailUrl,
         attachment.preview_image_url,
         attachment.previewImageUrl,
         attachment.cover_photo_url,
@@ -457,6 +463,8 @@ export function getEstimatedSizeBytes(value: unknown): number | null {
   const candidateObjects = getCandidateObjects(record);
   const attachmentObjects = getAttachmentObjects(record);
   const sizeCandidates = [
+    record.resolved_estimated_size_bytes,
+    record.resolvedEstimatedSizeBytes,
     record.size_bytes,
     record.sizeBytes,
     record.file_size,
@@ -465,6 +473,8 @@ export function getEstimatedSizeBytes(value: unknown): number | null {
     ...candidateObjects.flatMap((candidate) => [
       candidate.size_bytes,
       candidate.sizeBytes,
+      candidate.resolved_estimated_size_bytes,
+      candidate.resolvedEstimatedSizeBytes,
       candidate.file_size,
       candidate.fileSize,
       candidate.filesize
@@ -486,6 +496,8 @@ export function getEstimatedSizeBytes(value: unknown): number | null {
       return [
         attachment.size_bytes,
         attachment.sizeBytes,
+        attachment.resolved_estimated_size_bytes,
+        attachment.resolvedEstimatedSizeBytes,
         attachment.file_size,
         attachment.fileSize,
         attachment.filesize,

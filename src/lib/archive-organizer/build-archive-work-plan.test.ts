@@ -91,7 +91,7 @@ describe("buildArchiveWorkPlan", () => {
     });
 
     const plan = buildArchiveWorkPlan([row], "Sora Library");
-    expect(plan.organizer_rows[0].file_name).toBe("freakymrc.saintglimm.s_alpha123-s_alpha123.mp4");
+    expect(plan.organizer_rows[0].file_name).toBe("freakymrc.saintglimm-s_alpha123.mp4");
   });
 
   it("truncates discovery phrase stems to keep Windows-safe filename lengths", () => {

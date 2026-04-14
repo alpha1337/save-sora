@@ -646,6 +646,23 @@ describe("video-row-normalizer", () => {
     });
   });
 
+  it("filters out unknown draft kinds to match web draft parity", () => {
+    const rows = normalizeDraftRows(
+      "drafts",
+      [
+        {
+          id: "gen_custom_kind_123",
+          kind: "sora_extended_draft",
+          prompt: "Extended draft",
+          downloadable_url: "https://videos.openai.com/extended-draft.mp4"
+        }
+      ],
+      FETCHED_AT
+    );
+
+    expect(rows).toHaveLength(0);
+  });
+
   it("filters out nested characterAccountDrafts content violations", () => {
     const rows = normalizeDraftRows(
       "characterAccountDrafts",
@@ -728,6 +745,28 @@ describe("video-row-normalizer", () => {
       creator_name: "Creator B",
       creator_username: "creator_b"
     });
+  });
+
+  it("uses resolved playback url for shared draft fallback when direct draft URLs are missing", () => {
+    const [row] = normalizeDraftRows(
+      "drafts",
+      [
+        {
+          id: "gen_resolved_playback_123",
+          kind: "sora_draft",
+          resolved_video_id: "s_resolved_playback_123",
+          resolved_playback_url: "https://videos.openai.com/resolved-playback.mp4",
+          downloadable_url: null,
+          download_urls: null,
+          post: null
+        }
+      ],
+      FETCHED_AT
+    );
+
+    expect(row.video_id).toBe("s_resolved_playback_123");
+    expect(row.playback_url).toBe("https://videos.openai.com/resolved-playback.mp4");
+    expect(row.is_downloadable).toBe(true);
   });
 
   it("keeps missing-id posts distinct when payload differs", () => {

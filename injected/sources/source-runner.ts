@@ -17,6 +17,15 @@ import {
   resolveSharedVideoIdFromValue
 } from "../lib/shared";
 import {
+  extractEstimatedSizeBytesFromAnyRecord,
+  extractPlaybackUrlFromAnyRecord,
+  extractThumbnailUrlFromAnyRecord,
+  getDraftKind,
+  hasDraftFailureState,
+  isDraftOutputBlocked,
+  resolveExistingDraftVideoId as resolveExistingDraftVideoIdFromDraftHelpers
+} from "./draft-metadata-helpers";
+import {
   filterRowsByTimeWindow,
   reachedOlderThanSinceBoundary
 } from "./fetch-batch-filters";
@@ -31,6 +40,13 @@ interface EndpointAttemptFailure {
   key: string;
   request: string;
   status: number | null;
+}
+interface DraftShareReference {
+  estimated_size_bytes: number | null;
+  playback_url: string;
+  share_url: string;
+  thumbnail_url: string;
+  video_id: string;
 }
 export async function runSourceRequest(request: BackgroundRequest): Promise<unknown> {
   if (request.type === "fetch-detail-html") {
@@ -372,38 +388,111 @@ async function enrichDraftRows(
       draftRecord.post = null;
       delete record.resolved_video_id;
       delete record.resolvedVideoId;
+      delete record.resolved_playback_url;
+      delete record.resolvedPlaybackUrl;
       delete draftRecord.resolved_video_id;
       delete draftRecord.resolvedVideoId;
+      delete draftRecord.resolved_playback_url;
+      delete draftRecord.resolvedPlaybackUrl;
       continue;
     }
     const postVideoId = resolveSharedVideoIdFromValue((record.post as unknown) ?? null);
     if (postVideoId) {
-      record.resolved_video_id = postVideoId;
-      record.resolved_share_url = `${SORA_ORIGIN}/p/${postVideoId}`;
+      const metadata = extractResolvedDraftMetadataFromValue(record.post, postVideoId);
+      applyResolvedDraftReference(record, draftRecord, {
+        video_id: postVideoId,
+        share_url: `${SORA_ORIGIN}/p/${postVideoId}`,
+        playback_url: metadata.playback_url,
+        estimated_size_bytes: metadata.estimated_size_bytes,
+        thumbnail_url: metadata.thumbnail_url
+      });
       continue;
     }
     const cachedVideoId = knownResolutionMap.get(generationId);
     if (cachedVideoId) {
-      record.resolved_video_id = cachedVideoId;
-      record.resolved_share_url = `${SORA_ORIGIN}/p/${cachedVideoId}`;
+      const metadata = extractResolvedDraftMetadataFromValue(record, cachedVideoId);
+      applyResolvedDraftReference(record, draftRecord, {
+        video_id: cachedVideoId,
+        share_url: `${SORA_ORIGIN}/p/${cachedVideoId}`,
+        playback_url: metadata.playback_url,
+        estimated_size_bytes: metadata.estimated_size_bytes,
+        thumbnail_url: metadata.thumbnail_url
+      });
       continue;
     }
     const directVideoId = resolveExistingDraftVideoId(record);
     if (directVideoId) {
-      record.resolved_video_id = directVideoId;
-      record.resolved_share_url = `${SORA_ORIGIN}/p/${directVideoId}`;
+      const metadata = extractResolvedDraftMetadataFromValue(record, directVideoId);
+      applyResolvedDraftReference(record, draftRecord, {
+        video_id: directVideoId,
+        share_url: `${SORA_ORIGIN}/p/${directVideoId}`,
+        playback_url: metadata.playback_url,
+        estimated_size_bytes: metadata.estimated_size_bytes,
+        thumbnail_url: metadata.thumbnail_url
+      });
       continue;
     }
-    if (source === "drafts" && getDraftKind(record) === "sora_draft" && !record.post) {
+    const canCreateSharedReference =
+      !record.post &&
+      isShareableDraftKind(getDraftKind(record)) &&
+      (
+        source === "drafts" ||
+        source === "characterDrafts" ||
+        (source === "characterAccountDrafts" && isOwnedCharacterDraft)
+      );
+    if (canCreateSharedReference) {
       const createdReference = await createSharedDraftReference(record, generationId).catch(() => null);
       if (createdReference?.video_id) {
-        record.resolved_video_id = createdReference.video_id;
-        record.resolved_share_url = createdReference.share_url;
+        applyResolvedDraftReference(record, draftRecord, createdReference);
       }
     }
   }
   return rows;
 }
+
+function applyResolvedDraftReference(
+  rowRecord: Record<string, unknown>,
+  draftRecord: Record<string, unknown>,
+  reference: DraftShareReference
+): void {
+  rowRecord.resolved_video_id = reference.video_id;
+  rowRecord.resolvedVideoId = reference.video_id;
+  rowRecord.resolved_share_url = reference.share_url;
+  rowRecord.resolvedShareUrl = reference.share_url;
+  draftRecord.resolved_video_id = reference.video_id;
+  draftRecord.resolvedVideoId = reference.video_id;
+  draftRecord.resolved_share_url = reference.share_url;
+  draftRecord.resolvedShareUrl = reference.share_url;
+
+  if (reference.playback_url) {
+    rowRecord.resolved_playback_url = reference.playback_url;
+    rowRecord.resolvedPlaybackUrl = reference.playback_url;
+    draftRecord.resolved_playback_url = reference.playback_url;
+    draftRecord.resolvedPlaybackUrl = reference.playback_url;
+    if (!pickFirstString([draftRecord.downloadable_url, draftRecord.downloadableUrl])) {
+      draftRecord.downloadable_url = reference.playback_url;
+      draftRecord.downloadableUrl = reference.playback_url;
+    }
+  }
+  if (typeof reference.estimated_size_bytes === "number" && Number.isFinite(reference.estimated_size_bytes)) {
+    rowRecord.resolved_estimated_size_bytes = reference.estimated_size_bytes;
+    rowRecord.resolvedEstimatedSizeBytes = reference.estimated_size_bytes;
+    draftRecord.resolved_estimated_size_bytes = reference.estimated_size_bytes;
+    draftRecord.resolvedEstimatedSizeBytes = reference.estimated_size_bytes;
+  }
+  if (reference.thumbnail_url) {
+    rowRecord.resolved_thumbnail_url = reference.thumbnail_url;
+    rowRecord.resolvedThumbnailUrl = reference.thumbnail_url;
+    draftRecord.resolved_thumbnail_url = reference.thumbnail_url;
+    draftRecord.resolvedThumbnailUrl = reference.thumbnail_url;
+  }
+}
+
+function isShareableDraftKind(kind: string): boolean {
+  const normalizedKind = kind.trim().toLowerCase();
+  return normalizedKind === "sora_draft" || normalizedKind === "draft";
+}
+
 async function resolveDraftReference(request: { generation_id: string; detail_url?: string; row_payload?: unknown }) {
   const rowPayload = request.row_payload && typeof request.row_payload === "object"
     ? request.row_payload as Record<string, unknown>
@@ -418,6 +507,7 @@ async function resolveDraftReference(request: { generation_id: string; detail_ur
       generation_id: request.generation_id,
       video_id: "",
       share_url: "",
+      playback_url: "",
       thumbnail_url: "",
       estimated_size_bytes: null,
       skip_reason: classifyDraftSkipReason(workingRow)
@@ -428,6 +518,7 @@ async function resolveDraftReference(request: { generation_id: string; detail_ur
     generation_id: request.generation_id,
     video_id: createdReference?.video_id ?? "",
     share_url: createdReference?.share_url ?? "",
+    playback_url: createdReference?.playback_url ?? "",
     thumbnail_url: createdReference?.thumbnail_url ?? "",
     estimated_size_bytes: createdReference?.estimated_size_bytes ?? null,
     skip_reason: createdReference?.video_id ? "" : "unresolved_draft_video_id"
@@ -603,6 +694,7 @@ async function createSharedDraftReference(row: Record<string, unknown>, generati
     return {
       video_id: existingVideoId,
       share_url: `${SORA_ORIGIN}/p/${existingVideoId}`,
+      playback_url: metadata.playback_url,
       estimated_size_bytes: metadata.estimated_size_bytes,
       thumbnail_url: metadata.thumbnail_url
     };
@@ -622,6 +714,7 @@ async function createSharedDraftReference(row: Record<string, unknown>, generati
         return {
           video_id: recoveredFromPayload,
           share_url: `${SORA_ORIGIN}/p/${recoveredFromPayload}`,
+          playback_url: metadata.playback_url,
           estimated_size_bytes: metadata.estimated_size_bytes,
           thumbnail_url: metadata.thumbnail_url
         };
@@ -635,6 +728,7 @@ async function createSharedDraftReference(row: Record<string, unknown>, generati
       return {
         video_id: recoveredId,
         share_url: `${SORA_ORIGIN}/p/${recoveredId}`,
+        playback_url: metadata.playback_url,
         estimated_size_bytes: metadata.estimated_size_bytes,
         thumbnail_url: metadata.thumbnail_url
       };
@@ -653,6 +747,7 @@ async function createSharedDraftReference(row: Record<string, unknown>, generati
       return {
         video_id: videoId,
         share_url: `${SORA_ORIGIN}/p/${videoId}`,
+        playback_url: metadata.playback_url,
         estimated_size_bytes: metadata.estimated_size_bytes,
         thumbnail_url: metadata.thumbnail_url
       };
@@ -691,16 +786,22 @@ async function fetchJsonWithMethod(url: string, method: "POST", jsonBody: unknow
   throw new Error("Draft share creation failed after retries.");
 }
 function resolveDraftShareText(row: Record<string, unknown>): string {
-  return pickFirstString([row.discovery_phrase, row.discoveryPhrase, row.prompt, row.caption, row.description]);
+  const draftRecord = row.draft && typeof row.draft === "object" ? row.draft as Record<string, unknown> : null;
+  return pickFirstString([
+    row.discovery_phrase,
+    row.discoveryPhrase,
+    row.prompt,
+    row.caption,
+    row.description,
+    draftRecord?.discovery_phrase,
+    draftRecord?.discoveryPhrase,
+    draftRecord?.prompt,
+    draftRecord?.caption,
+    draftRecord?.description
+  ]);
 }
 export function resolveExistingDraftVideoId(row: Record<string, unknown>): string {
-  return pickFirstString([
-    row.resolved_video_id,
-    row.resolvedVideoId,
-    extractSharedVideoId(row.resolved_share_url),
-    extractSharedVideoId(row.resolvedShareUrl),
-    resolveSharedVideoIdFromValue(row)
-  ]);
+  return resolveExistingDraftVideoIdFromDraftHelpers(row);
 }
 export function extractEstimatedSizeBytesFromResolvedRow(value: unknown, videoId: string): number | null {
   return extractResolvedDraftMetadataFromValue(value, videoId).estimated_size_bytes;
@@ -708,18 +809,23 @@ export function extractEstimatedSizeBytesFromResolvedRow(value: unknown, videoId
 function extractResolvedDraftMetadataFromValue(
   value: unknown,
   videoId: string
-): { estimated_size_bytes: number | null; thumbnail_url: string } {
+): { estimated_size_bytes: number | null; thumbnail_url: string; playback_url: string } {
   if (!value || typeof value !== "object") {
-    return { estimated_size_bytes: null, thumbnail_url: "" };
+    return { estimated_size_bytes: null, thumbnail_url: "", playback_url: "" };
   }
-  const resolveFromRecord = (record: Record<string, unknown>): { estimated_size_bytes: number | null; thumbnail_url: string } => ({
+  const resolveFromRecord = (
+    record: Record<string, unknown>
+  ): { estimated_size_bytes: number | null; thumbnail_url: string; playback_url: string } => ({
     estimated_size_bytes: extractEstimatedSizeBytesFromAnyRecord(record),
-    thumbnail_url: extractThumbnailUrlFromAnyRecord(record)
+    thumbnail_url: extractThumbnailUrlFromAnyRecord(record),
+    playback_url: extractPlaybackUrlFromAnyRecord(record)
   });
-  const directSize = extractEstimatedSizeBytesFromAnyRecord(value as Record<string, unknown>);
-  const directThumbnail = extractThumbnailUrlFromAnyRecord(value as Record<string, unknown>);
-  if ((directSize != null || directThumbnail) && resolveSharedVideoIdFromValue(value) === videoId) {
-    return { estimated_size_bytes: directSize, thumbnail_url: directThumbnail };
+  const directRecord = value as Record<string, unknown>;
+  const directSize = extractEstimatedSizeBytesFromAnyRecord(directRecord);
+  const directThumbnail = extractThumbnailUrlFromAnyRecord(directRecord);
+  const directPlayback = extractPlaybackUrlFromAnyRecord(directRecord);
+  if ((directSize != null || directThumbnail || directPlayback) && resolveSharedVideoIdFromValue(value) === videoId) {
+    return { estimated_size_bytes: directSize, thumbnail_url: directThumbnail, playback_url: directPlayback };
   }
   const rows = getPostListingRows(value);
   for (const row of rows) {
@@ -731,7 +837,7 @@ function extractResolvedDraftMetadataFromValue(
     }
     return resolveFromRecord(row as Record<string, unknown>);
   }
-  return { estimated_size_bytes: null, thumbnail_url: "" };
+  return { estimated_size_bytes: null, thumbnail_url: "", playback_url: "" };
 }
 export function shouldSkipDraftRow(row: Record<string, unknown> | null | undefined): boolean {
   if (!row || typeof row !== "object") {
@@ -787,119 +893,6 @@ function resolveDraftDetailUrl(row: Record<string, unknown>, generationId: strin
   }
   return `${SORA_ORIGIN}/d/${generationId}`;
 }
-function extractEstimatedSizeBytesFromAnyRecord(record: Record<string, unknown>): number | null {
-  const candidates: unknown[] = [
-    record.size_bytes,
-    record.sizeBytes,
-    record.file_size,
-    record.fileSize,
-    record.filesize
-  ];
-  const attachments = getNestedObjectArrays(record);
-  for (const attachment of attachments) {
-    candidates.push(
-      attachment.size_bytes,
-      attachment.sizeBytes,
-      attachment.file_size,
-      attachment.fileSize,
-      attachment.filesize
-    );
-    const encodings = attachment.encodings && typeof attachment.encodings === "object"
-      ? attachment.encodings as Record<string, unknown>
-      : null;
-    const source = encodings?.source && typeof encodings.source === "object"
-      ? encodings.source as Record<string, unknown>
-      : null;
-    const sourceWm = encodings?.source_wm && typeof encodings.source_wm === "object"
-      ? encodings.source_wm as Record<string, unknown>
-      : null;
-    const md = encodings?.md && typeof encodings.md === "object"
-      ? encodings.md as Record<string, unknown>
-      : null;
-    candidates.push(source?.size, sourceWm?.size, md?.size);
-  }
-  for (const candidate of candidates) {
-    const numeric = Number(candidate);
-    if (Number.isFinite(numeric) && numeric > 0) {
-      return numeric;
-    }
-  }
-  return null;
-}
-function extractThumbnailUrlFromAnyRecord(record: Record<string, unknown>): string {
-  const directCandidates = [record.thumbnail_url, record.thumbnailUrl, record.preview_image_url, record.previewImageUrl, record.poster_url, record.posterUrl, record.image_url, record.imageUrl];
-  for (const candidate of directCandidates) {
-    if (typeof candidate === "string" && candidate.trim()) {
-      return candidate;
-    }
-  }
-  const attachments = getNestedObjectArrays(record);
-  for (const attachment of attachments) {
-    const attachmentCandidates = [attachment.thumbnail_url, attachment.thumbnailUrl, attachment.preview_image_url, attachment.previewImageUrl, attachment.poster_url, attachment.posterUrl, attachment.image_url, attachment.imageUrl];
-    for (const candidate of attachmentCandidates) {
-      if (typeof candidate === "string" && candidate.trim()) {
-        return candidate;
-      }
-    }
-  }
-  return "";
-}
-function getNestedObjectArrays(record: Record<string, unknown>): Array<Record<string, unknown>> {
-  const keys = ["attachments", "outputs", "media", "assets", "files", "videos", "entries", "nodes", "results", "clips"];
-  const nested: Array<Record<string, unknown>> = [];
-  for (const key of keys) {
-    const value = record[key];
-    if (!Array.isArray(value)) {
-      continue;
-    }
-    for (const entry of value) {
-      if (entry && typeof entry === "object") {
-        nested.push(entry as Record<string, unknown>);
-      }
-    }
-  }
-  return nested;
-}
-function getDraftKind(row: Record<string, unknown>): string {
-  return pickFirstString([
-    row.kind,
-    (row.draft as Record<string, unknown> | undefined)?.kind,
-    (row.item as Record<string, unknown> | undefined)?.kind,
-    (row.data as Record<string, unknown> | undefined)?.kind,
-    (row.output as Record<string, unknown> | undefined)?.kind
-  ]);
-}
-function isDraftOutputBlocked(row: Record<string, unknown>): boolean {
-  return pickFirstBoolean([
-    row.output_blocked,
-    row.outputBlocked,
-    (row.output as Record<string, unknown> | undefined)?.output_blocked,
-    (row.output as Record<string, unknown> | undefined)?.outputBlocked,
-    row.content_violation,
-    row.contentViolation,
-    (row.output as Record<string, unknown> | undefined)?.content_violation,
-    (row.output as Record<string, unknown> | undefined)?.contentViolation
-  ]);
-}
-function hasDraftFailureState(row: Record<string, unknown>): boolean {
-  const failureText = pickFirstString([
-    row.status,
-    row.state,
-    row.error,
-    row.error_code,
-    row.errorCode,
-    row.error_message,
-    row.errorMessage,
-    (row.output as Record<string, unknown> | undefined)?.status,
-    (row.output as Record<string, unknown> | undefined)?.state,
-    (row.output as Record<string, unknown> | undefined)?.error,
-    (row.output as Record<string, unknown> | undefined)?.error_code,
-    (row.output as Record<string, unknown> | undefined)?.errorCode,
-    (row.output as Record<string, unknown> | undefined)?.error_message,
-    (row.output as Record<string, unknown> | undefined)?.errorMessage
-  ]).toLowerCase();
-  return /error|failed|blocked|violation/.test(failureText);
-}
 function buildUrl(pathname: string, params: Record<string, string | number | null | undefined>): URL {
   const url = new URL(pathname, SORA_ORIGIN);
   for (const [key, value] of Object.entries(params)) {
@@ -909,14 +902,6 @@ function buildUrl(pathname: string, params: Record<string, string | number | nul
     url.searchParams.set(key, String(value));
   }
   return url;
-}
-function pickFirstBoolean(candidates: unknown[]): boolean {
-  for (const candidate of candidates) {
-    if (typeof candidate === "boolean") {
-      return candidate;
-    }
-  }
-  return false;
 }
 function sleepWithJitter(durationMs: number): Promise<void> {
   const jitterMs = Math.floor(Math.random() * 150);

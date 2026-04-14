@@ -72,6 +72,7 @@ export interface ResolveDraftReferenceResponse {
     generation_id: string;
     video_id: string;
     share_url: string;
+    playback_url?: string;
     thumbnail_url: string;
     estimated_size_bytes: number | null;
     skip_reason?: string;

@@ -77,6 +77,22 @@ describe("draft sharing guards", () => {
     ).toBe("s_generated_out");
   });
 
+  it("does not treat remix source references as already-resolved output ids", () => {
+    expect(
+      resolveExistingDraftVideoId({
+        id: "gen_remix_source_only",
+        creation_config: {
+          remix_target_post: {
+            post: {
+              id: "s_source_only"
+            }
+          }
+        },
+        post: null
+      })
+    ).toBe("");
+  });
+
   it("extracts resolved s_* file size from listing payload rows", () => {
     const payload = {
       posts: [

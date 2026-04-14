@@ -81,8 +81,7 @@ function resolveLibraryFileStem(row: VideoRow): string {
 function buildCharacterCreatorId(row: VideoRow): string {
   const parts = [
     normalizeIdPart(row.character_username || row.character_name),
-    normalizeIdPart(row.creator_username || row.creator_name),
-    normalizeIdPart(row.video_id)
+    normalizeIdPart(row.creator_username || row.creator_name)
   ].filter(Boolean);
   return parts.join(".");
 }

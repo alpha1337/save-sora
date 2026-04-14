@@ -1,5 +1,6 @@
 import type {
   BackgroundResponse,
+  FetchBatchRequest,
   FetchBatchResponse,
   FetchDetailHtmlResponse
 } from "types/background";
@@ -69,6 +70,7 @@ const DRAFT_RECOVERY_MAX_ROUNDS = 4;
 const DRAFT_RECOVERY_MAX_ATTEMPTS_PER_ROW = 5;
 const DRAFT_RECOVERY_ROUND_BASE_DELAY_MS = 750;
 const DRAFT_RECOVERY_REQUEST_DELAY_MS = 140;
+const FETCH_BATCH_TRANSPORT_RETRY_DELAYS_MS = [300, 800, 1600];
 let activeFetchAbortController: AbortController | null = null;
 const characterLabelLookupPromises = new Map<string, Promise<string>>();
 interface BatchProcessResult {
@@ -493,7 +495,7 @@ async function streamFetchBatches(
     }
     let response: FetchBatchResponse;
     try {
-      response = await sendBackgroundRequest({
+      response = await sendFetchBatchRequestWithRetry({
         type: "fetch-batch",
         source,
         since_ms: "fetch_since_ms" in job ? (job.fetch_since_ms ?? null) : null,
@@ -706,6 +708,38 @@ function isExpectedDetailFallbackError(error: unknown): boolean {
 function isNonFatalItemLookupError(error: unknown): boolean {
   const message = getUnknownErrorMessage(error).toLowerCase();
   return message.includes("requested sora item could not be found") || message.includes("status 404");
+}
+
+async function sendFetchBatchRequestWithRetry(
+  request: FetchBatchRequest
+): Promise<FetchBatchResponse> {
+  let lastError: unknown = null;
+
+  for (let attempt = 0; attempt <= FETCH_BATCH_TRANSPORT_RETRY_DELAYS_MS.length; attempt += 1) {
+    try {
+      return await sendBackgroundRequest<FetchBatchResponse>(request);
+    } catch (error) {
+      lastError = error;
+      if (attempt >= FETCH_BATCH_TRANSPORT_RETRY_DELAYS_MS.length || !isTransientBackgroundBridgeError(error)) {
+        throw error;
+      }
+      await sleep(FETCH_BATCH_TRANSPORT_RETRY_DELAYS_MS[attempt]);
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error(getUnknownErrorMessage(lastError));
+}
+
+function isTransientBackgroundBridgeError(error: unknown): boolean {
+  const message = getUnknownErrorMessage(error).toLowerCase();
+  return message.includes("message channel closed before a response was received") ||
+    message.includes("message port closed before a response was received") ||
+    message.includes("receiving end does not exist") ||
+    message.includes("background worker did not return a response");
+}
+
+function sleep(durationMs: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, durationMs));
 }
 async function sleepWithJitter(durationMs: number, signal: AbortSignal): Promise<void> {
   const jitterMs = Math.floor(Math.random() * 120);
