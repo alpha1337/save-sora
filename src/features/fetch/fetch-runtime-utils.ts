@@ -80,7 +80,7 @@ export function shouldStopForStalledCursor(
   consecutiveRepeatedPageSignatures: number,
   source: LowLevelSourceType
 ): boolean {
-  if (supportsOffsetPagination(source)) {
+  if (supportsOffsetPagination(source) || isDraftLikeSource(source)) {
     return false;
   }
 
@@ -92,7 +92,7 @@ export function shouldStopForNoGrowthPages(
   _batchRowCount: number,
   source: LowLevelSourceType
 ): boolean {
-  if (supportsOffsetPagination(source) || isServerCursorOnlyAppearanceFeed(source)) {
+  if (supportsOffsetPagination(source) || isServerCursorOnlyAppearanceFeed(source) || isDraftLikeSource(source)) {
     return false;
   }
 
@@ -152,6 +152,10 @@ function buildFetchProgressLabel(
 
 function supportsOffsetPagination(source: LowLevelSourceType): boolean {
   return source === "drafts";
+}
+
+function isDraftLikeSource(source: LowLevelSourceType): boolean {
+  return source === "drafts" || source === "characterDrafts" || source === "characterAccountDrafts";
 }
 
 function isServerCursorOnlyAppearanceFeed(source: LowLevelSourceType): boolean {

@@ -618,6 +618,34 @@ describe("video-row-normalizer", () => {
     });
   });
 
+  it("filters out non-sora_draft kinds from normalized draft results", () => {
+    const rows = normalizeDraftRows(
+      "drafts",
+      [
+        {
+          id: "gen_error_123",
+          kind: "sora_error",
+          prompt: "Errored draft",
+          downloadable_url: "https://videos.openai.com/should-not-appear.mp4"
+        },
+        {
+          id: "gen_allowed_kind_123",
+          kind: "sora_draft",
+          prompt: "Allowed draft",
+          downloadable_url: "https://videos.openai.com/allowed-kind.mp4"
+        }
+      ],
+      FETCHED_AT
+    );
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      video_id: "gen_allowed_kind_123",
+      prompt: "Allowed draft",
+      playback_url: "https://videos.openai.com/allowed-kind.mp4"
+    });
+  });
+
   it("filters out nested characterAccountDrafts content violations", () => {
     const rows = normalizeDraftRows(
       "characterAccountDrafts",
@@ -656,6 +684,47 @@ describe("video-row-normalizer", () => {
     expect(rows[0]).toMatchObject({
       video_id: "gen_nested_allowed_123",
       prompt: "Nested allowed prompt",
+      creator_name: "Creator B",
+      creator_username: "creator_b"
+    });
+  });
+
+  it("filters out nested non-sora_draft kinds from characterAccountDrafts", () => {
+    const rows = normalizeDraftRows(
+      "characterAccountDrafts",
+      [
+        {
+          profile: {
+            display_name: "Creator A",
+            username: "creator_a"
+          },
+          draft: {
+            id: "gen_nested_error_123",
+            kind: "sora_error",
+            prompt: "Nested errored prompt",
+            downloadable_url: "https://videos.openai.com/nested-error.mp4"
+          }
+        },
+        {
+          profile: {
+            display_name: "Creator B",
+            username: "creator_b"
+          },
+          draft: {
+            id: "gen_nested_allowed_kind_123",
+            kind: "sora_draft",
+            prompt: "Nested allowed kind prompt",
+            downloadable_url: "https://videos.openai.com/nested-allowed-kind.mp4"
+          }
+        }
+      ],
+      FETCHED_AT
+    );
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      video_id: "gen_nested_allowed_kind_123",
+      prompt: "Nested allowed kind prompt",
       creator_name: "Creator B",
       creator_username: "creator_b"
     });

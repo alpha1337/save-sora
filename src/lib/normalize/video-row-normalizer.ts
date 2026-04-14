@@ -110,7 +110,8 @@ export function normalizeDraftRows(source: LowLevelSourceType, rows: unknown[], 
   for (const row of rows) {
     const rowRecord = asRecord(row);
     const draftRecord = resolveNestedDraftRecord(rowRecord);
-    if (isDraftContentViolationRow(rowRecord, draftRecord)) {
+    const draftKind = extractDraftRowKind(rowRecord, draftRecord);
+    if (!isVisibleDraftKind(draftKind) || isDraftContentViolationRow(rowRecord, draftRecord, draftKind)) {
       continue;
     }
     const metadataRecord = buildDraftMetadataRecord(rowRecord, draftRecord);
@@ -209,13 +210,13 @@ function buildDraftMetadataRecord(
   };
 }
 
-function isDraftContentViolationRow(
+function extractDraftRowKind(
   rowRecord: Record<string, unknown>,
   draftRecord: Record<string, unknown>
-): boolean {
+): string {
   const rowOutputRecord = getNestedRecord(rowRecord, "output");
   const draftOutputRecord = getNestedRecord(draftRecord, "output");
-  const kind = pickFirstString([
+  return pickFirstString([
     rowRecord.kind,
     draftRecord.kind,
     getNestedRecord(rowRecord, "draft").kind,
@@ -224,6 +225,19 @@ function isDraftContentViolationRow(
     rowOutputRecord.kind,
     draftOutputRecord.kind
   ]).toLowerCase();
+}
+
+function isVisibleDraftKind(kind: string): boolean {
+  return !kind || kind === "sora_draft" || kind === "draft";
+}
+
+function isDraftContentViolationRow(
+  rowRecord: Record<string, unknown>,
+  draftRecord: Record<string, unknown>,
+  kind = ""
+): boolean {
+  const rowOutputRecord = getNestedRecord(rowRecord, "output");
+  const draftOutputRecord = getNestedRecord(draftRecord, "output");
   if (kind.includes("content_violation")) {
     return true;
   }
