@@ -86,4 +86,60 @@ describe("character-row-scope", () => {
     expect(contextualizedRows[0].character_id).toBe("ch_crystal");
     expect(contextualizedRows[0].__character_context_display_name).toBe("Crystal Sparkle");
   });
+
+  it("keeps rows when character metadata exists only inside nested draft creation config", () => {
+    const rows = [
+      {
+        draft: {
+          id: "gen_01nested",
+          creation_config: {
+            cameo_profiles: [
+              { user_id: "ch_crystal", username: "crystal.party" }
+            ]
+          }
+        }
+      },
+      {
+        draft: {
+          id: "gen_01other",
+          creation_config: {
+            cameo_profiles: [
+              { user_id: "ch_someone_else", username: "someone.else" }
+            ]
+          }
+        }
+      }
+    ];
+
+    const filteredRows = filterRowsForCharacterScope(rows, CHARACTER_APPEARANCES_JOB);
+
+    expect(filteredRows).toHaveLength(1);
+    expect((filteredRows[0] as { draft: { id: string } }).draft.id).toBe("gen_01nested");
+  });
+
+  it("keeps rows when character id is nested under draft metadata without cameo_profiles", () => {
+    const rows = [
+      {
+        draft: {
+          id: "gen_01direct",
+          metadata: {
+            character_user_id: "ch_crystal"
+          }
+        }
+      },
+      {
+        draft: {
+          id: "gen_01no_match",
+          metadata: {
+            character_user_id: "user_regular_creator"
+          }
+        }
+      }
+    ];
+
+    const filteredRows = filterRowsForCharacterScope(rows, CHARACTER_APPEARANCES_JOB);
+
+    expect(filteredRows).toHaveLength(1);
+    expect((filteredRows[0] as { draft: { id: string } }).draft.id).toBe("gen_01direct");
+  });
 });

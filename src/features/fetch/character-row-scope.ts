@@ -55,38 +55,73 @@ function matchesCharacterScope(row: unknown, characterId: string): boolean {
 
 function collectCharacterIds(record: Record<string, unknown>): Set<string> {
   const ids = new Set<string>();
-  const candidateObjects = [record, ...getCandidateObjects(record)];
-  for (const candidate of candidateObjects) {
-    const directId = pickFirstString([
-      candidate.character_id,
-      candidate.characterId,
-      candidate.character_account_id,
-      candidate.characterAccountId,
-      candidate.character_user_id,
-      candidate.characterUserId
-    ]);
-    if (directId.startsWith("ch_")) {
-      ids.add(directId);
+  const visited = new Set<Record<string, unknown>>();
+  const queue: Array<{ value: unknown; depth: number }> = [{ value: record, depth: 0 }];
+  const MAX_SCAN_DEPTH = 7;
+
+  while (queue.length > 0) {
+    const nextEntry = queue.shift();
+    if (!nextEntry) {
+      continue;
     }
-    for (const cameoProfile of getCameoProfiles(candidate)) {
-      const cameoId = pickFirstString([cameoProfile.user_id, cameoProfile.userId]);
-      if (cameoId.startsWith("ch_")) {
-        ids.add(cameoId);
-      }
+    const candidate = asRecord(nextEntry.value);
+    if (!candidate || visited.has(candidate)) {
+      continue;
+    }
+    visited.add(candidate);
+    collectIdsFromCandidate(candidate, ids);
+    if (nextEntry.depth >= MAX_SCAN_DEPTH) {
+      continue;
+    }
+    for (const nestedValue of getNestedObjects(candidate)) {
+      queue.push({ value: nestedValue, depth: nextEntry.depth + 1 });
     }
   }
+
   return ids;
 }
 
-function getCandidateObjects(record: Record<string, unknown>): Record<string, unknown>[] {
-  const candidates: Record<string, unknown>[] = [];
-  for (const key of ["post", "payload", "item", "output", "data", "result", "entry", "node", "card"]) {
-    const value = record[key];
-    if (value && typeof value === "object") {
-      candidates.push(value as Record<string, unknown>);
+function collectIdsFromCandidate(candidate: Record<string, unknown>, ids: Set<string>): void {
+  const directId = pickFirstString([
+    candidate.character_id,
+    candidate.characterId,
+    candidate.character_account_id,
+    candidate.characterAccountId,
+    candidate.character_user_id,
+    candidate.characterUserId,
+    candidate.user_id,
+    candidate.userId
+  ]);
+  if (directId.startsWith("ch_")) {
+    ids.add(directId);
+  }
+  for (const cameoProfile of getCameoProfiles(candidate)) {
+    const cameoId = pickFirstString([cameoProfile.user_id, cameoProfile.userId]);
+    if (cameoId.startsWith("ch_")) {
+      ids.add(cameoId);
     }
   }
-  return candidates;
+}
+
+function getNestedObjects(candidate: Record<string, unknown>): unknown[] {
+  const nestedValues: unknown[] = [];
+  for (const value of Object.values(candidate)) {
+    if (!value) {
+      continue;
+    }
+    if (Array.isArray(value)) {
+      for (const arrayValue of value) {
+        if (arrayValue && typeof arrayValue === "object") {
+          nestedValues.push(arrayValue);
+        }
+      }
+      continue;
+    }
+    if (typeof value === "object") {
+      nestedValues.push(value);
+    }
+  }
+  return nestedValues;
 }
 
 function getCameoProfiles(candidate: Record<string, unknown>): Record<string, unknown>[] {
@@ -101,6 +136,13 @@ function getCameoProfiles(candidate: Record<string, unknown>): Record<string, un
     }
   }
   return values;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  return value as Record<string, unknown>;
 }
 
 function pickFirstString(candidates: unknown[]): string {

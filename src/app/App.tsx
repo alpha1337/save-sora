@@ -312,7 +312,7 @@ export function App() {
       header={
         <div className="ss-header-grid">
           <div>
-            <h1>Save Sora v2.0.167</h1>
+            <h1>Save Sora v2.0.168</h1>
             <p className="ss-muted">Download anything on Sora, remove watermarks, export metadata and organized ZIP files.</p>
           </div>
           <div className="ss-inline-actions">
