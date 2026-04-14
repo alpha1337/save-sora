@@ -455,6 +455,69 @@ describe("video-row-normalizer", () => {
     expect(row.character_names).toEqual(["Mordex"]);
   });
 
+  it("uses nested draft metadata for characterAccountDrafts wrapper rows", () => {
+    const [row] = normalizeDraftRows(
+      "characterAccountDrafts",
+      [
+        {
+          profile: {
+            display_name: "alpha1337",
+            username: "caseyjardin"
+          },
+          draft: {
+            id: "gen_nested_meta_123",
+            prompt: "Nested draft prompt",
+            downloadable_url: "https://videos.openai.com/nested-draft.mp4",
+            encodings: {
+              thumbnail: {
+                path: "https://videos.openai.com/nested-thumb.jpg"
+              }
+            },
+            creation_config: {
+              cameo_profiles: [
+                {
+                  user_id: "ch_alf",
+                  display_name: "A.L.F.",
+                  username: "alf"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      FETCHED_AT
+    );
+
+    expect(row.video_id).toBe("gen_nested_meta_123");
+    expect(row.prompt).toBe("Nested draft prompt");
+    expect(row.playback_url).toBe("https://videos.openai.com/nested-draft.mp4");
+    expect(row.thumbnail_url).toBe("https://videos.openai.com/nested-thumb.jpg");
+    expect(row.creator_name).toBe("alpha1337");
+    expect(row.creator_username).toBe("caseyjardin");
+    expect(row.character_name).toBe("A.L.F.");
+    expect(row.character_username).toBe("alf");
+  });
+
+  it("prefers nested draft prompt over wrapper prompt", () => {
+    const [row] = normalizeDraftRows(
+      "characterAccountDrafts",
+      [
+        {
+          prompt: "Wrapper prompt",
+          draft: {
+            id: "gen_nested_prompt_123",
+            prompt: "Inner draft prompt",
+            downloadable_url: "https://videos.openai.com/inner-draft.mp4"
+          }
+        }
+      ],
+      FETCHED_AT
+    );
+
+    expect(row.prompt).toBe("Inner draft prompt");
+    expect(row.video_id).toBe("gen_nested_prompt_123");
+  });
+
   it("keeps missing-id posts distinct when payload differs", () => {
     const [first, second] = normalizePostRows(
       "profile",

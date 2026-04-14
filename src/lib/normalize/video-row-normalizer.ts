@@ -106,26 +106,36 @@ export function normalizePostRows(source: LowLevelSourceType, rows: unknown[], f
 
 export function normalizeDraftRows(source: LowLevelSourceType, rows: unknown[], fetchedAt: string): VideoRow[] {
   return rows.map((row) => {
-    const rowRecord = row as Record<string, unknown>;
-    const generationId = getDraftGenerationId(row);
+    const rowRecord = asRecord(row);
+    const draftRecord = resolveNestedDraftRecord(rowRecord);
+    const metadataRecord = buildDraftMetadataRecord(rowRecord, draftRecord);
+    const generationId = pickFirstString([getDraftGenerationId(draftRecord), getDraftGenerationId(row)]);
     const resolvedVideoIdCandidate = pickFirstString([
+      draftRecord.resolved_video_id,
+      draftRecord.resolvedVideoId,
       rowRecord.resolved_video_id,
       rowRecord.resolvedVideoId,
+      getVideoIdFromValue(draftRecord),
       getVideoIdFromValue(row)
     ]);
-    const resolvedVideoId = isSourceResolvedDraftId(row, resolvedVideoIdCandidate) ? "" : resolvedVideoIdCandidate;
-    const fallbackDraftId = pickFirstString([generationId, getRowPostId(row)]);
-    const playbackUrl = getDraftPlaybackUrlFromRow(row, generationId, resolvedVideoId);
+    const resolvedVideoId = isSourceResolvedDraftId(draftRecord, resolvedVideoIdCandidate) ? "" : resolvedVideoIdCandidate;
+    const fallbackDraftId = pickFirstString([generationId, getRowPostId(draftRecord), getRowPostId(row)]);
+    const playbackUrl = getDraftPlaybackUrlFromRow(draftRecord, generationId, resolvedVideoId);
     const effectiveVideoId = resolvedVideoId || (playbackUrl ? fallbackDraftId : "");
     const isDownloadable = Boolean(resolvedVideoId || playbackUrl);
-    const title = getRowTitle(row, "draft");
+    const title = getRowTitle(draftRecord, "draft");
     const sharedDetailUrl = normalizeAbsoluteUrl(
-      pickFirstString([rowRecord.resolved_share_url, rowRecord.resolvedShareUrl])
+      pickFirstString([
+        draftRecord.resolved_share_url,
+        draftRecord.resolvedShareUrl,
+        rowRecord.resolved_share_url,
+        rowRecord.resolvedShareUrl
+      ])
     );
-    const fallbackDetailUrl = getDetailUrl(row, effectiveVideoId || generationId);
+    const fallbackDetailUrl = getDetailUrl(draftRecord, effectiveVideoId || generationId) || getDetailUrl(row, effectiveVideoId || generationId);
     const detailUrl = sanitizeDraftDetailUrl(sharedDetailUrl || fallbackDetailUrl, generationId, resolvedVideoId);
-    const dimensions = getDimensions(row);
-    const characterNames = getCharacterNames(row);
+    const dimensions = getDimensions(draftRecord);
+    const characterNames = getCharacterNames(metadataRecord);
 
     return {
       row_id: effectiveVideoId || generationId
@@ -135,28 +145,28 @@ export function normalizeDraftRows(source: LowLevelSourceType, rows: unknown[], 
       source_type: source,
       source_bucket: resolveSourceBucket(source),
       title,
-      prompt: getPrompt(row),
-      discovery_phrase: getDiscoveryPhrase(row),
-      description: getDescription(row),
-      caption: getCaption(row),
-      creator_name: getCreatorName(row),
-      creator_username: getCreatorUsername(row),
+      prompt: getPrompt(draftRecord),
+      discovery_phrase: getDiscoveryPhrase(draftRecord),
+      description: getDescription(draftRecord),
+      caption: getCaption(draftRecord),
+      creator_name: getCreatorName(metadataRecord),
+      creator_username: getCreatorUsername(metadataRecord),
       character_name: characterNames[0] ?? "",
-      character_username: getCharacterUsername(row),
+      character_username: getCharacterUsername(metadataRecord),
       character_names: characterNames,
       category_tags: [resolveSourceBucket(source)],
-      created_at: getCreatedAt(row),
-      published_at: getPublishedAt(row),
+      created_at: getCreatedAt(draftRecord) || getCreatedAt(row),
+      published_at: getPublishedAt(draftRecord) || getPublishedAt(row),
       like_count: null,
       view_count: null,
       share_count: null,
       repost_count: null,
       remix_count: null,
       detail_url: detailUrl,
-      thumbnail_url: getPreferredThumbnailUrl(row),
+      thumbnail_url: getPreferredThumbnailUrl(draftRecord) || getPreferredThumbnailUrl(row),
       playback_url: playbackUrl,
-      duration_seconds: getDurationSeconds(row),
-      estimated_size_bytes: getEstimatedSizeBytes(row),
+      duration_seconds: getDurationSeconds(draftRecord),
+      estimated_size_bytes: getEstimatedSizeBytes(draftRecord),
       width: dimensions.width,
       height: dimensions.height,
       raw_payload_json: stringifyRawPayload(row),
@@ -165,6 +175,41 @@ export function normalizeDraftRows(source: LowLevelSourceType, rows: unknown[], 
       fetched_at: fetchedAt
     };
   });
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" ? value as Record<string, unknown> : {};
+}
+
+function resolveNestedDraftRecord(rowRecord: Record<string, unknown>): Record<string, unknown> {
+  return rowRecord.draft && typeof rowRecord.draft === "object"
+    ? rowRecord.draft as Record<string, unknown>
+    : rowRecord;
+}
+
+function buildDraftMetadataRecord(
+  rowRecord: Record<string, unknown>,
+  draftRecord: Record<string, unknown>
+): Record<string, unknown> {
+  const nestedCameoProfiles = extractCreationConfigCameoProfiles(draftRecord);
+  return {
+    ...draftRecord,
+    profile: rowRecord.profile ?? draftRecord.profile,
+    creator: rowRecord.creator ?? draftRecord.creator,
+    user: rowRecord.user ?? draftRecord.user,
+    owner: rowRecord.owner ?? draftRecord.owner,
+    cameo_profiles: draftRecord.cameo_profiles ?? rowRecord.cameo_profiles ?? nestedCameoProfiles
+  };
+}
+
+function extractCreationConfigCameoProfiles(draftRecord: Record<string, unknown>): unknown[] {
+  const creationConfig =
+    draftRecord.creation_config && typeof draftRecord.creation_config === "object"
+      ? draftRecord.creation_config as Record<string, unknown>
+      : draftRecord.creationConfig && typeof draftRecord.creationConfig === "object"
+        ? draftRecord.creationConfig as Record<string, unknown>
+        : null;
+  return Array.isArray(creationConfig?.cameo_profiles) ? creationConfig.cameo_profiles : [];
 }
 
 function isSourceResolvedDraftId(value: unknown, resolvedVideoId: string): boolean {
