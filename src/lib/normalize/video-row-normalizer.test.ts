@@ -646,7 +646,7 @@ describe("video-row-normalizer", () => {
     });
   });
 
-  it("filters out unknown draft kinds to match web draft parity", () => {
+  it("keeps unknown draft kinds eligible for s_* resolution", () => {
     const rows = normalizeDraftRows(
       "drafts",
       [
@@ -660,7 +660,12 @@ describe("video-row-normalizer", () => {
       FETCHED_AT
     );
 
-    expect(rows).toHaveLength(0);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      video_id: "gen_custom_kind_123",
+      prompt: "Extended draft",
+      playback_url: "https://videos.openai.com/extended-draft.mp4"
+    });
   });
 
   it("filters out nested characterAccountDrafts content violations", () => {

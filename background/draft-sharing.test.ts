@@ -21,22 +21,31 @@ describe("draft sharing guards", () => {
     ).toBe(false);
   });
 
-  it("skips remix/editor stubs", () => {
+  it("keeps remix/editor stubs eligible", () => {
     expect(
       shouldSkipDraftRow({
         id: "gen_remix_stub",
         kind: "sora_draft",
         remix_stub: true
       })
-    ).toBe(true);
+    ).toBe(false);
   });
 
-  it("skips blocked drafts", () => {
+  it("keeps blocked drafts eligible unless kind is content violation", () => {
     expect(
       shouldSkipDraftRow({
         id: "gen_blocked",
         kind: "sora_draft",
         output_blocked: true
+      })
+    ).toBe(false);
+  });
+
+  it("skips content violation drafts", () => {
+    expect(
+      shouldSkipDraftRow({
+        id: "gen_violation",
+        kind: "sora_content_violation"
       })
     ).toBe(true);
   });

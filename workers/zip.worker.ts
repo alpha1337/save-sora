@@ -8,13 +8,14 @@ interface BuildArchiveMessage {
 }
 
 const ZIP_FETCH_CONCURRENCY = 1;
-const WATERMARK_FETCH_MAX_ATTEMPTS = 6;
+const WATERMARK_FETCH_MAX_ATTEMPTS = 12;
 const WATERMARK_FETCH_BASE_RETRY_MS = 1200;
 const WATERMARK_FETCH_MAX_RETRY_MS = 20000;
 const WATERMARK_QUEUE_MIN_INTERVAL_MS = 1800;
 const SHARED_VIDEO_ID_PATTERN = /^s_[A-Za-z0-9_-]+$/;
 const MIN_VIDEO_BYTES_FALLBACK_THRESHOLD = 256 * 1024;
 const ESTIMATED_SIZE_FALLBACK_RATIO = 0.2;
+const WATERMARK_VALIDATION_RETRY_DELAY_MS = 1600;
 let globalRateLimitCooldownUntilMs = 0;
 let watermarkRateLimitStreak = 0;
 let watermarkQueueTail: Promise<void> = Promise.resolve();
@@ -86,21 +87,26 @@ async function buildArchive(workPlan: ArchiveWorkPlan): Promise<void> {
       worker.active_item_label = "Preparing download";
       activeLabel = `Bundling ${itemLabel}`;
       publishProgress();
-      const bytes = await fetchPreferredVideoBytes(row, (statusLabel) => {
-        worker.active_item_label = statusLabel;
-        activeLabel = `${itemLabel} · ${statusLabel}`;
+      try {
+        const bytes = await fetchPreferredVideoBytes(row, (statusLabel) => {
+          worker.active_item_label = statusLabel;
+          activeLabel = `${itemLabel} · ${statusLabel}`;
+          publishProgress();
+        });
+        worker.active_item_label = "Download ready";
         publishProgress();
-      });
-      worker.active_item_label = "Download ready";
-      publishProgress();
-      const entry = new ZipPassThrough(libraryPathByVideoId.get(row.video_id) ?? `library/${row.video_id}.mp4`);
-      zip.add(entry);
-      entry.push(bytes, true);
-      completedItems += 1;
-      worker.completed_items += 1;
-      worker.active_item_label = "";
-      worker.last_completed_item_label = "Complete!";
-      publishProgress();
+        const entry = new ZipPassThrough(libraryPathByVideoId.get(row.video_id) ?? `library/${row.video_id}.mp4`);
+        zip.add(entry);
+        entry.push(bytes, true);
+        worker.last_completed_item_label = "Complete!";
+      } catch (_error) {
+        worker.last_completed_item_label = "Skipped: download unavailable";
+      } finally {
+        completedItems += 1;
+        worker.completed_items += 1;
+        worker.active_item_label = "";
+        publishProgress();
+      }
     },
     (workerIndex) => {
       const worker = workerProgress[workerIndex];
@@ -164,23 +170,41 @@ async function fetchPreferredVideoBytes(
   onStatusLabel?: (statusLabel: string) => void
 ): Promise<Uint8Array> {
   if (SHARED_VIDEO_ID_PATTERN.test(row.video_id)) {
-    try {
-      const bytes = await fetchWatermarkFreeVideoBytes(row.video_id, onStatusLabel);
-      if (shouldFallbackToSourceDownload(row, bytes)) {
-        if (!row.playback_url) {
-          throw new Error("Watermark-free payload is unexpectedly small and source URL is unavailable.");
+    for (let attempt = 0; attempt < WATERMARK_FETCH_MAX_ATTEMPTS; attempt += 1) {
+      try {
+        const bytes = await fetchWatermarkFreeVideoBytes(row.video_id, onStatusLabel);
+        if (shouldFallbackToSourceDownload(row, bytes)) {
+          if (attempt + 1 < WATERMARK_FETCH_MAX_ATTEMPTS) {
+            onStatusLabel?.("Watermark payload too small, retrying");
+            await sleep(resolveValidationRetryDelayMs(attempt));
+            continue;
+          }
+          if (!row.playback_url) {
+            throw new Error("Watermark-free payload is unexpectedly small and source URL is unavailable.");
+          }
+          onStatusLabel?.("Failed to remove watermark, using source URL");
+          return fetchDirectVideoBytes(row.playback_url);
         }
-        onStatusLabel?.("Watermark payload too small, using source URL");
+        return bytes;
+      } catch (error) {
+        if (attempt + 1 < WATERMARK_FETCH_MAX_ATTEMPTS) {
+          onStatusLabel?.("Retrying watermark removal");
+          await sleep(resolveValidationRetryDelayMs(attempt));
+          continue;
+        }
+        if (!row.playback_url) {
+          throw error;
+        }
+        onStatusLabel?.("Failed to remove watermark, using source URL");
         return fetchDirectVideoBytes(row.playback_url);
       }
-      return bytes;
-    } catch (error) {
-      if (!row.playback_url) {
-        throw error;
-      }
-      onStatusLabel?.("Watermark unavailable, using source URL");
+    }
+
+    if (row.playback_url) {
+      onStatusLabel?.("Failed to remove watermark, using source URL");
       return fetchDirectVideoBytes(row.playback_url);
     }
+    throw new Error("Failed to remove watermark.");
   }
 
   if (row.playback_url) {
@@ -204,32 +228,33 @@ async function fetchWatermarkFreeVideoBytes(
   onStatusLabel?: (statusLabel: string) => void
 ): Promise<Uint8Array> {
   onStatusLabel?.("Attempting to remove watermark");
-  for (let attempt = 0; attempt < WATERMARK_FETCH_MAX_ATTEMPTS; attempt += 1) {
-    const response = await runSerializedWatermarkRequest(() =>
-      fetch(`https://soravdl.com/api/proxy/video/${encodeURIComponent(videoId)}`)
-    );
-    if (response.ok) {
-      const bytes = new Uint8Array(await response.arrayBuffer());
-      const contentType = (response.headers.get("content-type") ?? "").toLowerCase();
-      if (!isLikelyVideoPayload(bytes, contentType)) {
-        throw new Error("Watermark removal returned a non-video payload.");
-      }
-      watermarkRateLimitStreak = 0;
-      onStatusLabel?.("Watermark removed!");
-      return bytes;
+  const response = await runSerializedWatermarkRequest(() =>
+    fetch(`https://soravdl.com/api/proxy/video/${encodeURIComponent(videoId)}`)
+  );
+  if (response.ok) {
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    const contentType = (response.headers.get("content-type") ?? "").toLowerCase();
+    if (!isLikelyVideoPayload(bytes, contentType)) {
+      throw new Error("Watermark removal returned a non-video payload.");
     }
-    const status = response.status;
-    if (status === 429 && attempt + 1 < WATERMARK_FETCH_MAX_ATTEMPTS) {
-      watermarkRateLimitStreak += 1;
-      const retryDelayMs = resolveRetryDelayMs(response, attempt, watermarkRateLimitStreak);
-      globalRateLimitCooldownUntilMs = Date.now() + retryDelayMs;
-      onStatusLabel?.("Rate-limit exceeded, trying again");
-      await sleep(retryDelayMs);
-      continue;
-    }
-    throw new Error(buildWatermarkRemovalErrorMessage(status));
+    watermarkRateLimitStreak = 0;
+    onStatusLabel?.("Watermark removed!");
+    return bytes;
   }
-  throw new Error("Watermark removal failed after retries. Please try again.");
+  const status = response.status;
+  if (status === 429) {
+    watermarkRateLimitStreak += 1;
+    const retryDelayMs = resolveRetryDelayMs(response, 0, watermarkRateLimitStreak);
+    globalRateLimitCooldownUntilMs = Date.now() + retryDelayMs;
+  } else {
+    watermarkRateLimitStreak = 0;
+  }
+  throw new Error(buildWatermarkRemovalErrorMessage(status));
+}
+
+function resolveValidationRetryDelayMs(attempt: number): number {
+  const dynamicDelayMs = WATERMARK_VALIDATION_RETRY_DELAY_MS * (attempt + 1);
+  return Math.min(WATERMARK_FETCH_MAX_RETRY_MS, dynamicDelayMs + jitterMs(400));
 }
 
 function shouldFallbackToSourceDownload(

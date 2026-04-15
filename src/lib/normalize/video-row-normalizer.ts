@@ -111,7 +111,7 @@ export function normalizeDraftRows(source: LowLevelSourceType, rows: unknown[], 
     const rowRecord = asRecord(row);
     const draftRecord = resolveNestedDraftRecord(rowRecord);
     const draftKind = extractDraftRowKind(rowRecord, draftRecord);
-    if (!isVisibleDraftKind(draftKind) || isDraftContentViolationRow(rowRecord, draftRecord, draftKind)) {
+    if (shouldSkipDraftKind(draftKind)) {
       continue;
     }
     const metadataRecord = buildDraftMetadataRecord(rowRecord, draftRecord);
@@ -227,74 +227,9 @@ function extractDraftRowKind(
   ]).toLowerCase();
 }
 
-function isVisibleDraftKind(kind: string): boolean {
-  if (!kind) {
-    return true;
-  }
-  return kind === "sora_draft" || kind === "draft";
-}
-
-function isDraftContentViolationRow(
-  rowRecord: Record<string, unknown>,
-  draftRecord: Record<string, unknown>,
-  kind = ""
-): boolean {
-  const rowOutputRecord = getNestedRecord(rowRecord, "output");
-  const draftOutputRecord = getNestedRecord(draftRecord, "output");
-  if (kind.includes("content_violation")) {
-    return true;
-  }
-
-  if (hasTrueBoolean([
-    rowRecord.output_blocked,
-    rowRecord.outputBlocked,
-    rowRecord.content_violation,
-    rowRecord.contentViolation,
-    draftRecord.output_blocked,
-    draftRecord.outputBlocked,
-    draftRecord.content_violation,
-    draftRecord.contentViolation,
-    rowOutputRecord.output_blocked,
-    rowOutputRecord.outputBlocked,
-    rowOutputRecord.content_violation,
-    rowOutputRecord.contentViolation,
-    draftOutputRecord.output_blocked,
-    draftOutputRecord.outputBlocked,
-    draftOutputRecord.content_violation,
-    draftOutputRecord.contentViolation
-  ])) {
-    return true;
-  }
-
-  const reason = pickFirstString([
-    rowRecord.reason_str,
-    rowRecord.reasonStr,
-    rowRecord.markdown_reason_str,
-    rowRecord.markdownReasonStr,
-    rowRecord.reason,
-    draftRecord.reason_str,
-    draftRecord.reasonStr,
-    draftRecord.markdown_reason_str,
-    draftRecord.markdownReasonStr,
-    draftRecord.reason,
-    rowOutputRecord.reason_str,
-    rowOutputRecord.reasonStr,
-    rowOutputRecord.markdown_reason_str,
-    rowOutputRecord.markdownReasonStr,
-    rowOutputRecord.reason,
-    draftOutputRecord.reason_str,
-    draftOutputRecord.reasonStr,
-    draftOutputRecord.markdown_reason_str,
-    draftOutputRecord.markdownReasonStr,
-    draftOutputRecord.reason
-  ]).toLowerCase();
-  if (!reason) {
-    return false;
-  }
-
-  return reason.includes("guardrail") ||
-    reason.includes("content violation") ||
-    reason.includes("third-party likeness");
+function shouldSkipDraftKind(kind: string): boolean {
+  const normalized = kind.trim().toLowerCase();
+  return normalized === "sora_error" || normalized === "sora_content_violation";
 }
 
 function extractCreationConfigCameoProfiles(draftRecord: Record<string, unknown>): unknown[] {
@@ -310,15 +245,6 @@ function extractCreationConfigCameoProfiles(draftRecord: Record<string, unknown>
 function getNestedRecord(record: Record<string, unknown>, key: string): Record<string, unknown> {
   const value = record[key];
   return value && typeof value === "object" ? value as Record<string, unknown> : {};
-}
-
-function hasTrueBoolean(candidates: unknown[]): boolean {
-  for (const candidate of candidates) {
-    if (candidate === true) {
-      return true;
-    }
-  }
-  return false;
 }
 
 function isSourceResolvedDraftId(value: unknown, resolvedVideoId: string): boolean {

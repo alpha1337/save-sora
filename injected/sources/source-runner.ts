@@ -21,8 +21,6 @@ import {
   extractPlaybackUrlFromAnyRecord,
   extractThumbnailUrlFromAnyRecord,
   getDraftKind,
-  hasDraftFailureState,
-  isDraftOutputBlocked,
   resolveExistingDraftVideoId as resolveExistingDraftVideoIdFromDraftHelpers
 } from "./draft-metadata-helpers";
 import {
@@ -30,7 +28,8 @@ import {
   reachedOlderThanSinceBoundary
 } from "./fetch-batch-filters";
 const APPEARANCE_FEED_PAGE_LIMIT = 100;
-const DRAFT_SHARE_POST_RETRY_DELAYS_MS = [500, 1200, 2500];
+const DRAFT_SHARE_POST_BASE_RETRY_DELAY_MS = 500;
+const DRAFT_SHARE_POST_MAX_RETRY_DELAY_MS = 20000;
 interface FetchEndpointCandidate {
   key: string;
   optional?: boolean;
@@ -80,7 +79,6 @@ export async function runSourceRequest(request: BackgroundRequest): Promise<unkn
   throw new Error(`Unsupported injected request type: ${String((request as { type?: string }).type)}`);
 }
 async function runFetchBatch(request: FetchBatchRequest) {
-  const viewerUserId = isDraftSource(request.source) ? await deriveViewerUserId().catch(() => "") : "";
   let cursor = request.cursor ?? null;
   let previousCursor: string | null = null;
   let offset: number | null = request.offset ?? 0;
@@ -94,7 +92,7 @@ async function runFetchBatch(request: FetchBatchRequest) {
     const pageRows = getPostListingRows(payload);
     const inRangeRows = filterRowsByTimeWindow(pageRows, request.since_ms, request.until_ms);
     const enrichedRows = isDraftSource(request.source)
-      ? await enrichDraftRows(inRangeRows, request.draft_resolution_entries ?? [], request.source, viewerUserId)
+      ? await enrichDraftRows(inRangeRows, request.draft_resolution_entries ?? [], request.source)
       : inRangeRows;
     rows.push(...enrichedRows);
     rowKeys.push(...enrichedRows.map((row) => getRawRowKey(row)).filter(Boolean));
@@ -354,8 +352,7 @@ async function resolveCharacterAccountId(
 async function enrichDraftRows(
   rows: unknown[],
   knownResolutionEntries: Array<{ generation_id: string; video_id: string }>,
-  source: FetchBatchRequest["source"],
-  viewerUserId: string
+  source: FetchBatchRequest["source"]
 ): Promise<unknown[]> {
   const knownResolutionMap = new Map(knownResolutionEntries.map((entry) => [entry.generation_id, entry.video_id]));
   for (const row of rows) {
@@ -368,34 +365,6 @@ async function enrichDraftRows(
       continue;
     }
     const draftRecord = record.draft && typeof record.draft === "object" ? record.draft as Record<string, unknown> : record;
-    const profile = record.profile && typeof record.profile === "object" ? record.profile as Record<string, unknown> : {};
-    const isOwnedCharacterDraft = source === "characterAccountDrafts" &&
-      viewerUserId &&
-      pickFirstString([profile.user_id, profile.userId]) === viewerUserId;
-    if (source === "characterAccountDrafts" && !isOwnedCharacterDraft) {
-      const downloadUrls = draftRecord.download_urls && typeof draftRecord.download_urls === "object"
-        ? draftRecord.download_urls as Record<string, unknown>
-        : null;
-      const downloadUrlsCamel = draftRecord.downloadUrls && typeof draftRecord.downloadUrls === "object"
-        ? draftRecord.downloadUrls as Record<string, unknown>
-        : null;
-      const watermarkUrl = pickFirstString([downloadUrls?.watermark, downloadUrlsCamel?.watermark]);
-      if (watermarkUrl) {
-        draftRecord.downloadable_url = watermarkUrl;
-        draftRecord.downloadableUrl = watermarkUrl;
-      }
-      record.post = null;
-      draftRecord.post = null;
-      delete record.resolved_video_id;
-      delete record.resolvedVideoId;
-      delete record.resolved_playback_url;
-      delete record.resolvedPlaybackUrl;
-      delete draftRecord.resolved_video_id;
-      delete draftRecord.resolvedVideoId;
-      delete draftRecord.resolved_playback_url;
-      delete draftRecord.resolvedPlaybackUrl;
-      continue;
-    }
     const postVideoId = resolveSharedVideoIdFromValue((record.post as unknown) ?? null);
     if (postVideoId) {
       const metadata = extractResolvedDraftMetadataFromValue(record.post, postVideoId);
@@ -438,7 +407,7 @@ async function enrichDraftRows(
       (
         source === "drafts" ||
         source === "characterDrafts" ||
-        (source === "characterAccountDrafts" && isOwnedCharacterDraft)
+        source === "characterAccountDrafts"
       );
     if (canCreateSharedReference) {
       const createdReference = await createSharedDraftReference(record, generationId).catch(() => null);
@@ -768,7 +737,8 @@ async function fetchJsonWithMethod(url: string, method: "POST", jsonBody: unknow
     "oai-language": auth.language,
     ...(auth.deviceId ? { "oai-device-id": auth.deviceId } : {})
   };
-  for (let attempt = 0; attempt <= DRAFT_SHARE_POST_RETRY_DELAYS_MS.length; attempt += 1) {
+  let attempt = 0;
+  for (;;) {
     const response = await fetch(requestUrl, {
       method,
       credentials: "include",
@@ -778,12 +748,12 @@ async function fetchJsonWithMethod(url: string, method: "POST", jsonBody: unknow
     if (response.ok) {
       return response.json();
     }
-    if (attempt >= DRAFT_SHARE_POST_RETRY_DELAYS_MS.length || !isRetriableSoraStatus(response.status)) {
+    if (!isRetriableSoraStatus(response.status)) {
       throw new Error(`Draft share creation failed with status ${response.status}. Request: POST /backend/project_y/post.`);
     }
-    await sleepWithJitter(DRAFT_SHARE_POST_RETRY_DELAYS_MS[attempt]);
+    await sleepWithJitter(resolveDraftShareRetryDelayMs(attempt));
+    attempt += 1;
   }
-  throw new Error("Draft share creation failed after retries.");
 }
 function resolveDraftShareText(row: Record<string, unknown>): string {
   const draftRecord = row.draft && typeof row.draft === "object" ? row.draft as Record<string, unknown> : null;
@@ -843,50 +813,18 @@ export function shouldSkipDraftRow(row: Record<string, unknown> | null | undefin
   if (!row || typeof row !== "object") {
     return true;
   }
-  const kind = getDraftKind(row);
-  const hasDraftShareCandidate = Boolean(extractDraftGenerationId(row)) || Boolean(resolveExistingDraftVideoId(row));
-  return Boolean(
-    kind === "sora_error" ||
-    hasDraftEditedOrRemixStub(row) ||
-    isDraftOutputBlocked(row) ||
-    hasDraftFailureState(row) ||
-    (typeof kind === "string" &&
-      kind !== "sora_draft" &&
-      kind !== "draft" &&
-      !hasDraftShareCandidate)
-  );
+  const kind = getDraftKind(row).trim().toLowerCase();
+  return kind === "sora_error" || kind === "sora_content_violation";
 }
 function classifyDraftSkipReason(row: Record<string, unknown>): string {
-  if (getDraftKind(row) === "sora_error" || hasDraftFailureState(row)) {
+  const kind = getDraftKind(row).trim().toLowerCase();
+  if (kind === "sora_error") {
     return "draft_error";
   }
-  if (hasDraftEditedOrRemixStub(row)) {
-    return "draft_edit_or_remix";
-  }
-  if (isDraftOutputBlocked(row)) {
+  if (kind === "sora_content_violation") {
     return "draft_content_violation";
   }
   return "unresolved_draft_video_id";
-}
-function hasDraftEditedOrRemixStub(row: Record<string, unknown>): boolean {
-  return pickFirstBoolean([
-    row.remix_stub,
-    row.remixStub,
-    row.is_remix_stub,
-    row.isRemixStub,
-    row.editor_stub,
-    row.editorStub,
-    row.is_editor_stub,
-    row.isEditorStub
-  ]);
-}
-function pickFirstBoolean(candidates: unknown[]): boolean {
-  for (const candidate of candidates) {
-    if (typeof candidate === "boolean") {
-      return candidate;
-    }
-  }
-  return false;
 }
 function resolveDraftDetailUrl(row: Record<string, unknown>, generationId: string): string {
   const directUrl = typeof row.detail_url === "string"
@@ -914,6 +852,13 @@ function buildUrl(pathname: string, params: Record<string, string | number | nul
 function sleepWithJitter(durationMs: number): Promise<void> {
   const jitterMs = Math.floor(Math.random() * 150);
   return new Promise((resolve) => setTimeout(resolve, durationMs + jitterMs));
+}
+function resolveDraftShareRetryDelayMs(attempt: number): number {
+  const exponential = Math.min(
+    DRAFT_SHARE_POST_MAX_RETRY_DELAY_MS,
+    DRAFT_SHARE_POST_BASE_RETRY_DELAY_MS * Math.pow(2, Math.min(8, attempt))
+  );
+  return Math.max(DRAFT_SHARE_POST_BASE_RETRY_DELAY_MS, exponential);
 }
 function isDraftSource(source: FetchBatchRequest["source"]): boolean {
   return source === "drafts" || source === "characterDrafts" || source === "characterAccountDrafts";
