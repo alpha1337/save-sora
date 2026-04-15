@@ -4,7 +4,7 @@ import { getUserFacingErrorMessage } from "./user-facing-errors";
 describe("getUserFacingErrorMessage", () => {
   it("maps watermark removal rate limits", () => {
     const message = getUserFacingErrorMessage("download failed for s_abc with status 429.");
-    expect(message).toContain("Watermark removal is being rate-limited");
+    expect(message).toBe("Failed to remove watermark.");
   });
 
   it("maps raw sora 400 status", () => {
@@ -31,7 +31,13 @@ describe("getUserFacingErrorMessage", () => {
 
   it("strips internal provider mentions", () => {
     const message = getUserFacingErrorMessage("proxy gateway timeout");
-    expect(message).toContain("Watermark removal is temporarily unavailable");
+    expect(message).toBe("Failed to remove watermark.");
+  });
+
+  it("never surfaces provider names for watermark failures", () => {
+    const message = getUserFacingErrorMessage("download failed with status 500. Request: GET https://soravdl.com/api/proxy/video/s_abc");
+    expect(message).toBe("Failed to remove watermark.");
+    expect(message.toLowerCase()).not.toContain("soravdl");
   });
 
   it("does not duplicate context for pre-mapped rejection messages", () => {

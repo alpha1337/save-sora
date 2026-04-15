@@ -1,5 +1,6 @@
-const WATERMARK_PROVIDER_PATTERN = /watermark|proxy\/video|download failed|gateway timeout/i;
+const WATERMARK_PROVIDER_PATTERN = /watermark|soravdl|proxy\/video|download failed|gateway timeout/i;
 const CONTEXT_SEPARATOR = "Context:";
+const WATERMARK_FAILURE_MESSAGE = "Failed to remove watermark.";
 
 export function getUserFacingErrorMessage(error: unknown): string {
   const rawMessage = error instanceof Error ? error.message : String(error || "");
@@ -30,29 +31,16 @@ export function getUserFacingErrorMessage(error: unknown): string {
   }
 
   if (WATERMARK_PROVIDER_PATTERN.test(baseMessage)) {
-    return appendDebugDetails(
-      "Watermark removal is temporarily unavailable for one or more videos. Please retry.",
-      debugDetails
-    );
+    return WATERMARK_FAILURE_MESSAGE;
   }
 
   return appendDebugDetails(baseMessage, debugDetails);
 }
 
 function mapWatermarkRemovalStatus(status: number, contextDetails: string): string {
-  if (status === 429) {
-    return appendDebugDetails("Watermark removal is being rate-limited right now. Please wait a minute and try Build ZIP again.", contextDetails);
-  }
-  if (status === 400) {
-    return appendDebugDetails("Watermark removal is unavailable for one or more selected videos right now. They may still be processing.", contextDetails);
-  }
-  if (status === 404) {
-    return appendDebugDetails("A selected video is no longer available for watermark removal.", contextDetails);
-  }
-  if (status >= 500) {
-    return appendDebugDetails("Watermark removal is temporarily unavailable due to a server issue. Please retry shortly.", contextDetails);
-  }
-  return appendDebugDetails(`Watermark removal failed for one or more selected videos (status ${status}).`, contextDetails);
+  void status;
+  void contextDetails;
+  return WATERMARK_FAILURE_MESSAGE;
 }
 
 function mapSoraRequestStatus(status: number, contextDetails: string): string {
