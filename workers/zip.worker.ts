@@ -11,11 +11,14 @@ const ZIP_FETCH_CONCURRENCY = 1;
 const WATERMARK_FETCH_MAX_ATTEMPTS = 6;
 const WATERMARK_FETCH_BASE_RETRY_MS = 1200;
 const WATERMARK_FETCH_MAX_RETRY_MS = 20000;
+const WATERMARK_QUEUE_MIN_INTERVAL_MS = 1800;
 const SHARED_VIDEO_ID_PATTERN = /^s_[A-Za-z0-9_-]+$/;
 const MIN_VIDEO_BYTES_FALLBACK_THRESHOLD = 256 * 1024;
 const ESTIMATED_SIZE_FALLBACK_RATIO = 0.2;
 let globalRateLimitCooldownUntilMs = 0;
 let watermarkRateLimitStreak = 0;
+let watermarkQueueTail: Promise<void> = Promise.resolve();
+let lastWatermarkRequestStartedAtMs = 0;
 
 self.addEventListener("message", (event: MessageEvent<BuildArchiveMessage>) => {
   if (event.data.type !== "build-archive") {
@@ -202,8 +205,9 @@ async function fetchWatermarkFreeVideoBytes(
 ): Promise<Uint8Array> {
   onStatusLabel?.("Attempting to remove watermark");
   for (let attempt = 0; attempt < WATERMARK_FETCH_MAX_ATTEMPTS; attempt += 1) {
-    await waitForGlobalRateLimitCooldown();
-    const response = await fetch(`https://soravdl.com/api/proxy/video/${encodeURIComponent(videoId)}`);
+    const response = await runSerializedWatermarkRequest(() =>
+      fetch(`https://soravdl.com/api/proxy/video/${encodeURIComponent(videoId)}`)
+    );
     if (response.ok) {
       const bytes = new Uint8Array(await response.arrayBuffer());
       const contentType = (response.headers.get("content-type") ?? "").toLowerCase();
@@ -318,4 +322,31 @@ async function waitForGlobalRateLimitCooldown(): Promise<void> {
   if (remainingMs > 0) {
     await sleep(remainingMs);
   }
+}
+
+async function runSerializedWatermarkRequest<T>(requestFn: () => Promise<T>): Promise<T> {
+  const previousTurn = watermarkQueueTail;
+  let releaseTurn!: () => void;
+  const currentTurn = new Promise<void>((resolve) => {
+    releaseTurn = resolve;
+  });
+  watermarkQueueTail = previousTurn.then(() => currentTurn);
+
+  await previousTurn;
+  try {
+    await waitForGlobalRateLimitCooldown();
+    await waitForWatermarkQueueInterval();
+    return await requestFn();
+  } finally {
+    releaseTurn();
+  }
+}
+
+async function waitForWatermarkQueueInterval(): Promise<void> {
+  const elapsedMs = Date.now() - lastWatermarkRequestStartedAtMs;
+  const remainingMs = WATERMARK_QUEUE_MIN_INTERVAL_MS - elapsedMs;
+  if (remainingMs > 0) {
+    await sleep(remainingMs + jitterMs(180));
+  }
+  lastWatermarkRequestStartedAtMs = Date.now();
 }
