@@ -2,6 +2,8 @@ import type { ArchiveOrganizerRow, ArchiveSupplementalEntry, ArchiveWorkPlan, Vi
 import { compactWhitespace, sanitizeFileNamePart, uniqueStrings } from "@lib/utils/string-utils";
 
 const MAX_LIBRARY_FILE_STEM_LENGTH = 48;
+const MAX_LIBRARY_ENTRY_PATH_LENGTH = 80;
+const LIBRARY_ENTRY_PREFIX = "library/";
 
 /**
  * Creates the single-storage archive plan and the organizer manifest/scripts
@@ -60,22 +62,24 @@ function buildOrganizerRow(row: VideoRow): ArchiveOrganizerRow {
 }
 
 function buildLibraryFileName(row: VideoRow): string {
-  const stem = resolveLibraryFileStem(row);
-  return `${stem}-${row.video_id}.mp4`;
+  const safeVideoId = sanitizeFileNamePart(row.video_id, "video");
+  const stem = resolveLibraryFileStem(row, safeVideoId);
+  return `${stem}-${safeVideoId}.mp4`;
 }
 
-function resolveLibraryFileStem(row: VideoRow): string {
+function resolveLibraryFileStem(row: VideoRow, safeVideoId: string): string {
   const discoveryPhrase = compactWhitespace(row.discovery_phrase);
+  const maxStemLength = resolveMaxLibraryStemLength(safeVideoId);
   if (discoveryPhrase) {
-    return sanitizeFileNamePart(truncateFileStem(discoveryPhrase), "video");
+    return sanitizeFileNamePart(truncateFileStem(discoveryPhrase, maxStemLength), "video");
   }
 
   const fallbackId = buildCharacterCreatorId(row);
   if (fallbackId) {
-    return sanitizeFileNamePart(truncateFileStem(fallbackId), "video");
+    return sanitizeFileNamePart(truncateFileStem(fallbackId, maxStemLength), "video");
   }
 
-  return sanitizeFileNamePart(row.video_id, "video");
+  return sanitizeFileNamePart(truncateFileStem(safeVideoId, maxStemLength), "video");
 }
 
 function buildCharacterCreatorId(row: VideoRow): string {
@@ -93,11 +97,19 @@ function normalizeIdPart(value: string): string {
     .replace(/-+/g, "-");
 }
 
-function truncateFileStem(value: string): string {
-  if (value.length <= MAX_LIBRARY_FILE_STEM_LENGTH) {
+function truncateFileStem(value: string, maxLength = MAX_LIBRARY_FILE_STEM_LENGTH): string {
+  if (value.length <= maxLength) {
     return value;
   }
-  return value.slice(0, MAX_LIBRARY_FILE_STEM_LENGTH).trim();
+  return value.slice(0, maxLength).trim();
+}
+
+function resolveMaxLibraryStemLength(videoId: string): number {
+  const extensionLength = ".mp4".length;
+  const separatorLength = 1;
+  const reservedLength = LIBRARY_ENTRY_PREFIX.length + extensionLength + separatorLength + videoId.length;
+  const dynamicLimit = MAX_LIBRARY_ENTRY_PATH_LENGTH - reservedLength;
+  return Math.max(12, Math.min(MAX_LIBRARY_FILE_STEM_LENGTH, dynamicLimit));
 }
 
 function buildArchiveSupplementalEntries(organizerRows: ArchiveOrganizerRow[]): ArchiveSupplementalEntry[] {

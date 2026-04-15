@@ -102,4 +102,14 @@ describe("buildArchiveWorkPlan", () => {
     const plan = buildArchiveWorkPlan([row], "Sora Library");
     expect(plan.organizer_rows[0].file_name).toBe(`${"a".repeat(48)}-s_alpha123.mp4`);
   });
+
+  it("enforces strict library path length budgets for long shared ids", () => {
+    const row = createRow({
+      video_id: "s_1234567890123456789012345678901234567890",
+      discovery_phrase: "this discovery phrase should be shortened to stay windows friendly"
+    });
+
+    const plan = buildArchiveWorkPlan([row], "Sora Library");
+    expect(plan.organizer_rows[0].library_path.length).toBeLessThanOrEqual(80);
+  });
 });
