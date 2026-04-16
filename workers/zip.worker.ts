@@ -171,37 +171,45 @@ async function fetchPreferredVideoBytes(
 ): Promise<Uint8Array> {
   if (SHARED_VIDEO_ID_PATTERN.test(row.video_id)) {
     for (let attempt = 0; attempt < WATERMARK_FETCH_MAX_ATTEMPTS; attempt += 1) {
+      const attemptLabel = `${attempt + 1}/${WATERMARK_FETCH_MAX_ATTEMPTS}`;
       try {
-        const bytes = await fetchWatermarkFreeVideoBytes(row.video_id, onStatusLabel);
+        const bytes = await fetchWatermarkFreeVideoBytes(
+          row.video_id,
+          attempt,
+          WATERMARK_FETCH_MAX_ATTEMPTS,
+          onStatusLabel
+        );
         if (shouldFallbackToSourceDownload(row, bytes)) {
           if (attempt + 1 < WATERMARK_FETCH_MAX_ATTEMPTS) {
-            onStatusLabel?.("Watermark payload too small, retrying");
-            await sleep(resolveValidationRetryDelayMs(attempt));
+            const retryDelayMs = resolveValidationRetryDelayMs(attempt);
+            onStatusLabel?.(`Watermark removal attempt ${attemptLabel}: payload too small, retrying in ${formatDurationMs(retryDelayMs)}`);
+            await sleep(retryDelayMs);
             continue;
           }
           if (!row.playback_url) {
             throw new Error("Watermark-free payload is unexpectedly small and source URL is unavailable.");
           }
-          onStatusLabel?.("Failed to remove watermark, using source URL");
+          onStatusLabel?.("Failed to remove watermark, downloading source URL");
           return fetchDirectVideoBytes(row.playback_url);
         }
         return bytes;
       } catch (error) {
         if (attempt + 1 < WATERMARK_FETCH_MAX_ATTEMPTS) {
-          onStatusLabel?.("Retrying watermark removal");
-          await sleep(resolveValidationRetryDelayMs(attempt));
+          const retryDelayMs = resolveValidationRetryDelayMs(attempt);
+          onStatusLabel?.(`Watermark removal attempt ${attemptLabel}: retrying in ${formatDurationMs(retryDelayMs)}`);
+          await sleep(retryDelayMs);
           continue;
         }
         if (!row.playback_url) {
           throw error;
         }
-        onStatusLabel?.("Failed to remove watermark, using source URL");
+        onStatusLabel?.("Failed to remove watermark, downloading source URL");
         return fetchDirectVideoBytes(row.playback_url);
       }
     }
 
     if (row.playback_url) {
-      onStatusLabel?.("Failed to remove watermark, using source URL");
+      onStatusLabel?.("Failed to remove watermark, downloading source URL");
       return fetchDirectVideoBytes(row.playback_url);
     }
     throw new Error("Failed to remove watermark.");
@@ -225,20 +233,26 @@ async function fetchDirectVideoBytes(url: string): Promise<Uint8Array> {
 
 async function fetchWatermarkFreeVideoBytes(
   videoId: string,
+  attempt: number,
+  maxAttempts: number,
   onStatusLabel?: (statusLabel: string) => void
 ): Promise<Uint8Array> {
-  onStatusLabel?.("Attempting to remove watermark");
+  const attemptLabel = `${attempt + 1}/${maxAttempts}`;
+  onStatusLabel?.(`Watermark removal attempt ${attemptLabel}: preparing request`);
   const response = await runSerializedWatermarkRequest(() =>
-    fetch(`https://soravdl.com/api/proxy/video/${encodeURIComponent(videoId)}`)
+    fetch(`https://soravdl.com/api/proxy/video/${encodeURIComponent(videoId)}`),
+    onStatusLabel,
+    attemptLabel
   );
   if (response.ok) {
+    onStatusLabel?.(`Watermark removal attempt ${attemptLabel}: validating response`);
     const bytes = new Uint8Array(await response.arrayBuffer());
     const contentType = (response.headers.get("content-type") ?? "").toLowerCase();
     if (!isLikelyVideoPayload(bytes, contentType)) {
       throw new Error("Watermark removal returned a non-video payload.");
     }
     watermarkRateLimitStreak = 0;
-    onStatusLabel?.("Watermark removed!");
+    onStatusLabel?.(`Watermark removal attempt ${attemptLabel}: watermark removed`);
     return bytes;
   }
   const status = response.status;
@@ -246,8 +260,10 @@ async function fetchWatermarkFreeVideoBytes(
     watermarkRateLimitStreak += 1;
     const retryDelayMs = resolveRetryDelayMs(response, 0, watermarkRateLimitStreak);
     globalRateLimitCooldownUntilMs = Date.now() + retryDelayMs;
+    onStatusLabel?.(`Watermark removal attempt ${attemptLabel}: rate-limited, cooling down ${formatDurationMs(retryDelayMs)}`);
   } else {
     watermarkRateLimitStreak = 0;
+    onStatusLabel?.(`Watermark removal attempt ${attemptLabel}: request failed (status ${status})`);
   }
   throw new Error(buildWatermarkRemovalErrorMessage(status));
 }
@@ -323,6 +339,14 @@ function sleep(durationMs: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, durationMs));
 }
 
+function formatDurationMs(durationMs: number): string {
+  if (durationMs < 1000) {
+    return `${durationMs}ms`;
+  }
+  const seconds = durationMs / 1000;
+  return seconds >= 10 ? `${Math.round(seconds)}s` : `${seconds.toFixed(1)}s`;
+}
+
 function resolveRetryDelayMs(response: Response, attempt: number, rateLimitStreak: number): number {
   const retryAfterSeconds = Number(response.headers.get("retry-after"));
   if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0) {
@@ -342,14 +366,24 @@ function jitterMs(maxJitterMs: number): number {
   return Math.floor(Math.random() * maxJitterMs);
 }
 
-async function waitForGlobalRateLimitCooldown(): Promise<void> {
+async function waitForGlobalRateLimitCooldown(
+  onStatusLabel?: (statusLabel: string) => void,
+  attemptLabel?: string
+): Promise<void> {
   const remainingMs = globalRateLimitCooldownUntilMs - Date.now();
   if (remainingMs > 0) {
+    if (attemptLabel) {
+      onStatusLabel?.(`Watermark removal attempt ${attemptLabel}: waiting rate-limit cooldown ${formatDurationMs(remainingMs)}`);
+    }
     await sleep(remainingMs);
   }
 }
 
-async function runSerializedWatermarkRequest<T>(requestFn: () => Promise<T>): Promise<T> {
+async function runSerializedWatermarkRequest<T>(
+  requestFn: () => Promise<T>,
+  onStatusLabel?: (statusLabel: string) => void,
+  attemptLabel?: string
+): Promise<T> {
   const previousTurn = watermarkQueueTail;
   let releaseTurn!: () => void;
   const currentTurn = new Promise<void>((resolve) => {
@@ -357,21 +391,34 @@ async function runSerializedWatermarkRequest<T>(requestFn: () => Promise<T>): Pr
   });
   watermarkQueueTail = previousTurn.then(() => currentTurn);
 
+  if (attemptLabel) {
+    onStatusLabel?.(`Watermark removal attempt ${attemptLabel}: waiting queue slot`);
+  }
   await previousTurn;
   try {
-    await waitForGlobalRateLimitCooldown();
-    await waitForWatermarkQueueInterval();
+    await waitForGlobalRateLimitCooldown(onStatusLabel, attemptLabel);
+    await waitForWatermarkQueueInterval(onStatusLabel, attemptLabel);
+    if (attemptLabel) {
+      onStatusLabel?.(`Watermark removal attempt ${attemptLabel}: submitting request`);
+    }
     return await requestFn();
   } finally {
     releaseTurn();
   }
 }
 
-async function waitForWatermarkQueueInterval(): Promise<void> {
+async function waitForWatermarkQueueInterval(
+  onStatusLabel?: (statusLabel: string) => void,
+  attemptLabel?: string
+): Promise<void> {
   const elapsedMs = Date.now() - lastWatermarkRequestStartedAtMs;
   const remainingMs = WATERMARK_QUEUE_MIN_INTERVAL_MS - elapsedMs;
   if (remainingMs > 0) {
-    await sleep(remainingMs + jitterMs(180));
+    const pacingDelayMs = remainingMs + jitterMs(180);
+    if (attemptLabel) {
+      onStatusLabel?.(`Watermark removal attempt ${attemptLabel}: pacing requests ${formatDurationMs(pacingDelayMs)}`);
+    }
+    await sleep(pacingDelayMs);
   }
   lastWatermarkRequestStartedAtMs = Date.now();
 }
