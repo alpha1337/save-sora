@@ -716,16 +716,12 @@ async function recoverUnresolvedDraftRows(signal: AbortSignal): Promise<void> {
   }
 }
 function getRecoverableRows(rows: VideoRow[]): VideoRow[] {
-  return rows.filter((row) => {
-    const hasRecoveryHandle = Boolean(row.detail_url);
-    if (!hasRecoveryHandle) {
-      return false;
-    }
-    const needsVideoIdRecovery =
-      !row.video_id &&
-      (row.skip_reason === "missing_video_id" || row.skip_reason === "unresolved_draft_video_id");
-    return needsVideoIdRecovery;
-  });
+  return rows.filter((row) =>
+    (row.source_type === "drafts" || row.source_type === "characterDrafts" || row.source_type === "characterAccountDrafts") &&
+    Boolean(row.detail_url) &&
+    !row.video_id &&
+    (row.skip_reason === "missing_video_id" || row.skip_reason === "unresolved_draft_video_id")
+  );
 }
 function filterRowsByFetchWindow(rows: VideoRow[], sinceMs?: number | null, untilMs?: number | null): VideoRow[] {
   if (sinceMs == null && untilMs == null) {
