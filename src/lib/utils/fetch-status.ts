@@ -25,6 +25,39 @@ export function getFetchPageLabel(batchNumber: number): string {
   return `Fetching page ${Math.max(1, batchNumber)}...`;
 }
 
+export function getFetchRequestingBatchLabel(batchNumber: number, source: LowLevelSourceType, endpointKey?: string | null): string {
+  return `Requesting ${formatEndpointLabel(source, endpointKey)} page ${Math.max(1, batchNumber)}...`;
+}
+
+export function getFetchReceivedBatchLabel(
+  batchNumber: number,
+  rowCount: number,
+  source: LowLevelSourceType,
+  endpointKey?: string | null
+): string {
+  return `Received ${rowCount} rows from ${formatEndpointLabel(source, endpointKey)} page ${Math.max(1, batchNumber)}`;
+}
+
+export function getFetchNormalizingBatchLabel(rowCount: number): string {
+  return `Normalizing ${Math.max(0, rowCount)} rows...`;
+}
+
+export function getFetchPersistingBatchLabel(rowCount: number): string {
+  return `Persisting ${Math.max(0, rowCount)} rows...`;
+}
+
+export function getFetchResolvingDraftIdsLabel(resolvedCount: number, totalCount: number): string {
+  return `Resolving draft IDs ${Math.max(0, resolvedCount)}/${Math.max(0, totalCount)}...`;
+}
+
+export function getFetchSavingCheckpointLabel(batchNumber: number): string {
+  return `Saving checkpoint after page ${Math.max(1, batchNumber)}...`;
+}
+
+export function getFetchBatchCompleteLabel(batchNumber: number, newRows: number, totalRows: number): string {
+  return `Page ${Math.max(1, batchNumber)} complete · +${Math.max(0, newRows)} rows · ${Math.max(0, totalRows)} total`;
+}
+
 export function getFetchSuccessfulLabel(): string {
   return "Fetch successful!";
 }
@@ -109,4 +142,12 @@ function formatToken(value: string, limit: number): string {
     return value;
   }
   return `${value.slice(0, limit)}...`;
+}
+
+function formatEndpointLabel(source: LowLevelSourceType, endpointKey?: string | null): string {
+  const trimmedEndpoint = endpointKey?.trim() ?? "";
+  if (trimmedEndpoint) {
+    return trimmedEndpoint;
+  }
+  return source;
 }

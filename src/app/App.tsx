@@ -112,8 +112,9 @@ export function App() {
     [selectedRows]
   );
   const allVisibleSelected = visibleDownloadableIds.length > 0 && selectedVisibleRowCount === visibleDownloadableIds.length;
+  const isFetching = state.phase === "fetching";
   const isDownloading = state.phase === "downloading";
-  const canBuildZip = !isDownloading && downloadableRowsCount > 0;
+  const canBuildZip = !isDownloading && !isFetching && downloadableRowsCount > 0;
   const [creatorRouteInput, setCreatorRouteInput] = useState("");
   const [fetchDateModalOpen, setFetchDateModalOpen] = useState(false);
   const [fetchDatePresetDraft, setFetchDatePresetDraft] = useState<DateRangePreset>("all");
@@ -365,7 +366,7 @@ export function App() {
       header={
         <div className="ss-header-grid">
           <div>
-            <h1>Save Sora v2.0.171</h1>
+            <h1>Save Sora v2.0.188</h1>
             <p className="ss-muted">Download anything on Sora, remove watermarks, export metadata and organized ZIP files.</p>
           </div>
           <div className="ss-inline-actions">
@@ -396,7 +397,7 @@ export function App() {
           downloadProgress={state.download_progress}
           fetchProgress={state.fetch_progress}
           downloadDisabled={!canBuildZip}
-          exportDisabled={isDownloading || state.video_rows.length === 0}
+          exportDisabled={isDownloading || isFetching || state.video_rows.length === 0}
           hasSidebar={hasSidebar}
           hasRows={state.video_rows.length > 0}
           hasQuery={state.session_meta.query.trim().length > 0}

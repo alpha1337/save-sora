@@ -131,6 +131,11 @@ function buildFetchProgressLabel(
   if (runningJobs === 1) {
     const activeJob = jobProgress.find((entry) => entry.status === "running");
     if (activeJob) {
+      const activeJobActionLabel = (activeJob.active_item_title ?? "").trim();
+      if (activeJobActionLabel) {
+        return `Fetching ${activeJob.label} · ${activeJobActionLabel}`;
+      }
+
       if (typeof activeJob.expected_total_count === "number" && activeJob.expected_total_count > 0) {
         return `Fetching ${activeJob.label} · ${formatCount(activeJob.fetched_rows)} new rows · ${formatCount(activeJob.processed_batches)} pages · ${formatCount(activeJob.expected_total_count)} reported total`;
       }

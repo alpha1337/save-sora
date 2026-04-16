@@ -2,7 +2,12 @@ import { describe, expect, it } from "vitest";
 import type { FetchProgressState } from "types/domain";
 import {
   buildFetchBatchErrorWithContext,
+  getFetchBatchCompleteLabel,
   getFetchJobStatusLabel,
+  getFetchReceivedBatchLabel,
+  getFetchRequestingBatchLabel,
+  getFetchResolvingDraftIdsLabel,
+  getFetchSavingCheckpointLabel,
   pickFetchActiveItemTitle
 } from "./fetch-status";
 
@@ -40,6 +45,14 @@ describe("fetch-status", () => {
     expect(getFetchJobStatusLabel(pending)).toBe("Queued");
     expect(getFetchJobStatusLabel(running)).toBe("Fetching page 3...");
     expect(getFetchJobStatusLabel(completed)).toBe("Complete!");
+  });
+
+  it("builds stage labels for fetch actions", () => {
+    expect(getFetchRequestingBatchLabel(1, "drafts", "drafts-v2")).toBe("Requesting drafts-v2 page 1...");
+    expect(getFetchReceivedBatchLabel(2, 100, "profile", "profile-feed")).toBe("Received 100 rows from profile-feed page 2");
+    expect(getFetchResolvingDraftIdsLabel(3, 10)).toBe("Resolving draft IDs 3/10...");
+    expect(getFetchSavingCheckpointLabel(4)).toBe("Saving checkpoint after page 4...");
+    expect(getFetchBatchCompleteLabel(5, 12, 44)).toBe("Page 5 complete · +12 rows · 44 total");
   });
 
   it("annotates fetch errors with debug context", () => {

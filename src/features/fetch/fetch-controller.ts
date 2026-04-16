@@ -20,13 +20,17 @@ import {
 import { createLogger } from "@lib/logging/logger";
 import { getCharacterNames } from "@lib/normalize/shared";
 import {
+  getFetchBatchCompleteLabel,
   buildFetchBatchErrorWithContext,
   getFetchCompleteLabel,
-  getFetchPageLabel,
-  getFetchProcessingCompleteLabel,
+  getFetchNormalizingBatchLabel,
+  getFetchPersistingBatchLabel,
   getFetchQueuedLabel,
+  getFetchReceivedBatchLabel,
+  getFetchRequestingBatchLabel,
+  getFetchResolvingDraftIdsLabel,
+  getFetchSavingCheckpointLabel,
   getFetchSkippedUnavailableLabel,
-  getFetchSuccessfulLabel,
   getUnknownErrorMessage,
   pickFetchActiveItemTitle
 } from "@lib/utils/fetch-status";
@@ -220,19 +224,21 @@ async function runFetchJob(
     const fetchedAt = new Date().toISOString();
     const recoveryTasks: Array<Promise<void>> = [];
     const finalCheckpoint = await streamFetchBatches(runtimeJob.source, runtimeJob, signal, checkpoint, selectionSignature, async (rows) => {
+      setFetchJobActiveStatus(runtimeJob.id, getFetchNormalizingBatchLabel(rows.length));
       const scopedRows = filterRowsForCharacterScope(rows, runtimeJob);
       const rowsWithContext = applyCharacterRowContext(scopedRows, runtimeJob);
       const normalizedRows = isDraftSource(runtimeJob.source)
         ? normalizeDraftRows(runtimeJob.source, rowsWithContext, fetchedAt)
         : normalizePostRows(runtimeJob.source, rowsWithContext, fetchedAt);
       const inRangeRows = filterRowsByFetchWindow(normalizedRows, runtimeJob.fetch_since_ms, runtimeJob.fetch_until_ms);
-      setFetchJobActiveStatus(runtimeJob.id, getFetchSuccessfulLabel());
+      const activeItemTitle = pickFetchActiveItemTitle(inRangeRows, runtimeJob.source);
       const draftResolutionRecords = buildDraftResolutionRecords(rowsWithContext);
       if (inRangeRows.length > 0) {
         useAppStore.getState().upsertVideoRows(stripRawPayloadFromRows(inRangeRows));
       }
       const recoverableRows = getRecoverableRows(inRangeRows);
       if (recoverableRows.length > 0) {
+        setFetchJobActiveStatus(runtimeJob.id, getFetchResolvingDraftIdsLabel(0, recoverableRows.length));
         recoveryTasks.push(
           recoverMissingVideoIds(
             recoverableRows,
@@ -249,6 +255,11 @@ async function runFetchJob(
         );
       }
       const persistenceTasks: Array<Promise<void>> = [];
+      if (inRangeRows.length > 0) {
+        setFetchJobActiveStatus(runtimeJob.id, `${activeItemTitle} · ${getFetchPersistingBatchLabel(inRangeRows.length)}`);
+      } else {
+        setFetchJobActiveStatus(runtimeJob.id, getFetchPersistingBatchLabel(0));
+      }
       if (draftResolutionRecords.length > 0) {
         persistenceTasks.push(saveDraftResolutionRecords(draftResolutionRecords));
       }
@@ -256,7 +267,7 @@ async function runFetchJob(
         persistenceTasks.push(upsertVideoRows(inRangeRows));
       }
       return {
-        active_item_title: pickFetchActiveItemTitle(inRangeRows, runtimeJob.source),
+        active_item_title: activeItemTitle,
         draftResolutionRecords,
         persistencePromise: persistenceTasks.length > 0 ? Promise.all(persistenceTasks).then(() => undefined) : Promise.resolve(),
         stored_row_ids: inRangeRows.map((row) => row.row_id)
@@ -491,7 +502,7 @@ async function streamFetchBatches(
     const requestCursor = cursor;
     const nextBatchNumber = processedBatches + 1;
     if ("id" in job) {
-      setFetchJobActiveStatus(job.id, getFetchPageLabel(nextBatchNumber));
+      setFetchJobActiveStatus(job.id, getFetchRequestingBatchLabel(nextBatchNumber, source, endpointKey));
     }
     let response: FetchBatchResponse;
     try {
@@ -527,7 +538,7 @@ async function streamFetchBatches(
     cursor = response.payload.next_cursor;
     offset = response.payload.next_offset;
     if ("id" in job) {
-      setFetchJobActiveStatus(job.id, getFetchSuccessfulLabel());
+      setFetchJobActiveStatus(job.id, getFetchReceivedBatchLabel(nextBatchNumber, batchRows.length, source, endpointKey));
     }
     const batchResult = batchRows.length > 0
       ? await onBatch(batchRows)
@@ -547,12 +558,13 @@ async function streamFetchBatches(
       consecutiveRepeatedPageSignatures = 0;
     }
     previousPageSignature = currentPageSignature;
+    const pageCompleteLabel = getFetchBatchCompleteLabel(nextBatchNumber, newJobRowIds.length, streamedRowCount);
     updateFetchBatchProgress(
       job,
       streamedRowCount,
       newJobRowIds.length,
       processedBatches,
-      batchResult.active_item_title || getFetchProcessingCompleteLabel(),
+      pageCompleteLabel,
       endpointKey,
       batchRows
     );
@@ -574,7 +586,9 @@ async function streamFetchBatches(
         processed_batches: processedBatches,
         status: "running"
       });
+      setFetchJobActiveStatus(job.id, getFetchSavingCheckpointLabel(nextBatchNumber));
       await saveFetchJobCheckpoint(latestCheckpoint);
+      setFetchJobActiveStatus(job.id, pageCompleteLabel);
     }
   }
   return latestCheckpoint;
@@ -594,6 +608,7 @@ async function recoverMissingVideoIds(
   async function worker() {
     while (currentIndex < pendingRows.length) {
       throwIfFetchCanceled(signal);
+      onStatusLabel?.(getFetchResolvingDraftIdsLabel(recoveredRows.length, pendingRows.length));
       const row = pendingRows[currentIndex];
       currentIndex += 1;
       const attempts = (attemptByRowId.get(row.row_id) ?? 0) + 1;
@@ -618,10 +633,7 @@ async function recoverMissingVideoIds(
           is_downloadable: true,
           skip_reason: ""
         });
-        if (row.source_bucket === "drafts") {
-          onStatusLabel?.("Processing complete!");
-          onStatusLabel?.("Complete!");
-        }
+        onStatusLabel?.(getFetchResolvingDraftIdsLabel(recoveredRows.length, pendingRows.length));
       } catch (error) {
         if (!isExpectedDetailFallbackError(error)) {
           logger.warn("detail fallback failed", error);
@@ -630,6 +642,7 @@ async function recoverMissingVideoIds(
     }
   }
   await Promise.all(Array.from({ length: Math.min(DETAIL_FALLBACK_CONCURRENCY, pendingRows.length) }, () => worker()));
+  onStatusLabel?.(getFetchResolvingDraftIdsLabel(recoveredRows.length, pendingRows.length));
   return recoveredRows;
 }
 async function recoverUnresolvedDraftRows(signal: AbortSignal): Promise<void> {
