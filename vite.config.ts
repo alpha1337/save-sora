@@ -1,13 +1,19 @@
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
 const v2Root = path.dirname(fileURLToPath(import.meta.url));
+const packageJson = JSON.parse(readFileSync(path.join(v2Root, "package.json"), "utf8")) as { version?: string };
+const appVersion = typeof packageJson.version === "string" ? packageJson.version : "0.0.0";
 
 export default defineConfig({
   root: v2Root,
   publicDir: path.join(v2Root, "public"),
+  define: {
+    __APP_VERSION__: JSON.stringify(appVersion)
+  },
   plugins: [react()],
   build: {
     outDir: path.join(v2Root, ".build"),

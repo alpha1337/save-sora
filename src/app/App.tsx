@@ -21,6 +21,7 @@ import { getUserFacingErrorMessage } from "@lib/utils/user-facing-errors";
 import type { DateRangePreset, TopLevelSourceType } from "types/domain";
 
 const logger = createLogger("app");
+const APP_VERSION = __APP_VERSION__;
 
 /**
  * App container that binds dumb components to store selectors and controllers.
@@ -366,7 +367,7 @@ export function App() {
       header={
         <div className="ss-header-grid">
           <div>
-            <h1>Save Sora v2.0.190</h1>
+            <h1>{`Save Sora v${APP_VERSION}`}</h1>
             <p className="ss-muted">Download anything on Sora, remove watermarks, export metadata and organized ZIP files.</p>
           </div>
           <div className="ss-inline-actions">
