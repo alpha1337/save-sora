@@ -55,9 +55,15 @@ export async function downloadSelectedRows(): Promise<void> {
   await replaceDownloadQueue(targetRows.map((row) => row.video_id));
 
   const workPlan = buildArchiveWorkPlan(targetRows, state.settings.archive_name_template);
+  logger.info("zip build start", {
+    selected_rows: targetRows.length,
+    archive_name: `${workPlan.archive_name}.zip`
+  });
   const worker = new Worker(new URL("../../../workers/zip.worker.ts", import.meta.url), { type: "module" });
 
   const archiveBlob = await new Promise<Blob>((resolve, reject) => {
+    let lastLoggedActiveLabel = "";
+
     worker.addEventListener("message", (event: MessageEvent<ZipWorkerProgressMessage | ZipWorkerCompleteMessage | ZipWorkerErrorMessage>) => {
       if (event.data.type === "progress") {
         const currentCompletedItems = useAppStore.getState().download_progress.completed_items;
@@ -65,14 +71,37 @@ export async function downloadSelectedRows(): Promise<void> {
           ...event.data.payload,
           completed_items: Math.max(currentCompletedItems, event.data.payload.completed_items)
         });
+        const nextActiveLabel = event.data.payload.active_label.trim();
+        if (nextActiveLabel && nextActiveLabel !== lastLoggedActiveLabel) {
+          const firstWorker = event.data.payload.worker_progress[0];
+          logger.info("zip progress", {
+            active_label: nextActiveLabel,
+            completed_items: event.data.payload.completed_items,
+            total_items: event.data.payload.total_items,
+            worker: firstWorker
+              ? {
+                  id: firstWorker.worker_id,
+                  status: firstWorker.status,
+                  active_item_label: firstWorker.active_item_label,
+                  last_completed_item_label: firstWorker.last_completed_item_label
+                }
+              : null
+          });
+          lastLoggedActiveLabel = nextActiveLabel;
+        }
         return;
       }
 
       if (event.data.type === "complete") {
+        logger.info("zip worker complete", {
+          archive_name: event.data.payload.archive_name,
+          selected_rows: targetRows.length
+        });
         resolve(event.data.payload.blob);
         return;
       }
 
+      logger.error("zip worker error", { error: event.data.payload.error });
       reject(new Error(event.data.payload.error));
     });
 
