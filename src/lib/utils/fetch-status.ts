@@ -50,6 +50,21 @@ export function getFetchResolvingDraftIdsLabel(resolvedCount: number, totalCount
   return `Resolving draft IDs ${Math.max(0, resolvedCount)}/${Math.max(0, totalCount)}...`;
 }
 
+export function getFetchResolvingDraftIdsProgressLabel(
+  processedCount: number,
+  resolvedCount: number,
+  totalCount: number,
+  stageLabel = ""
+): string {
+  const processed = Math.max(0, processedCount);
+  const resolved = Math.max(0, resolvedCount);
+  const total = Math.max(0, totalCount);
+  const stage = stageLabel.trim();
+  return stage
+    ? `Resolving draft IDs ${processed}/${total} processed · ${resolved} resolved · ${stage}`
+    : `Resolving draft IDs ${processed}/${total} processed · ${resolved} resolved`;
+}
+
 export function getFetchSavingCheckpointLabel(batchNumber: number): string {
   return `Saving checkpoint after page ${Math.max(1, batchNumber)}...`;
 }

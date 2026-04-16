@@ -280,6 +280,14 @@ function formatFetchJobProgressPercent(job: FetchProgressState["job_progress"][n
   if (typeof job.expected_total_count === "number" && job.expected_total_count > 0) {
     return Math.min(100, Math.max(0, Math.round((job.fetched_rows / job.expected_total_count) * 100)));
   }
+  const draftResolutionProgressMatch = (job.active_item_title ?? "").match(/Resolving draft IDs\s+(\d+)\/(\d+)\s+processed/i);
+  if (draftResolutionProgressMatch) {
+    const processed = Number(draftResolutionProgressMatch[1]);
+    const total = Number(draftResolutionProgressMatch[2]);
+    if (Number.isFinite(processed) && Number.isFinite(total) && total > 0) {
+      return Math.min(95, Math.max(5, Math.round((processed / total) * 95)));
+    }
+  }
   if (job.status === "completed") {
     return 100;
   }

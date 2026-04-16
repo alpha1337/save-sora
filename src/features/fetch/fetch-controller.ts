@@ -2,7 +2,8 @@ import type {
   BackgroundResponse,
   FetchBatchRequest,
   FetchBatchResponse,
-  FetchDetailHtmlResponse
+  FetchDetailHtmlResponse,
+  ResolveDraftReferenceResponse
 } from "types/background";
 import type { DraftResolutionRecord, FetchJobCheckpoint, LowLevelSourceType, VideoRow } from "types/domain";
 import { useAppStore } from "@app/store/use-app-store";
@@ -18,7 +19,7 @@ import {
   upsertVideoRows
 } from "@lib/db/session-db";
 import { createLogger } from "@lib/logging/logger";
-import { getCharacterNames } from "@lib/normalize/shared";
+import { getCharacterNames, getDraftGenerationId } from "@lib/normalize/shared";
 import {
   getFetchBatchCompleteLabel,
   buildFetchBatchErrorWithContext,
@@ -28,7 +29,7 @@ import {
   getFetchQueuedLabel,
   getFetchReceivedBatchLabel,
   getFetchRequestingBatchLabel,
-  getFetchResolvingDraftIdsLabel,
+  getFetchResolvingDraftIdsProgressLabel,
   getFetchSavingCheckpointLabel,
   getFetchSkippedUnavailableLabel,
   getUnknownErrorMessage,
@@ -47,11 +48,13 @@ import {
 } from "./fetch-runtime-utils";
 import {
   buildInitialFetchProgress,
+  getGenerationIdFromDetailUrl,
   dedupeVideoRowsById,
   getFetchBatchLimit,
   getPageSignature,
   isDraftSource,
   isFetchCancellationError,
+  parseVideoRowRawPayload,
   runWithConcurrency,
   shouldRefreshCreatorProfile,
   throwIfFetchCanceled
@@ -217,7 +220,7 @@ async function runFetchJob(
   checkpoint: FetchJobCheckpoint | null
 ): Promise<void> {
   const runtimeJob = await resolveFetchJobLabel(job);
-  logger.info("running fetch job", runtimeJob.id);
+  logger.info("running fetch job", { job_id: runtimeJob.id, source: runtimeJob.source, label: runtimeJob.label, resumed: Boolean(checkpoint) });
   markFetchJobRunning(runtimeJob, checkpoint);
   throwIfFetchCanceled(signal);
   try {
@@ -238,7 +241,7 @@ async function runFetchJob(
       }
       const recoverableRows = getRecoverableRows(inRangeRows);
       if (recoverableRows.length > 0) {
-        setFetchJobActiveStatus(runtimeJob.id, getFetchResolvingDraftIdsLabel(0, recoverableRows.length));
+        setFetchJobActiveStatus(runtimeJob.id, getFetchResolvingDraftIdsProgressLabel(0, 0, recoverableRows.length, "queued"));
         recoveryTasks.push(
           recoverMissingVideoIds(
             recoverableRows,
@@ -291,13 +294,11 @@ async function runFetchJob(
     if (!isNonFatalItemLookupError(error)) {
       throw error;
     }
-
     logger.warn("continuing fetch job after non-fatal item lookup error", {
       job_id: runtimeJob.id,
       source: runtimeJob.source,
       error: getUnknownErrorMessage(error)
     });
-
     setFetchJobActiveStatus(runtimeJob.id, getFetchSkippedUnavailableLabel());
     await saveFetchJobCheckpoint(
       finalizeFetchJobCheckpoint(runtimeJob, selectionSignature, checkpoint, {
@@ -501,6 +502,7 @@ async function streamFetchBatches(
     throwIfFetchCanceled(signal);
     const requestCursor = cursor;
     const nextBatchNumber = processedBatches + 1;
+    logger.info("fetch batch request", { job: "id" in job ? job.id : job.label, source, batch: nextBatchNumber, endpoint_key: endpointKey, cursor: requestCursor, offset });
     if ("id" in job) {
       setFetchJobActiveStatus(job.id, getFetchRequestingBatchLabel(nextBatchNumber, source, endpointKey));
     }
@@ -537,6 +539,7 @@ async function streamFetchBatches(
     endpointKey = response.payload.endpoint_key;
     cursor = response.payload.next_cursor;
     offset = response.payload.next_offset;
+    logger.info("fetch batch response", { job: "id" in job ? job.id : job.label, source, batch: nextBatchNumber, rows: batchRows.length, done: response.payload.done, endpoint_key: endpointKey, next_cursor: cursor, next_offset: offset });
     if ("id" in job) {
       setFetchJobActiveStatus(job.id, getFetchReceivedBatchLabel(nextBatchNumber, batchRows.length, source, endpointKey));
     }
@@ -572,10 +575,10 @@ async function streamFetchBatches(
       draftResolutionMap.set(record.generation_id, record.video_id);
     }
     await batchResult.persistencePromise;
-    done =
-      response.payload.done ||
-      shouldStopForStalledCursor(consecutiveRepeatedPageSignatures, source) ||
-      shouldStopForNoGrowthPages(consecutiveNoGrowthPages, batchRows.length, source);
+    const stalledCursor = shouldStopForStalledCursor(consecutiveRepeatedPageSignatures, source);
+    const noGrowthLimit = shouldStopForNoGrowthPages(consecutiveNoGrowthPages, batchRows.length, source);
+    done = response.payload.done || stalledCursor || noGrowthLimit;
+    logger.info("fetch batch persisted", { job: "id" in job ? job.id : job.label, source, batch: nextBatchNumber, new_rows: newJobRowIds.length, total_rows: streamedRowCount, processed_batches: processedBatches, stop_reason: response.payload.done ? "server_done" : stalledCursor ? "stalled_cursor" : noGrowthLimit ? "no_growth_pages" : "" });
     if ("id" in job) {
       latestCheckpoint = buildFetchJobCheckpoint(job, selectionSignature, latestCheckpoint, {
         cursor,
@@ -604,28 +607,64 @@ async function recoverMissingVideoIds(
     return [];
   }
   const recoveredRows: VideoRow[] = [];
+  let processedRows = 0;
   let currentIndex = 0;
+  const totalRows = pendingRows.length;
+  const setResolutionStatus = (stageLabel: string) =>
+    onStatusLabel?.(getFetchResolvingDraftIdsProgressLabel(processedRows, recoveredRows.length, totalRows, stageLabel));
+  setResolutionStatus("queued");
   async function worker() {
     while (currentIndex < pendingRows.length) {
       throwIfFetchCanceled(signal);
-      onStatusLabel?.(getFetchResolvingDraftIdsLabel(recoveredRows.length, pendingRows.length));
       const row = pendingRows[currentIndex];
       currentIndex += 1;
       const attempts = (attemptByRowId.get(row.row_id) ?? 0) + 1;
       attemptByRowId.set(row.row_id, attempts);
+      const rowPayload = parseVideoRowRawPayload(row);
+      const generationId = getDraftGenerationId(rowPayload) || getGenerationIdFromDetailUrl(row.detail_url);
+      logger.info("draft id recovery attempt", { row_id: row.row_id, source: row.source_type, generation_id: generationId, attempt: attempts, detail_url: row.detail_url });
+      if (generationId) {
+        setResolutionStatus(`submitting ${generationId}`);
+      } else {
+        setResolutionStatus(`resolving ${row.row_id}`);
+      }
       await sleepWithJitter(DRAFT_RECOVERY_REQUEST_DELAY_MS, signal);
       try {
+        if (generationId) {
+          const referenceResponse = await sendBackgroundRequest<ResolveDraftReferenceResponse>({
+            type: "resolve-draft-reference",
+            generation_id: generationId,
+            detail_url: row.detail_url || undefined,
+            row_payload: rowPayload || undefined
+          });
+          const resolvedVideoId = referenceResponse.payload.video_id.trim();
+          if (resolvedVideoId) {
+            logger.info("draft id recovery success", { row_id: row.row_id, source: row.source_type, generation_id: generationId, attempt: attempts, video_id: resolvedVideoId });
+            recoveredRows.push({ ...row, video_id: resolvedVideoId, detail_url: referenceResponse.payload.share_url || row.detail_url, thumbnail_url: referenceResponse.payload.thumbnail_url || row.thumbnail_url, playback_url: referenceResponse.payload.playback_url || row.playback_url, estimated_size_bytes: typeof referenceResponse.payload.estimated_size_bytes === "number" ? referenceResponse.payload.estimated_size_bytes : row.estimated_size_bytes, is_downloadable: true, skip_reason: "" });
+            processedRows += 1;
+            setResolutionStatus(`resolved ${resolvedVideoId}`);
+            continue;
+          }
+        }
         if (!row.detail_url) {
+          logger.info("draft id recovery skipped", { row_id: row.row_id, reason: "missing_detail_url" });
+          processedRows += 1;
+          setResolutionStatus(`skipped ${generationId || row.row_id}`);
           continue;
         }
+        setResolutionStatus(`checking detail ${generationId || row.row_id}`);
         const response = await sendBackgroundRequest<FetchDetailHtmlResponse>({
           type: "fetch-detail-html",
           detail_url: row.detail_url
         });
         const videoId = extractVideoIdFromDetailHtml(response.payload.html);
         if (!videoId) {
+          logger.info("draft id recovery unresolved", { row_id: row.row_id, source: row.source_type, attempt: attempts });
+          processedRows += 1;
+          setResolutionStatus(`unresolved ${generationId || row.row_id}`);
           continue;
         }
+        logger.info("draft id recovery success", { row_id: row.row_id, source: row.source_type, attempt: attempts, video_id: videoId });
         recoveredRows.push({
           ...row,
           video_id: videoId,
@@ -633,20 +672,25 @@ async function recoverMissingVideoIds(
           is_downloadable: true,
           skip_reason: ""
         });
-        onStatusLabel?.(getFetchResolvingDraftIdsLabel(recoveredRows.length, pendingRows.length));
+        processedRows += 1;
+        setResolutionStatus(`resolved ${videoId}`);
       } catch (error) {
+        logger.info("draft id recovery failed", { row_id: row.row_id, source: row.source_type, attempt: attempts, error: getUnknownErrorMessage(error) });
         if (!isExpectedDetailFallbackError(error)) {
           logger.warn("detail fallback failed", error);
         }
+        processedRows += 1;
+        setResolutionStatus(`retrying ${generationId || row.row_id}`);
       }
     }
   }
-  await Promise.all(Array.from({ length: Math.min(DETAIL_FALLBACK_CONCURRENCY, pendingRows.length) }, () => worker()));
-  onStatusLabel?.(getFetchResolvingDraftIdsLabel(recoveredRows.length, pendingRows.length));
+  await Promise.all(Array.from({ length: Math.min(DETAIL_FALLBACK_CONCURRENCY, totalRows) }, () => worker()));
+  setResolutionStatus("complete");
   return recoveredRows;
 }
 async function recoverUnresolvedDraftRows(signal: AbortSignal): Promise<void> {
   const attemptByRowId = new Map<string, number>();
+  const setFinalRecoveryLabel = (statusLabel: string) => useAppStore.getState().setFetchProgress({ active_label: `Finalizing draft IDs · ${statusLabel}` });
   for (let round = 0; round < DRAFT_RECOVERY_MAX_ROUNDS; round += 1) {
     throwIfFetchCanceled(signal);
     const recoverableRows = getRecoverableRows(useAppStore.getState().video_rows).filter(
@@ -655,7 +699,8 @@ async function recoverUnresolvedDraftRows(signal: AbortSignal): Promise<void> {
     if (recoverableRows.length === 0) {
       return;
     }
-    const recoveredRows = await recoverMissingVideoIds(recoverableRows, signal, attemptByRowId);
+    setFinalRecoveryLabel(getFetchResolvingDraftIdsProgressLabel(0, 0, recoverableRows.length, `round ${round + 1}`));
+    const recoveredRows = await recoverMissingVideoIds(recoverableRows, signal, attemptByRowId, setFinalRecoveryLabel);
     if (recoveredRows.length > 0) {
       await upsertVideoRows(recoveredRows);
       useAppStore.getState().upsertVideoRows(stripRawPayloadFromRows(recoveredRows));
@@ -722,12 +767,10 @@ function isNonFatalItemLookupError(error: unknown): boolean {
   const message = getUnknownErrorMessage(error).toLowerCase();
   return message.includes("requested sora item could not be found") || message.includes("status 404");
 }
-
 async function sendFetchBatchRequestWithRetry(
   request: FetchBatchRequest
 ): Promise<FetchBatchResponse> {
   let lastError: unknown = null;
-
   for (let attempt = 0; attempt <= FETCH_BATCH_TRANSPORT_RETRY_DELAYS_MS.length; attempt += 1) {
     try {
       return await sendBackgroundRequest<FetchBatchResponse>(request);
@@ -739,10 +782,8 @@ async function sendFetchBatchRequestWithRetry(
       await sleep(FETCH_BATCH_TRANSPORT_RETRY_DELAYS_MS[attempt]);
     }
   }
-
   throw lastError instanceof Error ? lastError : new Error(getUnknownErrorMessage(lastError));
 }
-
 function isTransientBackgroundBridgeError(error: unknown): boolean {
   const message = getUnknownErrorMessage(error).toLowerCase();
   return message.includes("message channel closed before a response was received") ||
@@ -750,7 +791,6 @@ function isTransientBackgroundBridgeError(error: unknown): boolean {
     message.includes("receiving end does not exist") ||
     message.includes("background worker did not return a response");
 }
-
 function sleep(durationMs: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, durationMs));
 }
@@ -821,6 +861,10 @@ function incrementCompletedJobs(job: FetchJob): void {
   }));
 }
 function setFetchJobActiveStatus(jobId: string, statusLabel: string): void {
+  const currentStatus = useAppStore.getState().fetch_progress.job_progress.find((entry) => entry.job_id === jobId)?.active_item_title ?? "";
+  if (currentStatus !== statusLabel) {
+    logger.info("fetch status", { job_id: jobId, status: statusLabel });
+  }
   useAppStore.setState((state) => ({
     fetch_progress: buildNextFetchProgressState(
       state.fetch_progress,

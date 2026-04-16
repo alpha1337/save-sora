@@ -133,3 +133,16 @@ export function dedupeVideoRowsById(rows: VideoRow[]): VideoRow[] {
   }
   return [...rowMap.values()];
 }
+
+export function parseVideoRowRawPayload(row: VideoRow): Record<string, unknown> | null {
+  if (!row.raw_payload_json?.trim()) return null;
+  try {
+    const parsedPayload = JSON.parse(row.raw_payload_json);
+    return parsedPayload && typeof parsedPayload === "object" ? parsedPayload as Record<string, unknown> : null;
+  } catch { return null; }
+}
+
+export function getGenerationIdFromDetailUrl(detailUrl: string): string {
+  const match = detailUrl.match(/\/d\/(gen_[A-Za-z0-9_-]+)/i);
+  return match?.[1] ?? "";
+}

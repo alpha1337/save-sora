@@ -253,6 +253,7 @@ function getNestedObjectArrays(record: Record<string, unknown>): Array<Record<st
 }
 
 function getDirectSharedVideoId(record: Record<string, unknown>): string {
+  const recordId = typeof record.id === "string" ? record.id : "";
   return pickFirstString([
     record.shared_post_id,
     record.sharedPostId,
@@ -264,7 +265,7 @@ function getDirectSharedVideoId(record: Record<string, unknown>): string {
     record.shareId,
     record.video_id,
     record.videoId,
-    SHARED_VIDEO_ID_PATTERN.test(String(record.id ?? "")) ? String(record.id) : "",
+    SHARED_VIDEO_ID_PATTERN.test(recordId) ? recordId : "",
     extractSharedVideoId(record.permalink),
     extractSharedVideoId(record.detail_url),
     extractSharedVideoId(record.detailUrl),

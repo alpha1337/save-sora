@@ -7,6 +7,7 @@ import {
   getFetchReceivedBatchLabel,
   getFetchRequestingBatchLabel,
   getFetchResolvingDraftIdsLabel,
+  getFetchResolvingDraftIdsProgressLabel,
   getFetchSavingCheckpointLabel,
   pickFetchActiveItemTitle
 } from "./fetch-status";
@@ -51,6 +52,9 @@ describe("fetch-status", () => {
     expect(getFetchRequestingBatchLabel(1, "drafts", "drafts-v2")).toBe("Requesting drafts-v2 page 1...");
     expect(getFetchReceivedBatchLabel(2, 100, "profile", "profile-feed")).toBe("Received 100 rows from profile-feed page 2");
     expect(getFetchResolvingDraftIdsLabel(3, 10)).toBe("Resolving draft IDs 3/10...");
+    expect(getFetchResolvingDraftIdsProgressLabel(7, 3, 10, "sharing gen_abc")).toBe(
+      "Resolving draft IDs 7/10 processed · 3 resolved · sharing gen_abc"
+    );
     expect(getFetchSavingCheckpointLabel(4)).toBe("Saving checkpoint after page 4...");
     expect(getFetchBatchCompleteLabel(5, 12, 44)).toBe("Page 5 complete · +12 rows · 44 total");
   });

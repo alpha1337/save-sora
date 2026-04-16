@@ -104,7 +104,7 @@ async function runFetchBatch(request: FetchBatchRequest) {
     const pageRows = getPostListingRows(payload);
     const inRangeRows = filterRowsByTimeWindow(pageRows, request.since_ms, request.until_ms);
     const enrichedRows = isDraftSource(request.source)
-      ? await enrichDraftRows(inRangeRows, request.draft_resolution_entries ?? [], request.source)
+      ? enrichDraftRows(inRangeRows, request.draft_resolution_entries ?? [], request.source)
       : inRangeRows;
     rows.push(...enrichedRows);
     rowKeys.push(...enrichedRows.map((row) => getRawRowKey(row)).filter(Boolean));
@@ -361,11 +361,11 @@ async function resolveCharacterAccountId(
     return trimmedCharacterId;
   }
 }
-async function enrichDraftRows(
+function enrichDraftRows(
   rows: unknown[],
   knownResolutionEntries: Array<{ generation_id: string; video_id: string }>,
   source: FetchBatchRequest["source"]
-): Promise<unknown[]> {
+): unknown[] {
   const knownResolutionMap = new Map(knownResolutionEntries.map((entry) => [entry.generation_id, entry.video_id]));
   for (const [rowIndex, row] of rows.entries()) {
     if (!row || typeof row !== "object") {
@@ -385,7 +385,7 @@ async function enrichDraftRows(
       has_post: Boolean(record.post)
     });
     const draftRecord = record.draft && typeof record.draft === "object" ? record.draft as Record<string, unknown> : record;
-    const postVideoId = resolveSharedVideoIdFromValue((record.post as unknown) ?? null);
+    const postVideoId = resolveSharedVideoIdFromValue(record.post ?? null);
     if (postVideoId) {
       logDraftResolutionStep("Resolved from row.post", {
         source,
@@ -462,24 +462,10 @@ async function enrichDraftRows(
       });
     }
     if (canCreateSharedReference) {
-      logDraftResolutionStep("Attempting share creation for unresolved draft", {
+      logDraftResolutionStep("Deferring share creation to app recovery stage", {
         source,
         generation_id: generationId
       });
-      const createdReference = await createSharedDraftReference(record, generationId).catch(() => null);
-      if (createdReference?.video_id) {
-        logDraftResolutionStep("Resolved by share creation", {
-          source,
-          generation_id: generationId,
-          video_id: createdReference.video_id
-        });
-        applyResolvedDraftReference(record, draftRecord, createdReference);
-      } else {
-        logDraftResolutionStep("Share creation did not return s_* id", {
-          source,
-          generation_id: generationId
-        });
-      }
     }
   }
   return rows;
