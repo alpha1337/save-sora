@@ -30,6 +30,7 @@ import {
 const APPEARANCE_FEED_PAGE_LIMIT = 100;
 const DRAFT_SHARE_POST_BASE_RETRY_DELAY_MS = 500;
 const DRAFT_SHARE_POST_MAX_RETRY_DELAY_MS = 20000;
+const DRAFT_RESOLUTION_LOG_PREFIX = "[Save Sora][Draft Resolve]";
 interface FetchEndpointCandidate {
   key: string;
   optional?: boolean;
@@ -46,6 +47,17 @@ interface DraftShareReference {
   share_url: string;
   thumbnail_url: string;
   video_id: string;
+}
+
+function logDraftResolutionStep(
+  step: string,
+  context: Record<string, unknown>
+): void {
+  try {
+    console.log(`${DRAFT_RESOLUTION_LOG_PREFIX} ${step}`, context);
+  } catch (_error) {
+    // no-op
+  }
 }
 export async function runSourceRequest(request: BackgroundRequest): Promise<unknown> {
   if (request.type === "fetch-detail-html") {
@@ -355,7 +367,7 @@ async function enrichDraftRows(
   source: FetchBatchRequest["source"]
 ): Promise<unknown[]> {
   const knownResolutionMap = new Map(knownResolutionEntries.map((entry) => [entry.generation_id, entry.video_id]));
-  for (const row of rows) {
+  for (const [rowIndex, row] of rows.entries()) {
     if (!row || typeof row !== "object") {
       continue;
     }
@@ -364,9 +376,22 @@ async function enrichDraftRows(
     if (!generationId) {
       continue;
     }
+    const draftKind = getDraftKind(record);
+    logDraftResolutionStep("Start gen_* -> s_* resolution", {
+      source,
+      row_index: rowIndex,
+      generation_id: generationId,
+      kind: draftKind,
+      has_post: Boolean(record.post)
+    });
     const draftRecord = record.draft && typeof record.draft === "object" ? record.draft as Record<string, unknown> : record;
     const postVideoId = resolveSharedVideoIdFromValue((record.post as unknown) ?? null);
     if (postVideoId) {
+      logDraftResolutionStep("Resolved from row.post", {
+        source,
+        generation_id: generationId,
+        video_id: postVideoId
+      });
       const metadata = extractResolvedDraftMetadataFromValue(record.post, postVideoId);
       applyResolvedDraftReference(record, draftRecord, {
         video_id: postVideoId,
@@ -379,6 +404,11 @@ async function enrichDraftRows(
     }
     const cachedVideoId = knownResolutionMap.get(generationId);
     if (cachedVideoId) {
+      logDraftResolutionStep("Resolved from in-memory draft cache", {
+        source,
+        generation_id: generationId,
+        video_id: cachedVideoId
+      });
       const metadata = extractResolvedDraftMetadataFromValue(record, cachedVideoId);
       applyResolvedDraftReference(record, draftRecord, {
         video_id: cachedVideoId,
@@ -391,6 +421,11 @@ async function enrichDraftRows(
     }
     const directVideoId = resolveExistingDraftVideoId(record);
     if (directVideoId) {
+      logDraftResolutionStep("Resolved from existing row payload", {
+        source,
+        generation_id: generationId,
+        video_id: directVideoId
+      });
       const metadata = extractResolvedDraftMetadataFromValue(record, directVideoId);
       applyResolvedDraftReference(record, draftRecord, {
         video_id: directVideoId,
@@ -409,10 +444,41 @@ async function enrichDraftRows(
         source === "characterDrafts" ||
         source === "characterAccountDrafts"
       );
+    if (!canCreateSharedReference) {
+      const skipReasons: string[] = [];
+      if (record.post) {
+        skipReasons.push("post_present_without_resolved_video_id");
+      }
+      if (!isShareableDraftKind(draftKind)) {
+        skipReasons.push(`unsupported_kind:${draftKind || "unknown"}`);
+      }
+      if (!(source === "drafts" || source === "characterDrafts" || source === "characterAccountDrafts")) {
+        skipReasons.push(`unsupported_source:${source}`);
+      }
+      logDraftResolutionStep("Skipped share creation path", {
+        source,
+        generation_id: generationId,
+        reasons: skipReasons
+      });
+    }
     if (canCreateSharedReference) {
+      logDraftResolutionStep("Attempting share creation for unresolved draft", {
+        source,
+        generation_id: generationId
+      });
       const createdReference = await createSharedDraftReference(record, generationId).catch(() => null);
       if (createdReference?.video_id) {
+        logDraftResolutionStep("Resolved by share creation", {
+          source,
+          generation_id: generationId,
+          video_id: createdReference.video_id
+        });
         applyResolvedDraftReference(record, draftRecord, createdReference);
+      } else {
+        logDraftResolutionStep("Share creation did not return s_* id", {
+          source,
+          generation_id: generationId
+        });
       }
     }
   }
@@ -463,6 +529,9 @@ function isShareableDraftKind(kind: string): boolean {
 }
 
 async function resolveDraftReference(request: { generation_id: string; detail_url?: string; row_payload?: unknown }) {
+  logDraftResolutionStep("resolve-draft-reference request received", {
+    generation_id: request.generation_id
+  });
   const rowPayload = request.row_payload && typeof request.row_payload === "object"
     ? request.row_payload as Record<string, unknown>
     : {};
@@ -472,6 +541,12 @@ async function resolveDraftReference(request: { generation_id: string; detail_ur
     detail_url: rowPayload.detail_url ?? rowPayload.detailUrl ?? request.detail_url
   };
   if (shouldSkipDraftRow(workingRow)) {
+    const skipReason = classifyDraftSkipReason(workingRow);
+    logDraftResolutionStep("resolve-draft-reference skipped", {
+      generation_id: request.generation_id,
+      skip_reason: skipReason,
+      kind: getDraftKind(workingRow)
+    });
     return {
       generation_id: request.generation_id,
       video_id: "",
@@ -479,10 +554,15 @@ async function resolveDraftReference(request: { generation_id: string; detail_ur
       playback_url: "",
       thumbnail_url: "",
       estimated_size_bytes: null,
-      skip_reason: classifyDraftSkipReason(workingRow)
+      skip_reason: skipReason
     };
   }
   const createdReference = await createSharedDraftReference(workingRow, request.generation_id).catch(() => null);
+  logDraftResolutionStep("resolve-draft-reference completed", {
+    generation_id: request.generation_id,
+    resolved_video_id: createdReference?.video_id ?? "",
+    skip_reason: createdReference?.video_id ? "" : "unresolved_draft_video_id"
+  });
   return {
     generation_id: request.generation_id,
     video_id: createdReference?.video_id ?? "",
@@ -657,8 +737,13 @@ async function buildFetchEndpointCandidates(
   throw new Error(`Unsupported fetch source: ${request.source}`);
 }
 async function createSharedDraftReference(row: Record<string, unknown>, generationId: string) {
+  logDraftResolutionStep("createSharedDraftReference start", { generation_id: generationId });
   const existingVideoId = resolveExistingDraftVideoId(row);
   if (existingVideoId) {
+    logDraftResolutionStep("Using existing s_* id from payload", {
+      generation_id: generationId,
+      video_id: existingVideoId
+    });
     const metadata = extractResolvedDraftMetadataFromValue(row, existingVideoId);
     return {
       video_id: existingVideoId,
@@ -670,15 +755,28 @@ async function createSharedDraftReference(row: Record<string, unknown>, generati
   }
 
   if (shouldSkipDraftRow(row)) {
+    logDraftResolutionStep("Skipping draft due to blocked kind", {
+      generation_id: generationId,
+      skip_reason: classifyDraftSkipReason(row),
+      kind: getDraftKind(row)
+    });
     return null;
   }
 
   const detailUrl = resolveDraftDetailUrl(row, generationId);
   if (detailUrl) {
+    logDraftResolutionStep("Attempting detail JSON resolution", {
+      generation_id: generationId,
+      detail_url: detailUrl
+    });
     const detailPayload = await fetchJson(detailUrl).catch(() => null);
     if (detailPayload) {
       const recoveredFromPayload = resolveSharedVideoIdFromValue(detailPayload);
       if (recoveredFromPayload) {
+        logDraftResolutionStep("Resolved from detail JSON payload", {
+          generation_id: generationId,
+          video_id: recoveredFromPayload
+        });
         const metadata = extractResolvedDraftMetadataFromValue(detailPayload, recoveredFromPayload);
         return {
           video_id: recoveredFromPayload,
@@ -688,11 +786,22 @@ async function createSharedDraftReference(row: Record<string, unknown>, generati
           thumbnail_url: metadata.thumbnail_url
         };
       }
+      logDraftResolutionStep("Detail JSON did not include s_* id", {
+        generation_id: generationId
+      });
     }
 
+    logDraftResolutionStep("Attempting detail HTML resolution", {
+      generation_id: generationId,
+      detail_url: detailUrl
+    });
     const detailHtml = await fetchText(detailUrl).catch(() => "");
     const recoveredId = extractSharedVideoId(detailHtml);
     if (recoveredId) {
+      logDraftResolutionStep("Resolved from detail HTML", {
+        generation_id: generationId,
+        video_id: recoveredId
+      });
       const metadata = extractResolvedDraftMetadataFromValue(row, recoveredId);
       return {
         video_id: recoveredId,
@@ -702,9 +811,15 @@ async function createSharedDraftReference(row: Record<string, unknown>, generati
         thumbnail_url: metadata.thumbnail_url
       };
     }
+    logDraftResolutionStep("Detail HTML did not include s_* id", {
+      generation_id: generationId
+    });
   }
 
   try {
+    logDraftResolutionStep("Attempting share-link POST /backend/project_y/post", {
+      generation_id: generationId
+    });
     const response = (await fetchJsonWithMethod("/backend/project_y/post", "POST", {
       attachments_to_create: [{ generation_id: generationId, kind: "sora" }],
       post_text: resolveDraftShareText(row),
@@ -712,6 +827,10 @@ async function createSharedDraftReference(row: Record<string, unknown>, generati
     })) as Record<string, unknown>;
     const videoId = resolveSharedVideoIdFromValue(response);
     if (videoId) {
+      logDraftResolutionStep("Resolved from share-link POST response", {
+        generation_id: generationId,
+        video_id: videoId
+      });
       const metadata = extractResolvedDraftMetadataFromValue(response, videoId);
       return {
         video_id: videoId,
@@ -721,15 +840,25 @@ async function createSharedDraftReference(row: Record<string, unknown>, generati
         thumbnail_url: metadata.thumbnail_url
       };
     }
+    logDraftResolutionStep("Share-link POST response missing s_* id", {
+      generation_id: generationId
+    });
   } catch (_error) {
+    logDraftResolutionStep("Share-link POST failed", {
+      generation_id: generationId
+    });
     // Fail closed: the fetch controller will keep retrying unresolved drafts.
   }
 
+  logDraftResolutionStep("Resolution failed; leaving draft unresolved", {
+    generation_id: generationId
+  });
   return null;
 }
 async function fetchJsonWithMethod(url: string, method: "POST", jsonBody: unknown): Promise<unknown> {
   const auth = await import("../lib/auth").then((module) => module.deriveAuthContext());
   const requestUrl = new URL(url, SORA_ORIGIN).toString();
+  const generationId = resolveShareRequestGenerationId(jsonBody);
   const headers = {
     accept: "application/json, text/plain, */*",
     authorization: `Bearer ${auth.token}`,
@@ -739,6 +868,11 @@ async function fetchJsonWithMethod(url: string, method: "POST", jsonBody: unknow
   };
   let attempt = 0;
   for (;;) {
+    logDraftResolutionStep("Share POST attempt", {
+      generation_id: generationId,
+      request_url: requestUrl,
+      attempt: attempt + 1
+    });
     const response = await fetch(requestUrl, {
       method,
       credentials: "include",
@@ -746,14 +880,54 @@ async function fetchJsonWithMethod(url: string, method: "POST", jsonBody: unknow
       body: JSON.stringify(jsonBody)
     });
     if (response.ok) {
+      logDraftResolutionStep("Share POST success", {
+        generation_id: generationId,
+        status: response.status,
+        attempt: attempt + 1
+      });
       return response.json();
     }
     if (!isRetriableSoraStatus(response.status)) {
+      logDraftResolutionStep("Share POST non-retriable failure", {
+        generation_id: generationId,
+        status: response.status,
+        attempt: attempt + 1
+      });
       throw new Error(`Draft share creation failed with status ${response.status}. Request: POST /backend/project_y/post.`);
     }
-    await sleepWithJitter(resolveDraftShareRetryDelayMs(attempt));
+    const retryDelayMs = resolveDraftShareRetryDelayMs(attempt);
+    logDraftResolutionStep("Share POST retriable failure", {
+      generation_id: generationId,
+      status: response.status,
+      attempt: attempt + 1,
+      retry_delay_ms: retryDelayMs
+    });
+    await sleepWithJitter(retryDelayMs);
     attempt += 1;
   }
+}
+
+function resolveShareRequestGenerationId(jsonBody: unknown): string {
+  if (!jsonBody || typeof jsonBody !== "object") {
+    return "";
+  }
+  const record = jsonBody as Record<string, unknown>;
+  const attachments = Array.isArray(record.attachments_to_create)
+    ? record.attachments_to_create
+    : [];
+  for (const attachment of attachments) {
+    if (!attachment || typeof attachment !== "object") {
+      continue;
+    }
+    const generationId = pickFirstString([
+      (attachment as Record<string, unknown>).generation_id,
+      (attachment as Record<string, unknown>).generationId
+    ]);
+    if (generationId) {
+      return generationId;
+    }
+  }
+  return "";
 }
 function resolveDraftShareText(row: Record<string, unknown>): string {
   const draftRecord = row.draft && typeof row.draft === "object" ? row.draft as Record<string, unknown> : null;
