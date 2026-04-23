@@ -54,6 +54,10 @@ export async function bootstrapAppState(): Promise<void> {
     active_sources: activeSources,
     viewer_user_id: viewerIdentity?.user_id ?? existingSessionMeta.viewer_user_id ?? "",
     viewer_username: viewerIdentity?.username ?? existingSessionMeta.viewer_username ?? "",
+    viewer_profile_picture_url:
+      viewerIdentity?.profile_picture_url ??
+      existingSessionMeta.viewer_profile_picture_url ??
+      "",
     viewer_can_cameo: viewerCanCameo,
     exclude_session_creator_only: existingSessionMeta.exclude_session_creator_only ?? false,
     fetch_range_confirmed: existingSessionMeta.fetch_range_confirmed ?? false,

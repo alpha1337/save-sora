@@ -34,6 +34,7 @@ const defaultSessionMeta: SessionMeta = {
   selected_character_account_ids: [],
   viewer_user_id: "",
   viewer_username: "",
+  viewer_profile_picture_url: "",
   viewer_can_cameo: true,
   last_fetch_at: null
 };

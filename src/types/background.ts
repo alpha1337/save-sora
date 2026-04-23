@@ -67,6 +67,7 @@ export interface ResolveViewerIdentityResponse {
     username: string;
     display_name: string;
     can_cameo: boolean;
+    profile_picture_url: string | null;
   };
 }
 
@@ -93,8 +94,7 @@ export interface ResolveDraftReferenceResponse {
 
 export interface GetSoraWatermarkTaskRequest {
   type: "get-sora-watermark-task";
-  url: string;
-  uuid: string;
+  video_id: string;
 }
 
 export interface GetSoraWatermarkTaskResponse {

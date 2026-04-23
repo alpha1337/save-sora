@@ -94,6 +94,7 @@ export interface SessionMeta {
   selected_character_account_ids: string[];
   viewer_user_id?: string;
   viewer_username?: string;
+  viewer_profile_picture_url?: string | null;
   viewer_can_cameo?: boolean;
   last_fetch_at: string | null;
 }

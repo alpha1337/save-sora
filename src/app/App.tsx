@@ -153,6 +153,8 @@ export function App() {
   const canBuildZip = !isDownloading && !isFetching && downloadableRowsCount > 0;
   const canResumeFetch = state.settings.enable_fetch_resume === true && state.session_meta.resume_fetch_available === true;
   const fetchActionLabel = isFetching ? "Stop Fetch" : canResumeFetch ? "Resume Fetch" : "Fetch Videos";
+  const viewerUsername = state.session_meta.viewer_username?.trim() || "unknown";
+  const viewerProfilePictureUrl = state.session_meta.viewer_profile_picture_url?.trim() || "";
   const [creatorRouteInput, setCreatorRouteInput] = useState("");
   const [fetchDateModalOpen, setFetchDateModalOpen] = useState(false);
   const [fetchDatePresetDraft, setFetchDatePresetDraft] = useState<DateRangePreset>("all");
@@ -562,7 +564,16 @@ export function App() {
         <div className="ss-header-grid">
           <div>
             <h1>{`Save Sora v${APP_VERSION}`}</h1>
-            <p className="ss-muted">Download videos from Sora and build organized ZIP files.</p>
+            <div className="ss-header-session ss-muted">
+              {viewerProfilePictureUrl ? (
+                <img
+                  alt={`${viewerUsername} profile`}
+                  className="ss-header-session-avatar"
+                  src={viewerProfilePictureUrl}
+                />
+              ) : null}
+              <span>{`Logged in as ${viewerUsername}`}</span>
+            </div>
           </div>
           <div className="ss-inline-actions">
             <SourceMultiSelectDropdown

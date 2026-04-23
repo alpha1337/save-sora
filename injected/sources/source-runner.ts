@@ -35,6 +35,8 @@ const DRAFT_SHARE_POST_BASE_RETRY_DELAY_MS = 500;
 const DRAFT_SHARE_POST_MAX_RETRY_DELAY_MS = 20000;
 const DRAFT_RESOLUTION_LOG_PREFIX = "[Save Sora][Draft Resolve]";
 const SAVEV_API_ORIGIN = "https://crx-api.savev.co";
+const SAVEV_SORA_WATERMARK_UUID = "eaa665130fc1a1d2f3acc5c5265a1c00ddd9924fc6d20566___";
+const SORA_SHARED_VIDEO_ID_PATTERN = /^s_[A-Za-z0-9_-]+$/;
 interface FetchEndpointCandidate {
   key: string;
   optional?: boolean;
@@ -104,20 +106,16 @@ export async function runSourceRequest(request: BackgroundRequest): Promise<unkn
   throw new Error(`Unsupported injected request type: ${String((request as { type?: string }).type)}`);
 }
 
-async function getSoraWatermarkTask(request: { url: string; uuid: string }): Promise<string> {
-  const targetUrl = request.url.trim();
-  const uuid = request.uuid.trim();
-
-  if (!targetUrl) {
-    throw new Error("getSoraWatermarkTask requires a non-empty url.");
+async function getSoraWatermarkTask(request: { video_id: string }): Promise<string> {
+  const videoId = request.video_id.trim();
+  if (!SORA_SHARED_VIDEO_ID_PATTERN.test(videoId)) {
+    throw new Error("getSoraWatermarkTask requires a valid s_* video_id.");
   }
-  if (!uuid) {
-    throw new Error("getSoraWatermarkTask requires a non-empty uuid.");
-  }
+  const targetUrl = `${SORA_ORIGIN}/p/${encodeURIComponent(videoId)}`;
 
   const endpointUrl = new URL("/v2/oversea-extension/soraWatermark/soraWatermarkTask", SAVEV_API_ORIGIN);
   endpointUrl.searchParams.set("url", targetUrl);
-  endpointUrl.searchParams.set("uuid", uuid);
+  endpointUrl.searchParams.set("uuid", SAVEV_SORA_WATERMARK_UUID);
 
   const response = await fetch(endpointUrl.toString(), {
     headers: {
@@ -533,6 +531,7 @@ async function resolveViewerIdentity() {
   let username = "";
   let displayName = "";
   let canCameo = true;
+  let profilePictureUrl = "";
   try {
     const payload = (await fetchJson("/backend/project_y/v2/me")) as Record<string, unknown>;
     const profileRecord = payload.profile && typeof payload.profile === "object"
@@ -555,6 +554,17 @@ async function resolveViewerIdentity() {
       payload.name,
       username
     ]);
+    profilePictureUrl = pickFirstString([
+      profileRecord?.profile_picture_url,
+      profileRecord?.profilePictureUrl,
+      profileRecord?.avatar_url,
+      profileRecord?.avatarUrl,
+      payload.profile_picture_url,
+      payload.profilePictureUrl,
+      payload.avatar_url,
+      payload.avatarUrl,
+      profilePictureUrl
+    ]);
     const canCameoValue = profileRecord?.can_cameo ?? profileRecord?.canCameo ?? payload.can_cameo ?? payload.canCameo;
     if (typeof canCameoValue === "boolean") {
       canCameo = canCameoValue;
@@ -567,6 +577,13 @@ async function resolveViewerIdentity() {
       const payload = (await fetchJson(`/backend/project_y/profile/${encodeURIComponent(viewerUserId)}`)) as Record<string, unknown>;
       username = pickFirstString([payload.username, payload.user_name, payload.userName, username]);
       displayName = pickFirstString([payload.display_name, payload.displayName, payload.name, displayName, username]);
+      profilePictureUrl = pickFirstString([
+        payload.profile_picture_url,
+        payload.profilePictureUrl,
+        payload.avatar_url,
+        payload.avatarUrl,
+        profilePictureUrl
+      ]);
     }
   } catch (_error) {
     // fall through to feed probing
@@ -583,6 +600,13 @@ async function resolveViewerIdentity() {
         if (profileRecord) {
           username = pickFirstString([profileRecord.username, profileRecord.user_name, profileRecord.userName]);
           displayName = pickFirstString([profileRecord.display_name, profileRecord.displayName, profileRecord.name, username]);
+          profilePictureUrl = pickFirstString([
+            profileRecord.profile_picture_url,
+            profileRecord.profilePictureUrl,
+            profileRecord.avatar_url,
+            profileRecord.avatarUrl,
+            profilePictureUrl
+          ]);
         }
       }
     } catch (_error) {
@@ -593,7 +617,8 @@ async function resolveViewerIdentity() {
     user_id: viewerUserId,
     username,
     display_name: displayName,
-    can_cameo: canCameo
+    can_cameo: canCameo,
+    profile_picture_url: profilePictureUrl || null
   };
 }
 async function resolveCreatorTarget(

@@ -113,6 +113,23 @@ input {
   justify-content: flex-end;
 }
 
+.ss-header-session {
+  align-items: center;
+  display: inline-flex;
+  gap: 0.55rem;
+  margin-top: 0.35rem;
+}
+
+.ss-header-session-avatar {
+  border: 1px solid rgba(148, 163, 184, 0.32);
+  border-radius: 999px;
+  display: block;
+  flex: 0 0 auto;
+  height: 1.5rem;
+  object-fit: cover;
+  width: 1.5rem;
+}
+
 .ss-inline-form {
   justify-content: flex-start;
   flex-wrap: wrap;

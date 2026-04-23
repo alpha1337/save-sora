@@ -36,8 +36,7 @@ describe("source endpoint contracts", () => {
 
   it("returns getSoraWatermarkTask.data as the endpoint payload", async () => {
     const taskId = "94976234-40cb-4e2f-8999-b411b7f9e55f";
-    const sourceUrl = "https://sora.chatgpt.com/p/s_69e87b6d054c81919e111296af449910";
-    const uuid = "eaa665130fc1a1d2f3acc5c5265a1c00ddd9924fc6d20566___";
+    const videoId = "s_69e87b6d054c81919e111296af449910";
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
       if (url.startsWith("https://crx-api.savev.co/v2/oversea-extension/soraWatermark/soraWatermarkTask")) {
@@ -56,8 +55,7 @@ describe("source endpoint contracts", () => {
 
     const result = await runSourceRequest({
       type: "get-sora-watermark-task",
-      url: sourceUrl,
-      uuid
+      video_id: videoId
     });
 
     expect(result).toBe(taskId);
@@ -69,8 +67,8 @@ describe("source endpoint contracts", () => {
         : requestedUrl?.url ?? "";
     const parsedRequestUrl = new URL(normalizedUrl);
     expect(parsedRequestUrl.pathname).toBe("/v2/oversea-extension/soraWatermark/soraWatermarkTask");
-    expect(parsedRequestUrl.searchParams.get("url")).toBe(sourceUrl);
-    expect(parsedRequestUrl.searchParams.get("uuid")).toBe(uuid);
+    expect(parsedRequestUrl.searchParams.get("url")).toBe(`https://sora.chatgpt.com/p/${videoId}`);
+    expect(parsedRequestUrl.searchParams.get("uuid")).toBe("eaa665130fc1a1d2f3acc5c5265a1c00ddd9924fc6d20566___");
   });
 
   it("returns getSoraWatermarkFreeVideo.data as URL string or null", async () => {
