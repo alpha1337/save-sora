@@ -2,11 +2,38 @@ import { deriveAuthContext } from "./auth";
 import { SORA_ORIGIN } from "./origins";
 
 const FETCH_RETRY_DELAYS_MS = [500, 1500, 3000];
+const DEFAULT_MAX_ATTEMPTS = FETCH_RETRY_DELAYS_MS.length + 1;
+const ADAPTIVE_429_BASE_DELAY_MS = 900;
+const ADAPTIVE_429_MAX_DELAY_MS = 20000;
+const ADAPTIVE_429_MAX_ATTEMPTS = 12;
+
+export interface FetchJsonDiagnostics {
+  requested_at: string;
+  responded_at: string;
+  status: number;
+  attempts: number;
+  rate_limited: boolean;
+  network_errors: number;
+}
+
+interface FetchJsonOptions {
+  adaptive429?: boolean;
+  adaptive429BaseDelayMs?: number;
+  adaptive429MaxDelayMs?: number;
+  maxAttempts?: number;
+}
 
 /**
  * Shared network and parsing helpers for the injected Sora fetch runtime.
  */
 export async function fetchJson(url: string): Promise<unknown> {
+  return (await fetchJsonWithDiagnostics(url)).payload;
+}
+
+export async function fetchJsonWithDiagnostics(
+  url: string,
+  options: FetchJsonOptions = {}
+): Promise<{ payload: unknown; diagnostics: FetchJsonDiagnostics }> {
   const authContext = await deriveAuthContext();
   const resolvedUrl = resolveSoraUrl(url);
   const headers = {
@@ -15,22 +42,60 @@ export async function fetchJson(url: string): Promise<unknown> {
     "oai-language": authContext.language,
     ...(authContext.deviceId ? { "oai-device-id": authContext.deviceId } : {})
   };
+  const requestedAt = new Date().toISOString();
+  const maxAttempts = resolveMaxAttempts(options);
+  let rateLimited = false;
+  let networkErrorCount = 0;
 
-  for (let attempt = 0; attempt <= FETCH_RETRY_DELAYS_MS.length; attempt += 1) {
-    const response = await fetch(resolvedUrl, {
-      credentials: "include",
-      headers
-    });
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    let response: Response;
+    try {
+      response = await fetch(resolvedUrl, {
+        credentials: "include",
+        headers
+      });
+    } catch (error) {
+      networkErrorCount += 1;
+      const isLastAttempt = attempt >= maxAttempts - 1;
+      if (isLastAttempt || !isRetriableFetchError(error)) {
+        throw new Error(
+          buildSoraNetworkRequestErrorMessage(
+            resolvedUrl,
+            "GET",
+            attempt + 1,
+            getFetchErrorMessage(error)
+          )
+        );
+      }
+      await sleep(resolveRetryDelayMs(null, attempt, options));
+      continue;
+    }
 
     if (response.ok) {
-      return (await response.json()) as unknown;
+      return {
+        payload: (await response.json()) as unknown,
+        diagnostics: {
+          requested_at: requestedAt,
+          responded_at: new Date().toISOString(),
+          status: response.status,
+          attempts: attempt + 1,
+          rate_limited: rateLimited,
+          network_errors: networkErrorCount
+        }
+      };
     }
 
-    if (attempt >= FETCH_RETRY_DELAYS_MS.length || !isRetriableSoraStatus(response.status)) {
-      throw new Error(buildSoraRequestErrorMessage(response.status, resolvedUrl, "GET"));
+    if (response.status === 429) {
+      rateLimited = true;
     }
 
-    await sleep(FETCH_RETRY_DELAYS_MS[attempt]);
+    const isLastAttempt = attempt >= maxAttempts - 1;
+    if (isLastAttempt || !isRetriableSoraStatus(response.status)) {
+      throw new Error(buildSoraRequestErrorMessage(response.status, resolvedUrl, "GET", attempt + 1));
+    }
+
+    const delayMs = resolveRetryDelayMs(response, attempt, options);
+    await sleep(delayMs);
   }
 
   throw new Error("Sora request failed after retries.");
@@ -160,28 +225,108 @@ export function isRetriableSoraStatus(status: number): boolean {
   return status === 408 || status === 429 || status === 500 || status === 502 || status === 503 || status === 504 || status === 520 || status === 522 || status === 524;
 }
 
+function resolveMaxAttempts(options: FetchJsonOptions): number {
+  if (typeof options.maxAttempts === "number" && options.maxAttempts > 0) {
+    return Math.max(1, Math.floor(options.maxAttempts));
+  }
+
+  return options.adaptive429 ? ADAPTIVE_429_MAX_ATTEMPTS : DEFAULT_MAX_ATTEMPTS;
+}
+
+function resolveRetryDelayMs(response: Response | null, attempt: number, options: FetchJsonOptions): number {
+  if (response && options.adaptive429 && response.status === 429) {
+    const retryAfterDelay = parseRetryAfterMs(response.headers.get("retry-after"));
+    if (retryAfterDelay != null) {
+      return clampDelay(retryAfterDelay, options);
+    }
+    const baseDelay = options.adaptive429BaseDelayMs ?? ADAPTIVE_429_BASE_DELAY_MS;
+    const exponentialDelay = baseDelay * Math.pow(2, Math.min(6, attempt));
+    return clampDelay(exponentialDelay, options);
+  }
+
+  return FETCH_RETRY_DELAYS_MS[Math.min(attempt, FETCH_RETRY_DELAYS_MS.length - 1)] ?? FETCH_RETRY_DELAYS_MS[FETCH_RETRY_DELAYS_MS.length - 1] ?? 3000;
+}
+
+function isRetriableFetchError(error: unknown): boolean {
+  const message = getFetchErrorMessage(error).toLowerCase();
+  if (!message) {
+    return true;
+  }
+  if (message.includes("aborted")) {
+    return false;
+  }
+  return message.includes("failed to fetch") || message.includes("network") || message.includes("load failed");
+}
+
+function getFetchErrorMessage(error: unknown): string {
+  if (error instanceof Error && error.message.trim()) {
+    return error.message.trim();
+  }
+  return String(error ?? "").trim();
+}
+
+function parseRetryAfterMs(headerValue: string | null): number | null {
+  if (!headerValue) {
+    return null;
+  }
+
+  const trimmedHeader = headerValue.trim();
+  if (!trimmedHeader) {
+    return null;
+  }
+
+  const secondsValue = Number(trimmedHeader);
+  if (Number.isFinite(secondsValue) && secondsValue >= 0) {
+    return secondsValue * 1000;
+  }
+
+  const parsedDateMs = Date.parse(trimmedHeader);
+  if (!Number.isFinite(parsedDateMs)) {
+    return null;
+  }
+  return Math.max(0, parsedDateMs - Date.now());
+}
+
+function clampDelay(delayMs: number, options: FetchJsonOptions): number {
+  const maxDelay = options.adaptive429MaxDelayMs ?? ADAPTIVE_429_MAX_DELAY_MS;
+  return Math.min(maxDelay, Math.max(250, Math.round(delayMs)));
+}
+
 function sleep(durationMs: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, durationMs));
 }
 
-function buildSoraRequestErrorMessage(status: number, requestUrl: string, method: "GET" | "POST"): string {
+function buildSoraRequestErrorMessage(status: number, requestUrl: string, method: "GET" | "POST", attempts = 1): string {
   const requestLabel = describeRequestForError(requestUrl, method);
+  const attemptsLabel = attempts > 1 ? ` Attempts: ${attempts}.` : "";
   if (status === 400) {
-    return `Sora request failed with status 400. Request: ${requestLabel}.`;
+    return `Sora request failed with status 400. Request: ${requestLabel}.${attemptsLabel}`;
   }
   if (status === 401 || status === 403) {
-    return `Sora request failed with status ${status}. Request: ${requestLabel}.`;
+    return `Sora request failed with status ${status}. Request: ${requestLabel}.${attemptsLabel}`;
   }
   if (status === 404) {
-    return `Sora request failed with status 404. Request: ${requestLabel}.`;
+    return `Sora request failed with status 404. Request: ${requestLabel}.${attemptsLabel}`;
   }
   if (status === 429) {
-    return `Sora request failed with status 429. Request: ${requestLabel}.`;
+    return `Sora request failed with status 429. Request: ${requestLabel}.${attemptsLabel}`;
   }
   if (status >= 500) {
-    return `Sora request failed with status ${status}. Request: ${requestLabel}.`;
+    return `Sora request failed with status ${status}. Request: ${requestLabel}.${attemptsLabel}`;
   }
-  return `Sora request failed with status ${status}. Request: ${requestLabel}.`;
+  return `Sora request failed with status ${status}. Request: ${requestLabel}.${attemptsLabel}`;
+}
+
+function buildSoraNetworkRequestErrorMessage(
+  requestUrl: string,
+  method: "GET" | "POST",
+  attempts: number,
+  lastErrorMessage: string
+): string {
+  const requestLabel = describeRequestForError(requestUrl, method);
+  const attemptLabel = attempts === 1 ? "1 attempt" : `${attempts} attempts`;
+  const trailingError = lastErrorMessage ? ` Last error: ${lastErrorMessage}.` : "";
+  return `Sora request failed due to a network error after ${attemptLabel}. Request: ${requestLabel}.${trailingError}`;
 }
 
 function describeRequestForError(requestUrl: string, method: "GET" | "POST"): string {
@@ -325,10 +470,6 @@ export function extractDraftGenerationId(value: unknown, depth = 0): string {
   }
 
   return "";
-}
-
-export function buildNoWatermarkProxyUrl(videoId: string): string {
-  return /^s_[A-Za-z0-9_-]+$/.test(videoId) ? `https://soravdl.com/api/proxy/video/${encodeURIComponent(videoId)}` : "";
 }
 
 function pickFirstArray<T>(candidates: unknown[]): T[] {

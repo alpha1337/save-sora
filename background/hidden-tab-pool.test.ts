@@ -6,6 +6,7 @@ describe("hidden-tab-pool recovery policy", () => {
     expect(shouldRetryWorkerTask(new Error("A listener indicated an asynchronous response by returning true, but the message channel closed before a response was received"))).toBe(true);
     expect(shouldRetryWorkerTask(new Error("The message port closed before a response was received."))).toBe(true);
     expect(shouldRetryWorkerTask(new Error("Could not establish connection. Receiving end does not exist."))).toBe(true);
+    expect(shouldRetryWorkerTask(new Error("The page keeping the extension port is moved into back/forward cache, so the message channel is closed."))).toBe(true);
     expect(shouldRetryWorkerTask(new Error("No tab with id: 1536710878"))).toBe(true);
   });
 
@@ -14,6 +15,8 @@ describe("hidden-tab-pool recovery policy", () => {
     expect(shouldRetryWorkerTask(new Error("Could not derive the signed-in Sora viewer id."))).toBe(true);
     expect(shouldRetryWorkerTask(new Error("Missing bearer authentication in header"))).toBe(true);
     expect(shouldRetryWorkerTask(new Error("Frame with ID 0 is showing error page"))).toBe(true);
+    expect(shouldRetryWorkerTask(new Error("The hidden Sora worker tab was closed before it finished loading."))).toBe(true);
+    expect(shouldRetryWorkerTask(new Error("Timed out waiting for the hidden Sora worker tab to finish loading."))).toBe(true);
   });
 
   it("does not retry unrelated API failures", () => {

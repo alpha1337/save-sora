@@ -20,6 +20,7 @@ export type LowLevelSourceType =
   | "characterDrafts"
   | "characterProfiles"
   | "characterAccountAppearances"
+  | "sideCharacter"
   | "characterAccountDrafts"
   | "creatorProfileLookup"
   | "creatorPublished"
@@ -49,6 +50,7 @@ export interface CreatorProfile {
   user_id: string;
   owner_user_id?: string;
   character_user_id?: string;
+  account_type?: "creator" | "sideCharacter";
   username: string;
   display_name: string;
   permalink: string;
@@ -71,7 +73,11 @@ export interface CharacterAccount {
 
 export interface AppSettings {
   archive_name_template: string;
-  include_raw_payload_in_csv: boolean;
+  enable_fetch_resume?: boolean;
+  remember_fetch_date_choice?: boolean;
+  remembered_date_range_preset?: DateRangePreset;
+  remembered_custom_date_start?: string;
+  remembered_custom_date_end?: string;
 }
 
 export interface SessionMeta {
@@ -79,6 +85,7 @@ export interface SessionMeta {
   query: string;
   exclude_session_creator_only?: boolean;
   fetch_range_confirmed?: boolean;
+  resume_fetch_available?: boolean;
   sort_key: VideoSortOption;
   group_by?: GroupByOption;
   date_range_preset: DateRangePreset;
@@ -87,6 +94,7 @@ export interface SessionMeta {
   selected_character_account_ids: string[];
   viewer_user_id?: string;
   viewer_username?: string;
+  viewer_can_cameo?: boolean;
   last_fetch_at: string | null;
 }
 
@@ -115,12 +123,15 @@ export interface VideoRow {
   remix_count: number | null;
   detail_url: string;
   thumbnail_url: string;
+  gif_url?: string;
   playback_url: string;
+  download_url?: string;
   duration_seconds: number | null;
   estimated_size_bytes: number | null;
   width: number | null;
   height: number | null;
   raw_payload_json: string;
+  source_order?: number | null;
   is_downloadable: boolean;
   skip_reason: string;
   fetched_at: string;
@@ -151,8 +162,16 @@ export interface ArchiveSupplementalEntry {
   content: Blob | string;
 }
 
+export type ArchiveVariant = "watermark" | "no-watermark";
+
+export interface ArchiveWorkPlanRow extends VideoRow {
+  archive_path: string;
+  archive_variant: ArchiveVariant;
+  archive_download_url: string;
+}
+
 export interface ArchiveWorkPlan {
-  rows: VideoRow[];
+  rows: ArchiveWorkPlanRow[];
   organizer_rows: ArchiveOrganizerRow[];
   supplemental_entries: ArchiveSupplementalEntry[];
   archive_name: string;
@@ -169,9 +188,6 @@ export interface FetchJobProgress {
   fetched_rows: number;
   processed_batches: number;
   expected_total_count: number | null;
-  debug_schema_keys?: string[];
-  debug_sample_json?: string;
-  debug_endpoint_key?: string;
 }
 
 export interface DownloadWorkerProgress {

@@ -7,11 +7,16 @@ interface HiddenWorker {
   windowId: number | null;
 }
 
-const WORKER_BOOTSTRAP_URL = `${SORA_ORIGIN}/profile`;
+const WORKER_BOOTSTRAP_HASH = "save-sora-worker";
+const WORKER_BOOTSTRAP_URL = `${SORA_ORIGIN}/profile#${WORKER_BOOTSTRAP_HASH}`;
 const WORKER_LOAD_TIMEOUT_MS = 20_000;
 const WORKER_PREPARE_RETRY_LIMIT = 2;
 const WORKER_IDLE_EVICTION_MS = 10_000;
 const WORKER_TRACKING_KEY = "saveSoraHiddenWorkers";
+const WORKER_WINDOW_WIDTH = 420;
+const WORKER_WINDOW_HEIGHT = 760;
+const WORKER_WINDOW_LEFT = -10_000;
+const WORKER_WINDOW_TOP = 0;
 
 interface TrackedHiddenWorkers {
   tab_ids: number[];
@@ -19,8 +24,8 @@ interface TrackedHiddenWorkers {
 }
 
 /**
- * Dedicated hidden-tab worker pool. Workers are extension-owned tabs only and
- * stay pinned to a stable signed-in Sora page so requests execute from a known
+ * Dedicated hidden worker pool. Workers run in extension-owned offscreen popup
+ * windows on a stable signed-in Sora page so requests execute from a known
  * browser context instead of arbitrary user tabs.
  */
 export class HiddenTabPool {
@@ -183,34 +188,65 @@ export function shouldRetryWorkerTask(error: unknown): boolean {
     /Receiving end does not exist/i.test(message) ||
     /No tab with id/i.test(message) ||
     /message channel closed before a response was received/i.test(message) ||
+    /message channel is closed/i.test(message) ||
+    /back\/forward cache/i.test(message) ||
+    /bfcache/i.test(message) ||
     /The message port closed before a response was received/i.test(message) ||
     /Could not derive a Sora bearer token/i.test(message) ||
     /Could not derive the signed-in Sora viewer id/i.test(message) ||
     /Missing bearer authentication/i.test(message) ||
     /Frame with ID 0 is showing error page/i.test(message) ||
-    /Cannot access contents of url/i.test(message)
+    /Cannot access contents of url/i.test(message) ||
+    /hidden Sora worker tab was closed before it finished loading/i.test(message) ||
+    /Timed out waiting for the hidden Sora worker tab to finish loading/i.test(message)
   );
 }
 
 async function createDedicatedWorker(): Promise<HiddenWorker> {
-  const workerTab = await chrome.tabs.create({
-    active: false,
-    pinned: true,
-    url: WORKER_BOOTSTRAP_URL
-  });
+  let workerTab: chrome.tabs.Tab | null = null;
+  let workerWindowId: number | null = null;
+
+  try {
+    const workerWindow = await chrome.windows.create({
+      focused: false,
+      height: WORKER_WINDOW_HEIGHT,
+      left: WORKER_WINDOW_LEFT,
+      top: WORKER_WINDOW_TOP,
+      type: "popup",
+      url: WORKER_BOOTSTRAP_URL,
+      width: WORKER_WINDOW_WIDTH
+    });
+    workerWindowId = typeof workerWindow.id === "number" ? workerWindow.id : null;
+    workerTab = workerWindow.tabs?.find((tab) => typeof tab.id === "number") ?? null;
+    if (workerWindowId !== null) {
+      await chrome.windows.update(workerWindowId, { focused: false, state: "minimized" }).catch(() => undefined);
+    }
+  } catch (_error) {
+    workerWindowId = null;
+    workerTab = null;
+  }
+
+  if (!workerTab?.id) {
+    const fallbackTab = await chrome.tabs.create({
+      active: false,
+      pinned: false,
+      url: WORKER_BOOTSTRAP_URL
+    });
+    workerTab = fallbackTab;
+  }
 
   if (!workerTab.id) {
     throw new Error("Could not create a dedicated Sora worker tab.");
   }
 
   await waitForTabComplete(workerTab.id);
-  await chrome.tabs.update(workerTab.id, { active: false, autoDiscardable: false }).catch(() => undefined);
+  await chrome.tabs.update(workerTab.id, { active: false, autoDiscardable: false, pinned: false }).catch(() => undefined);
 
   return {
     busy: false,
     injected: false,
     tabId: workerTab.id,
-    windowId: null
+    windowId: workerWindowId
   };
 }
 
@@ -329,6 +365,14 @@ export function isReusableSoraWorkerTabUrl(url: string | undefined | null): bool
   return url === SORA_ORIGIN || url.startsWith(`${SORA_ORIGIN}/`);
 }
 
+function isWorkerBootstrapTabUrl(url: string | undefined | null): boolean {
+  if (typeof url !== "string" || !url.startsWith(`${SORA_ORIGIN}/profile`)) {
+    return false;
+  }
+
+  return url.includes(`#${WORKER_BOOTSTRAP_HASH}`);
+}
+
 export async function cleanupTrackedHiddenWorkers(): Promise<void> {
   const stored = await chrome.storage.session.get(WORKER_TRACKING_KEY).catch(() => ({} as Record<string, unknown>));
   const storedRecord = stored as Record<string, unknown>;
@@ -359,13 +403,12 @@ export async function cleanupTrackedHiddenWorkers(): Promise<void> {
 
   const allWindows = await chrome.windows.getAll({ populate: true }).catch(() => [] as chrome.windows.Window[]);
   for (const chromeWindow of allWindows) {
-    if (chromeWindow.type !== "popup" || chromeWindow.state !== "minimized" || typeof chromeWindow.id !== "number") {
+    if (chromeWindow.type !== "popup" || typeof chromeWindow.id !== "number") {
       continue;
     }
 
     const tabs = chromeWindow.tabs ?? [];
-    const isSoraPopupWorkerWindow =
-      tabs.length === 1 && typeof tabs[0]?.url === "string" && tabs[0].url.startsWith(WORKER_BOOTSTRAP_URL);
+    const isSoraPopupWorkerWindow = tabs.length === 1 && isWorkerBootstrapTabUrl(tabs[0]?.url);
     if (!isSoraPopupWorkerWindow) {
       continue;
     }

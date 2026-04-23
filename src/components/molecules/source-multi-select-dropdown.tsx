@@ -12,6 +12,7 @@ import { Checkbox } from "@components/atoms/checkbox";
 
 interface SourceMultiSelectDropdownProps {
   disabled?: boolean;
+  showCameos?: boolean;
   sourceSelections: SourceSelectionState;
   onToggleSource: (source: TopLevelSourceType, checked: boolean) => void;
 }
@@ -27,14 +28,19 @@ const SOURCE_OPTIONS: Array<{ icon: ReactNode; label: string; source: TopLevelSo
 
 export function SourceMultiSelectDropdown({
   disabled = false,
+  showCameos = true,
   onToggleSource,
   sourceSelections
 }: SourceMultiSelectDropdownProps) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const sourceOptions = useMemo(
+    () => SOURCE_OPTIONS.filter((option) => showCameos || option.source !== "characters"),
+    [showCameos]
+  );
   const selectedCount = useMemo(
-    () => SOURCE_OPTIONS.filter((option) => sourceSelections[option.source]).length,
-    [sourceSelections]
+    () => sourceOptions.filter((option) => sourceSelections[option.source]).length,
+    [sourceOptions, sourceSelections]
   );
 
   useEffect(() => {
@@ -76,7 +82,7 @@ export function SourceMultiSelectDropdown({
       </button>
       {open ? (
         <div className="ss-source-dropdown-menu">
-          {SOURCE_OPTIONS.map((option) => (
+          {sourceOptions.map((option) => (
             <div className="ss-source-dropdown-item" key={option.source}>
               <Checkbox
                 checked={sourceSelections[option.source]}

@@ -65,7 +65,8 @@ export function CreatorProfileManager({
 }
 
 function formatSourceCounts(profile: CreatorProfile): string {
-  const segments = profile.is_character_profile
+  const isSideCharacter = profile.account_type === "sideCharacter" || profile.is_character_profile;
+  const segments = isSideCharacter
     ? [
         typeof profile.appearance_count === "number" ? `${formatCount(profile.appearance_count)} appearances` : "",
         typeof profile.draft_count === "number" ? `${formatCount(profile.draft_count)} drafts` : ""

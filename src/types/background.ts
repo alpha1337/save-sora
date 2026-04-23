@@ -11,6 +11,16 @@ export interface RawBatchResponse {
   endpoint_key: string | null;
   next_cursor: string | null;
   next_offset: number | null;
+  request_diagnostics?: {
+    requested_at: string;
+    responded_at: string;
+    status: number;
+    attempts: number;
+    network_errors?: number;
+    cursor_in: string | null;
+    cursor_out: string | null;
+    rate_limited: boolean;
+  };
   done: boolean;
 }
 
@@ -56,6 +66,7 @@ export interface ResolveViewerIdentityResponse {
     user_id: string;
     username: string;
     display_name: string;
+    can_cameo: boolean;
   };
 }
 
@@ -73,10 +84,32 @@ export interface ResolveDraftReferenceResponse {
     video_id: string;
     share_url: string;
     playback_url?: string;
+    download_url?: string;
     thumbnail_url: string;
     estimated_size_bytes: number | null;
     skip_reason?: string;
   };
+}
+
+export interface GetSoraWatermarkTaskRequest {
+  type: "get-sora-watermark-task";
+  url: string;
+  uuid: string;
+}
+
+export interface GetSoraWatermarkTaskResponse {
+  ok: true;
+  payload: string;
+}
+
+export interface GetSoraWatermarkFreeVideoRequest {
+  type: "get-sora-watermark-free-video";
+  task_id: string;
+}
+
+export interface GetSoraWatermarkFreeVideoResponse {
+  ok: true;
+  payload: string | null;
 }
 
 export interface FetchCharacterAccountsRequest {
@@ -127,6 +160,8 @@ export type BackgroundRequest =
   | ResolveCreatorProfileRequest
   | ResolveViewerIdentityRequest
   | ResolveDraftReferenceRequest
+  | GetSoraWatermarkTaskRequest
+  | GetSoraWatermarkFreeVideoRequest
   | FetchCharacterAccountsRequest
   | FetchDetailHtmlRequest
   | CleanupHiddenWorkersRequest;
@@ -137,6 +172,8 @@ export type BackgroundResponse =
   | ResolveCreatorProfileResponse
   | ResolveViewerIdentityResponse
   | ResolveDraftReferenceResponse
+  | GetSoraWatermarkTaskResponse
+  | GetSoraWatermarkFreeVideoResponse
   | FetchCharacterAccountsResponse
   | FetchDetailHtmlResponse
   | CleanupHiddenWorkersResponse;

@@ -1,146 +1,126 @@
 import { openDB } from "idb";
-import type { AppSettings, DraftResolutionRecord, FetchJobCheckpoint, SessionMeta, VideoRow } from "types/domain";
+import type { AppSettings, CreatorProfile } from "types/domain";
 
 const SESSION_DB_NAME = "save-sora-v2-session";
-const SESSION_DB_VERSION = 2;
+const SESSION_DB_VERSION = 3;
+const SETTINGS_STORE = "settings";
+const SESSION_STATE_STORE = "session_state";
+const SETTINGS_KEY = "settings";
+const SESSION_STATE_KEY = "session_state";
+const DEFAULT_SETTINGS: AppSettings = {
+  archive_name_template: "save-sora-library",
+  enable_fetch_resume: false,
+  remember_fetch_date_choice: false,
+  remembered_date_range_preset: "all",
+  remembered_custom_date_start: "",
+  remembered_custom_date_end: ""
+};
 
-export interface SessionDbSnapshot {
-  settings: AppSettings | null;
-  session_meta: SessionMeta | null;
-  video_rows: VideoRow[];
-  download_queue: string[];
-  draft_resolution_records: DraftResolutionRecord[];
-  fetch_job_checkpoints: FetchJobCheckpoint[];
+export interface PersistedSessionState {
+  creator_profiles: CreatorProfile[];
+  selected_character_account_ids: string[];
 }
 
 /**
- * Resettable working-session storage used by the fullscreen app.
+ * Session DB persists user settings + lightweight saved profile/session data.
  */
 export async function openSessionDb() {
   return openDB(SESSION_DB_NAME, SESSION_DB_VERSION, {
     upgrade(database) {
-      if (!database.objectStoreNames.contains("settings")) {
-        database.createObjectStore("settings");
+      if (!database.objectStoreNames.contains(SETTINGS_STORE)) {
+        database.createObjectStore(SETTINGS_STORE);
       }
-      if (!database.objectStoreNames.contains("session_meta")) {
-        database.createObjectStore("session_meta");
-      }
-      if (!database.objectStoreNames.contains("video_rows")) {
-        database.createObjectStore("video_rows", { keyPath: "row_id" });
-      }
-      if (!database.objectStoreNames.contains("download_queue")) {
-        database.createObjectStore("download_queue", { keyPath: "video_id" });
-      }
-      if (!database.objectStoreNames.contains("draft_resolution_cache")) {
-        database.createObjectStore("draft_resolution_cache", { keyPath: "generation_id" });
-      }
-      if (!database.objectStoreNames.contains("fetch_job_checkpoints")) {
-        database.createObjectStore("fetch_job_checkpoints", { keyPath: "job_id" });
+      if (!database.objectStoreNames.contains(SESSION_STATE_STORE)) {
+        database.createObjectStore(SESSION_STATE_STORE);
       }
     }
   });
 }
 
-export async function loadSessionDbSnapshot(): Promise<SessionDbSnapshot> {
+export async function saveSettings(settings: AppSettings): Promise<void> {
   const database = await openSessionDb();
-  const [settings, sessionMeta, videoRows, queueRows, draftResolutionRows, fetchJobCheckpoints] = await Promise.all([
-    database.get("settings", "settings"),
-    database.get("session_meta", "session_meta"),
-    database.getAll("video_rows"),
-    database.getAll("download_queue"),
-    database.getAll("draft_resolution_cache"),
-    database.getAll("fetch_job_checkpoints")
-  ]);
+  await database.put(SETTINGS_STORE, normalizeSettings(settings), SETTINGS_KEY);
+}
+
+export async function loadSettings(): Promise<AppSettings | null> {
+  const database = await openSessionDb();
+  const rawSettings = await database.get(SETTINGS_STORE, SETTINGS_KEY);
+  if (!rawSettings || typeof rawSettings !== "object") {
+    return null;
+  }
+  return normalizeSettings(rawSettings as Partial<AppSettings>);
+}
+
+export async function saveSessionState(state: PersistedSessionState): Promise<void> {
+  const database = await openSessionDb();
+  await database.put(SESSION_STATE_STORE, {
+    creator_profiles: state.creator_profiles,
+    selected_character_account_ids: state.selected_character_account_ids
+  }, SESSION_STATE_KEY);
+}
+
+export async function loadSessionState(): Promise<PersistedSessionState | null> {
+  const database = await openSessionDb();
+  const rawState = await database.get(SESSION_STATE_STORE, SESSION_STATE_KEY);
+  if (!rawState || typeof rawState !== "object") {
+    return null;
+  }
+
+  const record = rawState as Record<string, unknown>;
+  const creatorProfiles = Array.isArray(record.creator_profiles)
+    ? record.creator_profiles.filter((entry): entry is CreatorProfile => isCreatorProfile(entry))
+    : [];
+  const selectedCharacterAccountIds = Array.isArray(record.selected_character_account_ids)
+    ? record.selected_character_account_ids.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+    : [];
 
   return {
-    settings: settings ?? null,
-    session_meta: sessionMeta ?? null,
-    video_rows: videoRows,
-    download_queue: queueRows.map((entry) => entry.video_id),
-    draft_resolution_records: draftResolutionRows,
-    fetch_job_checkpoints: fetchJobCheckpoints
+    creator_profiles: creatorProfiles,
+    selected_character_account_ids: [...new Set(selectedCharacterAccountIds)]
   };
 }
 
-export async function saveSettings(settings: AppSettings): Promise<void> {
-  const database = await openSessionDb();
-  await database.put("settings", settings, "settings");
-}
-
-export async function saveSessionMeta(sessionMeta: SessionMeta): Promise<void> {
-  const database = await openSessionDb();
-  await database.put("session_meta", sessionMeta, "session_meta");
-}
-
-export async function replaceVideoRows(rows: VideoRow[]): Promise<void> {
-  const database = await openSessionDb();
-  const transaction = database.transaction("video_rows", "readwrite");
-  await transaction.store.clear();
-  for (const row of rows) {
-    await transaction.store.put(row);
+function isCreatorProfile(value: unknown): value is CreatorProfile {
+  if (!value || typeof value !== "object") {
+    return false;
   }
-  await transaction.done;
-}
-
-export async function upsertVideoRows(rows: VideoRow[]): Promise<void> {
-  const database = await openSessionDb();
-  const transaction = database.transaction("video_rows", "readwrite");
-  for (const row of rows) {
-    await transaction.store.put(row);
-  }
-  await transaction.done;
-}
-
-export async function replaceDownloadQueue(videoIds: string[]): Promise<void> {
-  const database = await openSessionDb();
-  const transaction = database.transaction("download_queue", "readwrite");
-  await transaction.store.clear();
-  for (const videoId of videoIds) {
-    await transaction.store.put({ video_id: videoId });
-  }
-  await transaction.done;
-}
-
-export async function loadDraftResolutionMap(): Promise<Map<string, string>> {
-  const database = await openSessionDb();
-  const rows = await database.getAll("draft_resolution_cache");
-  return new Map(rows.map((row) => [row.generation_id, row.video_id]));
-}
-
-export async function saveDraftResolutionRecords(records: DraftResolutionRecord[]): Promise<void> {
-  const database = await openSessionDb();
-  const transaction = database.transaction("draft_resolution_cache", "readwrite");
-  for (const record of records) {
-    await transaction.store.put(record);
-  }
-  await transaction.done;
-}
-
-export async function loadFetchJobCheckpoints(): Promise<FetchJobCheckpoint[]> {
-  const database = await openSessionDb();
-  return database.getAll("fetch_job_checkpoints");
-}
-
-export async function saveFetchJobCheckpoint(checkpoint: FetchJobCheckpoint): Promise<void> {
-  const database = await openSessionDb();
-  await database.put("fetch_job_checkpoints", checkpoint);
-}
-
-export async function clearFetchJobCheckpoints(): Promise<void> {
-  const database = await openSessionDb();
-  await database.clear("fetch_job_checkpoints");
-}
-
-export async function clearWorkingSessionData(): Promise<void> {
-  const database = await openSessionDb();
-  const transaction = database.transaction(
-    ["session_meta", "video_rows", "download_queue", "draft_resolution_cache", "fetch_job_checkpoints"],
-    "readwrite"
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.profile_id === "string" &&
+    typeof record.user_id === "string" &&
+    typeof record.username === "string" &&
+    typeof record.display_name === "string" &&
+    typeof record.permalink === "string" &&
+    typeof record.is_character_profile === "boolean" &&
+    typeof record.created_at === "string"
   );
-  await transaction.objectStore("session_meta").clear();
-  await transaction.objectStore("video_rows").clear();
-  await transaction.objectStore("download_queue").clear();
-  await transaction.objectStore("draft_resolution_cache").clear();
-  await transaction.objectStore("fetch_job_checkpoints").clear();
-  await transaction.done;
+}
+
+function normalizeSettings(input: Partial<AppSettings>): AppSettings {
+  const archiveNameTemplate = typeof input.archive_name_template === "string" && input.archive_name_template.trim()
+    ? input.archive_name_template.trim()
+    : DEFAULT_SETTINGS.archive_name_template;
+  const rememberedDateRangePreset = input.remembered_date_range_preset === "24h" ||
+    input.remembered_date_range_preset === "7d" ||
+    input.remembered_date_range_preset === "1m" ||
+    input.remembered_date_range_preset === "3m" ||
+    input.remembered_date_range_preset === "all" ||
+    input.remembered_date_range_preset === "custom"
+    ? input.remembered_date_range_preset
+    : DEFAULT_SETTINGS.remembered_date_range_preset;
+  const rememberedCustomDateStart = typeof input.remembered_custom_date_start === "string"
+    ? input.remembered_custom_date_start.trim()
+    : "";
+  const rememberedCustomDateEnd = typeof input.remembered_custom_date_end === "string"
+    ? input.remembered_custom_date_end.trim()
+    : "";
+
+  return {
+    archive_name_template: archiveNameTemplate,
+    enable_fetch_resume: input.enable_fetch_resume === true,
+    remember_fetch_date_choice: input.remember_fetch_date_choice === true,
+    remembered_date_range_preset: rememberedDateRangePreset,
+    remembered_custom_date_start: rememberedCustomDateStart,
+    remembered_custom_date_end: rememberedCustomDateEnd
+  };
 }

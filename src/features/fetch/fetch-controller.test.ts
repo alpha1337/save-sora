@@ -5,6 +5,7 @@ import {
   buildFetchResumeStateFromCheckpoints,
   buildInitialFetchProgress,
   finalizeFetchJobCheckpoint,
+  getResultFlushPageSizeForSource,
   getNewStoredRowIds,
   shouldStopForNoGrowthPages,
   shouldStopForStalledCursor
@@ -106,6 +107,13 @@ describe("fetch-controller helpers", () => {
         3,
         100,
         "drafts"
+      )
+    ).toBe(false);
+    expect(
+      shouldStopForNoGrowthPages(
+        3,
+        100,
+        "likes"
       )
     ).toBe(false);
   });
@@ -232,5 +240,12 @@ describe("fetch-controller helpers", () => {
         knownSessionRowIds
       )
     ).toEqual(["characterAccountAppearances:s_new"]);
+  });
+
+  it("uses batched result flush sizes only for side-character appearance sources", () => {
+    expect(getResultFlushPageSizeForSource("sideCharacter")).toBe(24);
+    expect(getResultFlushPageSizeForSource("characterAccountAppearances")).toBe(24);
+    expect(getResultFlushPageSizeForSource("profile")).toBe(1);
+    expect(getResultFlushPageSizeForSource("drafts")).toBe(1);
   });
 });

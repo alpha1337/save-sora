@@ -1,0 +1,223 @@
+.ss-download-takeover {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: clamp(1rem, 4vw, 2.75rem);
+  overflow: hidden;
+  background: rgba(8, 14, 23, 0.96);
+}
+
+.ss-download-takeover-backdrop {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.ss-download-takeover-grid {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(77, 111, 141, 0.08) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(77, 111, 141, 0.08) 1px, transparent 1px);
+  background-size: 26px 26px;
+  mask-image: radial-gradient(circle at 50% 45%, rgba(0, 0, 0, 1), transparent 76%);
+}
+
+.ss-download-takeover-orb {
+  position: absolute;
+  border-radius: 9999px;
+  filter: blur(55px);
+  animation: ss-takeover-float 6.5s ease-in-out infinite;
+}
+
+.ss-download-takeover-orb--one {
+  width: min(58vw, 640px);
+  height: min(58vw, 640px);
+  top: -16%;
+  left: -10%;
+  background: radial-gradient(circle at 40% 40%, rgba(86, 196, 255, 0.42), rgba(10, 28, 53, 0));
+}
+
+.ss-download-takeover-orb--two {
+  width: min(52vw, 560px);
+  height: min(52vw, 560px);
+  right: -14%;
+  bottom: -24%;
+  background: radial-gradient(circle at 50% 50%, rgba(71, 225, 176, 0.35), rgba(8, 27, 30, 0));
+  animation-delay: 1.4s;
+}
+
+.ss-download-takeover-panel {
+  position: relative;
+  width: min(920px, 100%);
+  border: 1px solid rgba(125, 173, 201, 0.28);
+  border-radius: 24px;
+  background:
+    linear-gradient(135deg, rgba(11, 21, 36, 0.94), rgba(14, 31, 34, 0.92));
+  box-shadow:
+    0 0 0 1px rgba(176, 222, 255, 0.08) inset,
+    0 26px 80px rgba(0, 0, 0, 0.55);
+  padding: clamp(1.1rem, 2.4vw, 2rem);
+  display: grid;
+  gap: 0.95rem;
+}
+
+.ss-download-takeover-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: flex-start;
+}
+
+.ss-download-takeover-title-wrap {
+  display: flex;
+  gap: 0.75rem;
+  align-items: flex-start;
+}
+
+.ss-download-takeover-icon {
+  width: 2.15rem;
+  height: 2.15rem;
+  border-radius: 0.72rem;
+  border: 1px solid rgba(143, 194, 226, 0.35);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(214, 241, 255, 0.92);
+  background: linear-gradient(140deg, rgba(54, 115, 146, 0.5), rgba(31, 47, 77, 0.42));
+}
+
+.ss-download-takeover-title {
+  margin: 0;
+  font-size: clamp(1.3rem, 2.4vw, 1.95rem);
+  letter-spacing: 0.01em;
+}
+
+.ss-download-takeover-subtitle {
+  margin: 0.2rem 0 0;
+  color: rgba(216, 230, 243, 0.9);
+  font-size: clamp(0.92rem, 1.6vw, 1.03rem);
+}
+
+.ss-download-takeover-percent {
+  font-size: clamp(1.7rem, 3.8vw, 2.6rem);
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: rgba(226, 248, 255, 0.96);
+  text-shadow: 0 0 18px rgba(94, 188, 255, 0.24);
+}
+
+.ss-download-takeover-progress-track {
+  position: relative;
+  height: 14px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(130, 165, 191, 0.2);
+  border: 1px solid rgba(130, 165, 191, 0.3);
+}
+
+.ss-download-takeover-progress-fill {
+  height: 100%;
+  background:
+    linear-gradient(90deg, rgba(64, 201, 236, 0.95), rgba(83, 240, 179, 0.95));
+  transition: width 540ms ease-in-out;
+  position: relative;
+}
+
+.ss-download-takeover-progress-fill::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(100deg, transparent 0%, rgba(255, 255, 255, 0.52) 48%, transparent 100%);
+  transform: translateX(-100%);
+  animation: ss-takeover-shimmer 1.8s linear infinite;
+}
+
+.ss-download-takeover-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem 1rem;
+  color: rgba(217, 230, 238, 0.88);
+  font-size: 0.95rem;
+}
+
+.ss-download-takeover-message {
+  border: 1px solid rgba(132, 174, 205, 0.28);
+  border-radius: 12px;
+  background: linear-gradient(120deg, rgba(20, 37, 53, 0.66), rgba(15, 29, 32, 0.62));
+  padding: 0.8rem 0.95rem;
+  color: rgba(218, 240, 255, 0.95);
+  font-weight: 600;
+  animation: ss-takeover-message-in 320ms ease-out;
+}
+
+.ss-download-takeover-actions {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.ss-download-takeover-chevron {
+  transition: transform 220ms ease;
+}
+
+.ss-download-takeover-chevron.is-open {
+  transform: rotate(180deg);
+}
+
+.ss-download-takeover-details {
+  border: 1px solid rgba(132, 174, 205, 0.24);
+  border-radius: 14px;
+  padding: 0.65rem;
+  max-height: 34vh;
+  overflow: auto;
+  background: rgba(8, 20, 30, 0.62);
+  display: grid;
+  gap: 0.55rem;
+}
+
+.ss-download-takeover-worker {
+  padding: 0.55rem 0.65rem;
+  border-radius: 10px;
+  border: 1px solid rgba(127, 167, 198, 0.2);
+  background: rgba(15, 33, 47, 0.52);
+  display: grid;
+  gap: 0.22rem;
+}
+
+.ss-download-takeover-worker span,
+.ss-download-takeover-empty {
+  color: rgba(199, 216, 229, 0.88);
+  font-size: 0.9rem;
+}
+
+@keyframes ss-takeover-float {
+  0%, 100% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(0, -14px, 0) scale(1.04);
+  }
+}
+
+@keyframes ss-takeover-shimmer {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+@keyframes ss-takeover-message-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

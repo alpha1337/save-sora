@@ -1,9 +1,10 @@
-import type { MouseEvent, ReactElement } from "react";
-import { Clock3, ExternalLink, Eye, Heart, PlayCircle, Repeat2 } from "lucide-react";
+import { useEffect, useState, type MouseEvent, type ReactElement } from "react";
+import { Clock3, ExternalLink, Eye, Heart, MoreHorizontal, Pause, Play, Repeat2, X } from "lucide-react";
 import type { VideoRow } from "types/domain";
+import { Badge } from "@components/atoms/badge";
 import { Checkbox } from "@components/atoms/checkbox";
-import { formatBytes, formatCount, formatDate, formatDuration } from "@lib/utils/format-utils";
-import { resolvePreviewPlaybackUrl } from "@lib/utils/video-playback";
+import { formatBytes, formatCount, formatDuration } from "@lib/utils/format-utils";
+import { resolveHoverGifUrl, resolvePreviewPlaybackUrl } from "@lib/utils/video-playback";
 
 interface VideoMetadataCardProps {
   row: VideoRow;
@@ -15,7 +16,7 @@ interface VideoMetadataCardProps {
 }
 
 /**
- * Metadata-first card view with inline video preview controls.
+ * Simplified card with expandable details takeover.
  */
 export function VideoMetadataCard({
   onPreviewToggle,
@@ -25,34 +26,47 @@ export function VideoMetadataCard({
   selected,
   skipReasonLabel
 }: VideoMetadataCardProps) {
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [gifLoadFailed, setGifLoadFailed] = useState(false);
+
   const canSelect = Boolean(row.is_downloadable && row.video_id);
   const previewUrl = resolvePreviewPlaybackUrl(row);
+  const gifThumbnailUrl = resolveHoverGifUrl(row);
   const canPlay = Boolean(previewUrl);
+  const playableGifThumbnailUrl = !gifLoadFailed ? gifThumbnailUrl : "";
+  const activeThumbnailUrl = row.thumbnail_url;
   const characterLine = row.character_names.join(", ") || row.character_name || "";
   const cardTitle = resolveCardTitle(row);
+  const draftStatusBadge = resolveDraftStatusBadge(row);
+  const summaryDate = formatShortDate(row.published_at);
+  const relativePostedTime = formatRelativePostedTime(row.published_at);
   const fileSizeLabel = resolveFileSizeLabel(row);
-  const visibleThumbStats = [
+  const detailNarrativeBlocks = resolveNarrativeBlocks(row);
+  const detailMetaBlocks = [
+    { label: "File Size", value: fileSizeLabel || "-" },
+    ...(characterLine ? [{ label: "Character", value: characterLine }] : [])
+  ];
+  const durationThumbStat =
     row.duration_seconds && row.duration_seconds > 0
       ? { icon: <Clock3 aria-hidden="true" size={12} />, value: formatDuration(row.duration_seconds) }
-      : null,
-    row.view_count && row.view_count > 0
-      ? { icon: <Eye aria-hidden="true" size={12} />, value: formatCount(row.view_count) }
+      : null;
+  const visibleThumbStats = [
+    row.remix_count && row.remix_count > 0
+      ? { icon: <Repeat2 aria-hidden="true" size={12} />, value: formatCount(row.remix_count) }
       : null,
     row.like_count && row.like_count > 0
       ? { icon: <Heart aria-hidden="true" size={12} />, value: formatCount(row.like_count) }
       : null,
-    row.remix_count && row.remix_count > 0
-      ? { icon: <Repeat2 aria-hidden="true" size={12} />, value: formatCount(row.remix_count) }
+    row.view_count && row.view_count > 0
+      ? { icon: <Eye aria-hidden="true" size={12} />, value: formatCount(row.view_count) }
       : null
   ].filter((entry): entry is { icon: ReactElement; value: string } => Boolean(entry));
-  const visibleMetaEntries = [
-    { label: "Source", value: row.source_type },
-    { label: "Creator", value: row.creator_name },
-    { label: "Character", value: characterLine },
-    { label: "Published", value: formatDate(row.published_at) },
-    { label: "File Size", value: fileSizeLabel }
-  ].filter((entry) => isVisibleStatValue(entry.value));
-  const cardClasses = `ss-results-card${canSelect ? " is-selectable" : ""}`;
+  const hasOverlayDetails = detailNarrativeBlocks.length > 0 || detailMetaBlocks.length > 0;
+  const cardClasses = `ss-results-card${canSelect ? " is-selectable" : ""}${selected ? " is-selected" : ""}${detailsOpen ? " is-details-open" : ""}`;
+
+  useEffect(() => {
+    setGifLoadFailed(false);
+  }, [row.row_id, gifThumbnailUrl]);
 
   function handleCardClick(event: MouseEvent<HTMLElement>): void {
     if (!canSelect || shouldIgnoreCardToggle(event.target)) {
@@ -64,38 +78,67 @@ export function VideoMetadataCard({
 
   return (
     <article className={cardClasses} onClick={handleCardClick}>
-      <div className="ss-results-card-header">
-        <Checkbox
-          checked={selected}
-          disabled={!canSelect}
-          id={`row-${row.row_id}`}
-          label=""
-          ariaLabel={`Select ${cardTitle}`}
-          onCheckedChange={() => onToggleSelectedVideoId(row.video_id)}
-        />
-        <div className="ss-results-card-title-wrap">
-          <strong className="ss-results-card-title">{cardTitle}</strong>
-          {!row.is_downloadable && skipReasonLabel ? <div className="ss-muted">{skipReasonLabel}</div> : null}
-        </div>
-      </div>
-
       <div className="ss-results-media-shell">
         <div className="ss-results-thumb-shell">
+          <div className="ss-results-card-selection">
+            <Checkbox
+              checked={selected}
+              disabled={!canSelect}
+              id={`row-${row.row_id}`}
+              label=""
+              ariaLabel={`Select ${cardTitle}`}
+              onCheckedChange={() => onToggleSelectedVideoId(row.video_id)}
+            />
+          </div>
+          <button
+            aria-label="Open details"
+            className="ss-results-card-menu-button"
+            data-no-card-toggle="true"
+            onClick={() => setDetailsOpen(true)}
+            type="button"
+          >
+            <MoreHorizontal aria-hidden="true" size={16} />
+          </button>
+          {draftStatusBadge ? (
+            <div className="ss-results-thumb-status">
+              <Badge tone={draftStatusBadge.tone}>{draftStatusBadge.label}</Badge>
+            </div>
+          ) : null}
           {previewActive && canPlay ? (
             <video
               autoPlay
               className="ss-results-card-thumb"
-              controls
               playsInline
               poster={row.thumbnail_url || undefined}
               preload="metadata"
               src={previewUrl}
             />
-          ) : row.thumbnail_url ? (
-            <img alt={cardTitle} className="ss-results-card-thumb" loading="lazy" src={row.thumbnail_url} />
+          ) : playableGifThumbnailUrl ? (
+            <img
+              alt={cardTitle}
+              className="ss-results-card-thumb ss-results-card-thumb--gif"
+              loading="lazy"
+              onError={() => setGifLoadFailed(true)}
+              src={playableGifThumbnailUrl}
+            />
+          ) : activeThumbnailUrl ? (
+            <div
+              aria-label={cardTitle}
+              className="ss-results-card-thumb ss-results-card-thumb--image"
+              role="img"
+              style={{ backgroundImage: `url("${activeThumbnailUrl}")` }}
+            />
           ) : (
             <div className="ss-results-card-thumb ss-results-card-thumb--empty">No preview</div>
           )}
+          {durationThumbStat ? (
+            <div className="ss-results-thumb-duration">
+              <span className="ss-results-thumb-stat">
+                {durationThumbStat.icon}
+                {durationThumbStat.value}
+              </span>
+            </div>
+          ) : null}
           {visibleThumbStats.length > 0 ? (
             <div className="ss-results-thumb-stats">
               {visibleThumbStats.map((entry, index) => (
@@ -107,34 +150,77 @@ export function VideoMetadataCard({
             </div>
           ) : null}
         </div>
-        <div className="ss-results-media-actions">
-          <button
-            className="ss-media-action-button"
-            disabled={!canPlay}
-            onClick={() => onPreviewToggle(row.row_id)}
-            type="button"
-          >
-            <PlayCircle aria-hidden="true" size={16} />
-            {previewActive ? "Show thumbnail" : "Play preview"}
-          </button>
-          {row.detail_url ? (
-            <a className="ss-media-action-link" href={row.detail_url} rel="noreferrer" target="_blank">
-              <ExternalLink aria-hidden="true" size={14} />
-              Open in Sora
-            </a>
-          ) : null}
+      </div>
+
+      <div className="ss-results-card-body">
+        <button
+          aria-label={previewActive ? "Pause preview" : "Play preview"}
+          className="ss-results-card-play-button"
+          data-no-card-toggle="true"
+          disabled={!canPlay}
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            onPreviewToggle(row.row_id);
+          }}
+          type="button"
+        >
+          {previewActive ? <Pause aria-hidden="true" size={18} /> : <Play aria-hidden="true" size={18} />}
+        </button>
+        <div className="ss-results-card-body-main">
+          <strong className="ss-results-card-title">{cardTitle}</strong>
+          <div className="ss-results-card-meta-row ss-results-card-meta-row--stacked">
+            <span className="ss-results-card-date">{summaryDate || "-"}</span>
+            <span className="ss-results-card-relative-time">{relativePostedTime}</span>
+          </div>
+          {!row.is_downloadable && skipReasonLabel ? <div className="ss-results-card-subtitle">{skipReasonLabel}</div> : null}
         </div>
       </div>
 
-      {visibleMetaEntries.length > 0 ? (
-        <dl className="ss-results-card-meta">
-          {visibleMetaEntries.map((entry) => (
-            <div key={entry.label}>
-              <dt>{entry.label}</dt>
-              <dd>{entry.value}</dd>
-            </div>
-          ))}
-        </dl>
+      {detailsOpen ? (
+        <div className="ss-results-card-overlay" data-no-card-toggle="true">
+          <div className="ss-results-card-overlay-head">
+            <strong className="ss-results-card-overlay-title">Video details</strong>
+            <button
+              aria-label="Close details"
+              className="ss-results-card-overlay-close"
+              data-no-card-toggle="true"
+              onClick={() => setDetailsOpen(false)}
+              type="button"
+            >
+              <X aria-hidden="true" size={16} />
+            </button>
+          </div>
+
+          <div className="ss-results-card-overlay-scroll">
+            {detailNarrativeBlocks.map((detailBlock) => (
+              <section className="ss-results-card-overlay-text" key={detailBlock.label}>
+                <h4>{detailBlock.label}</h4>
+                <p>{detailBlock.value}</p>
+              </section>
+            ))}
+            {detailMetaBlocks.length > 0 ? (
+              <dl className="ss-results-card-meta ss-results-card-meta--overlay">
+                {detailMetaBlocks.map((detailMetaBlock) => (
+                  <div key={detailMetaBlock.label}>
+                    <dt>{detailMetaBlock.label}</dt>
+                    <dd>{detailMetaBlock.value}</dd>
+                  </div>
+                ))}
+              </dl>
+            ) : null}
+            {!hasOverlayDetails ? <p className="ss-results-card-overlay-empty">No prompt, caption, or character metadata.</p> : null}
+          </div>
+
+          <div className="ss-results-media-actions">
+            {row.detail_url ? (
+              <a className="ss-media-action-link ss-media-action-link--open" href={row.detail_url} rel="noreferrer" target="_blank">
+                <ExternalLink aria-hidden="true" />
+                Open in Sora
+              </a>
+            ) : null}
+          </div>
+        </div>
       ) : null}
     </article>
   );
@@ -153,14 +239,15 @@ function shouldIgnoreCardToggle(target: EventTarget | null): boolean {
 }
 
 function resolveCardTitle(row: VideoRow): string {
-  const candidates = [row.title, row.discovery_phrase, row.caption, row.description, row.prompt];
-  for (const candidate of candidates) {
-    const trimmed = candidate?.trim();
-    if (trimmed) {
-      return trimmed;
-    }
+  const videoId = row.video_id?.trim();
+  if (videoId) {
+    return videoId;
   }
-  return "Untitled video";
+  const rowId = row.row_id?.trim();
+  if (rowId) {
+    return rowId;
+  }
+  return "video";
 }
 
 function resolveFileSizeLabel(row: VideoRow): string {
@@ -171,7 +258,91 @@ function resolveFileSizeLabel(row: VideoRow): string {
   return formatBytes(row.estimated_size_bytes);
 }
 
-function isVisibleStatValue(value: string): boolean {
-  const trimmed = value.trim();
-  return Boolean(trimmed && trimmed !== "-" && trimmed !== "0");
+function resolveNarrativeBlocks(row: VideoRow): Array<{ label: "Caption" | "Prompt"; value: string }> {
+  const sections: Array<{ label: "Caption" | "Prompt"; value: string }> = [];
+  const caption = (row.caption || "").trim();
+  if (caption) {
+    sections.push({ label: "Caption", value: caption });
+  }
+
+  const prompt = (row.prompt || "").trim();
+  if (prompt) {
+    sections.push({ label: "Prompt", value: prompt });
+  }
+
+  return sections;
+}
+
+function resolveDraftStatusBadge(row: VideoRow): { label: "Draft" | "Shared"; tone: "warning" | "success" } | null {
+  if (!isDraftLikeSource(row.source_type)) {
+    return null;
+  }
+
+  if (/^s_[A-Za-z0-9_-]+$/.test(row.video_id)) {
+    return { label: "Shared", tone: "success" };
+  }
+  if (/^gen_[A-Za-z0-9_-]+$/.test(row.video_id)) {
+    return { label: "Draft", tone: "warning" };
+  }
+
+  return null;
+}
+
+function isDraftLikeSource(source: string): boolean {
+  return source === "drafts" || source === "characterDrafts" || source === "characterAccountDrafts";
+}
+
+function formatShortDate(value: string | null): string {
+  if (!value) {
+    return "-";
+  }
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return "-";
+  }
+
+  const month = String(parsed.getMonth() + 1).padStart(2, "0");
+  const day = String(parsed.getDate()).padStart(2, "0");
+  const year = String(parsed.getFullYear());
+  return `${month}/${day}/${year}`;
+}
+
+function formatRelativePostedTime(value: string | null): string {
+  if (!value) {
+    return "-";
+  }
+
+  const parsedMs = Date.parse(value);
+  if (!Number.isFinite(parsedMs)) {
+    return "-";
+  }
+
+  const elapsedSeconds = Math.max(0, Math.floor((Date.now() - parsedMs) / 1000));
+  if (elapsedSeconds < 60) {
+    return "Just now";
+  }
+
+  const elapsedMinutes = Math.floor(elapsedSeconds / 60);
+  if (elapsedMinutes < 60) {
+    return `${elapsedMinutes} ${elapsedMinutes === 1 ? "minute" : "minutes"} ago`;
+  }
+
+  const elapsedHours = Math.floor(elapsedMinutes / 60);
+  if (elapsedHours < 24) {
+    return `${elapsedHours} ${elapsedHours === 1 ? "hour" : "hours"} ago`;
+  }
+
+  const elapsedDays = Math.floor(elapsedHours / 24);
+  if (elapsedDays < 7) {
+    return `${elapsedDays} ${elapsedDays === 1 ? "day" : "days"} ago`;
+  }
+
+  if (elapsedDays < 30) {
+    const elapsedWeeks = Math.floor(elapsedDays / 7);
+    return `${elapsedWeeks} ${elapsedWeeks === 1 ? "week" : "weeks"} ago`;
+  }
+
+  const elapsedMonths = Math.floor(elapsedDays / 30);
+  return `${elapsedMonths} ${elapsedMonths === 1 ? "month" : "months"} ago`;
 }

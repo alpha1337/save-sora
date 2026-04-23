@@ -66,7 +66,6 @@ body {
 }
 
 .ss-summary-stat,
-.ss-results-card,
 .ss-list-row,
 .ss-checkbox-list-item,
 .ss-results-group-head,
@@ -98,6 +97,12 @@ body {
   background: linear-gradient(180deg, #cc241d, #9d0006);
   border-color: #9d0006;
   color: #fbf1c7;
+}
+
+.ss-button--warning {
+  background: linear-gradient(180deg, #d79921, #b57614);
+  border-color: #b57614;
+  color: #1d2021;
 }
 
 .ss-input,
@@ -144,6 +149,10 @@ body {
 
 .ss-toolbar .ss-input::placeholder {
   color: #665c54;
+}
+
+.ss-toolbar-control-label {
+  color: #d5c4a1;
 }
 
 .ss-select-content,
@@ -253,6 +262,10 @@ body {
   color: #f9f5d7;
 }
 
+.ss-results-card.is-selected::after {
+  background-image: linear-gradient(60deg, #fb4934, #fe8019, #fabd2f, #b8bb26, #8ec07c, #83a598, #d3869b, #fb4934);
+}
+
 .ss-download-progress-track {
   background: #504945;
 }
@@ -263,6 +276,20 @@ body {
 
 .ss-download-worker-meta {
   color: #ebdbb2;
+}
+
+.ss-fetch-progress-percent {
+  color: #f9f5d7;
+}
+
+.ss-download-progress-status {
+  color: #d5c4a1;
+}
+
+.ss-fetch-progress-pill {
+  background: rgba(80, 73, 69, 0.7);
+  border-color: #665c54;
+  color: #d5c4a1;
 }
 
 .ss-download-worker-progress-track {
@@ -287,13 +314,31 @@ body {
 }
 
 .ss-badge--success {
-  background: rgba(184, 187, 38, 0.2);
-  color: #ebdbb2;
+  background: #b8bb26;
+  color: #1d2021;
 }
 
 .ss-badge--warning {
-  background: rgba(250, 189, 47, 0.2);
-  color: #fbf1c7;
+  background: #fabd2f;
+  color: #1d2021;
+}
+
+.ss-results-thumb-status .ss-badge {
+  border-color: rgba(29, 32, 33, 0.38);
+  border-radius: 999px;
+  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.35);
+  font-weight: 700;
+  opacity: 1;
+}
+
+.ss-results-thumb-status .ss-badge--success {
+  background: #8ec07c;
+  color: #1d2021;
+}
+
+.ss-results-thumb-status .ss-badge--warning {
+  background: #fabd2f;
+  color: #1d2021;
 }
 
 .ss-button:focus-visible,

@@ -1,6 +1,6 @@
-const WATERMARK_PROVIDER_PATTERN = /watermark|soravdl|proxy\/video|download failed|gateway timeout/i;
 const CONTEXT_SEPARATOR = "Context:";
-const WATERMARK_FAILURE_MESSAGE = "Failed to remove watermark.";
+const SOURCE_DOWNLOAD_STATUS_PATTERN = /Source video download failed \(status\s+(\d{3})\)\.?/i;
+const SORA_NETWORK_ERROR_PATTERN = /Sora request failed due to a network error after\s+(\d+)\s+attempt/i;
 
 export function getUserFacingErrorMessage(error: unknown): string {
   const rawMessage = error instanceof Error ? error.message : String(error || "");
@@ -15,9 +15,13 @@ export function getUserFacingErrorMessage(error: unknown): string {
     return "Something went wrong. Please try again.";
   }
 
-  const watermarkStatusMatch = baseMessage.match(/download failed.*status\s+(\d{3})/i);
-  if (watermarkStatusMatch) {
-    return mapWatermarkRemovalStatus(Number(watermarkStatusMatch[1]), debugDetails);
+  if (/^fetch canceled\.?$/i.test(baseMessage) || /^fetch canceled\.? fetch canceled\.?$/i.test(baseMessage)) {
+    return "Fetch canceled.";
+  }
+
+  const sourceDownloadStatusMatch = baseMessage.match(SOURCE_DOWNLOAD_STATUS_PATTERN);
+  if (sourceDownloadStatusMatch) {
+    return mapSourceDownloadStatus(Number(sourceDownloadStatusMatch[1]), debugDetails);
   }
 
   const soraRequestStatusMatch = baseMessage.match(/Sora request failed with status\s+(\d{3})/i);
@@ -25,22 +29,33 @@ export function getUserFacingErrorMessage(error: unknown): string {
     return mapSoraRequestStatus(Number(soraRequestStatusMatch[1]), debugDetails);
   }
 
+  const soraNetworkErrorMatch = baseMessage.match(SORA_NETWORK_ERROR_PATTERN);
+  if (soraNetworkErrorMatch) {
+    return mapSoraNetworkError(Number(soraNetworkErrorMatch[1]), debugDetails);
+  }
+
   const draftShareStatusMatch = baseMessage.match(/Draft share creation failed with status\s+(\d{3})/i);
   if (draftShareStatusMatch) {
     return mapDraftShareStatus(Number(draftShareStatusMatch[1]), debugDetails);
   }
 
-  if (WATERMARK_PROVIDER_PATTERN.test(baseMessage)) {
-    return WATERMARK_FAILURE_MESSAGE;
-  }
-
   return appendDebugDetails(baseMessage, debugDetails);
 }
 
-function mapWatermarkRemovalStatus(status: number, contextDetails: string): string {
-  void status;
-  void contextDetails;
-  return WATERMARK_FAILURE_MESSAGE;
+function mapSourceDownloadStatus(status: number, contextDetails: string): string {
+  if (status === 400 || status === 404) {
+    return appendDebugDetails("The selected video file is unavailable.", contextDetails);
+  }
+  if (status === 401 || status === 403) {
+    return appendDebugDetails("Your Sora session is no longer authorized. Refresh Sora, sign in again, then retry.", contextDetails);
+  }
+  if (status === 429) {
+    return appendDebugDetails("Sora is rate-limiting file downloads right now. Please retry in a minute.", contextDetails);
+  }
+  if (status >= 500) {
+    return appendDebugDetails("Video download is temporarily unavailable. Please retry shortly.", contextDetails);
+  }
+  return appendDebugDetails(`Video download failed (status ${status}).`, contextDetails);
 }
 
 function mapSoraRequestStatus(status: number, contextDetails: string): string {
@@ -57,6 +72,15 @@ function mapSoraRequestStatus(status: number, contextDetails: string): string {
     return appendDebugDetails("Sora is temporarily unavailable. Please retry shortly.", contextDetails);
   }
   return appendDebugDetails(`Sora request failed (status ${status}).`, contextDetails);
+}
+
+function mapSoraNetworkError(attempts: number, contextDetails: string): string {
+  const safeAttempts = Number.isFinite(attempts) && attempts > 0 ? Math.floor(attempts) : 1;
+  const attemptLabel = safeAttempts === 1 ? "1 attempt" : `${safeAttempts} attempts`;
+  return appendDebugDetails(
+    `Sora could not be reached after ${attemptLabel}. Check your connection and retry.`,
+    contextDetails
+  );
 }
 
 function mapDraftShareStatus(status: number, contextDetails: string): string {

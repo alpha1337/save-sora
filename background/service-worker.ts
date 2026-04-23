@@ -5,15 +5,17 @@ import type {
   FetchBatchResponse,
   FetchCharacterAccountsResponse,
   FetchDetailHtmlResponse,
+  GetSoraWatermarkFreeVideoResponse,
+  GetSoraWatermarkTaskResponse,
   ResolveCreatorProfileResponse,
   ResolveDraftReferenceResponse,
   ResolveViewerIdentityResponse
 } from "../src/types/background";
 import { cleanupTrackedHiddenWorkers, HiddenTabPool } from "./hidden-tab-pool";
 
-const pool = new HiddenTabPool(1);
+const pool = new HiddenTabPool(3);
 const APP_URL = chrome.runtime.getURL("app.html");
-void cleanupTrackedHiddenWorkers();
+const startupCleanupPromise = cleanupTrackedHiddenWorkers();
 
 chrome.action.onClicked.addListener(() => {
   void openOrFocusAppTab();
@@ -55,6 +57,7 @@ async function openOrFocusAppTab(): Promise<void> {
 }
 
 async function handleRequest(request: BackgroundRequest): Promise<BackgroundResponse> {
+  await startupCleanupPromise.catch(() => undefined);
   switch (request.type) {
     case "fetch-batch":
       return { ok: true, payload: await runContentScriptRequest<FetchBatchResponse["payload"]>(request) };
@@ -72,6 +75,16 @@ async function handleRequest(request: BackgroundRequest): Promise<BackgroundResp
       return {
         ok: true,
         payload: await runContentScriptRequest<ResolveDraftReferenceResponse["payload"]>(request)
+      };
+    case "get-sora-watermark-task":
+      return {
+        ok: true,
+        payload: await runContentScriptRequest<GetSoraWatermarkTaskResponse["payload"]>(request)
+      };
+    case "get-sora-watermark-free-video":
+      return {
+        ok: true,
+        payload: await runContentScriptRequest<GetSoraWatermarkFreeVideoResponse["payload"]>(request)
       };
     case "fetch-character-accounts":
       return {

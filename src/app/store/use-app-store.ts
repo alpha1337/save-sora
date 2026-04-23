@@ -13,7 +13,11 @@ const defaultSourceSelectionState: SourceSelectionState = {
 
 const defaultSettings: AppSettings = {
   archive_name_template: "save-sora-library",
-  include_raw_payload_in_csv: true
+  enable_fetch_resume: false,
+  remember_fetch_date_choice: false,
+  remembered_date_range_preset: "all",
+  remembered_custom_date_start: "",
+  remembered_custom_date_end: ""
 };
 
 const defaultSessionMeta: SessionMeta = {
@@ -21,6 +25,7 @@ const defaultSessionMeta: SessionMeta = {
   query: "",
   exclude_session_creator_only: false,
   fetch_range_confirmed: false,
+  resume_fetch_available: false,
   sort_key: "published_newest",
   group_by: "none",
   date_range_preset: "all",
@@ -29,6 +34,7 @@ const defaultSessionMeta: SessionMeta = {
   selected_character_account_ids: [],
   viewer_user_id: "",
   viewer_username: "",
+  viewer_can_cameo: true,
   last_fetch_at: null
 };
 
@@ -150,6 +156,7 @@ export const useAppStore = create<AppStore>((set) => ({
         query: "",
         exclude_session_creator_only: false,
         fetch_range_confirmed: false,
+        resume_fetch_available: false,
         sort_key: "published_newest",
         group_by: "none",
         date_range_preset: "all",

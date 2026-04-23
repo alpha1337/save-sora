@@ -1,0 +1,7 @@
+src/components/molecules/results-toolbar.tsx:56:        <span className="ss-toolbar-control-label">Select</span>
+src/components/molecules/results-toolbar.tsx:75:        <span className="ss-toolbar-control-label">Sort By</span>
+src/components/molecules/results-toolbar.tsx:91:        <span className="ss-toolbar-control-label">Order</span>
+src/components/molecules/results-toolbar.tsx:103:        <span className="ss-toolbar-control-label">Group By</span>
+src/components/molecules/results-toolbar.tsx:118:        name="results-search"
+src/components/organisms/results-panel.test.tsx:61:  it("shows conditional sidebar toggle labels", () => {
+src/components/organisms/results-panel.test.tsx:131:  it("renders filter controls above the search bar", () => {

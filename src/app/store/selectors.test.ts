@@ -48,7 +48,6 @@ function createState(sortKey: VideoSortOption, rows: VideoRow[]): AppStoreState 
     error_message: "",
     settings: {
       archive_name_template: "save-sora-library",
-      include_raw_payload_in_csv: true
     },
     session_meta: {
       active_sources: {
@@ -173,6 +172,49 @@ describe("selectors", () => {
     ]);
   });
 
+  it("preserves likes feed order for published-date sorting when source ranks exist", () => {
+    const rows = [
+      createRow({
+        row_id: "likes:s_10",
+        video_id: "s_10",
+        source_type: "likes",
+        source_bucket: "liked",
+        source_order: 10,
+        title: "rank-10",
+        published_at: "2020-01-01T00:00:00.000Z"
+      }),
+      createRow({
+        row_id: "likes:s_2",
+        video_id: "s_2",
+        source_type: "likes",
+        source_bucket: "liked",
+        source_order: 2,
+        title: "rank-2",
+        published_at: "2020-01-01T00:00:00.000Z"
+      }),
+      createRow({
+        row_id: "likes:s_5",
+        video_id: "s_5",
+        source_type: "likes",
+        source_bucket: "liked",
+        source_order: 5,
+        title: "rank-5",
+        published_at: "2020-01-01T00:00:00.000Z"
+      })
+    ];
+
+    expect(selectFilteredVideoRows(createState("published_newest", rows)).map((row) => row.video_id)).toEqual([
+      "s_2",
+      "s_5",
+      "s_10"
+    ]);
+    expect(selectFilteredVideoRows(createState("published_oldest", rows)).map((row) => row.video_id)).toEqual([
+      "s_10",
+      "s_5",
+      "s_2"
+    ]);
+  });
+
   it("returns only visible downloadable ids for select-all behavior", () => {
     const rows = [
       createRow({ row_id: "profile:s_alpha", video_id: "s_alpha", title: "Alpha" }),
@@ -195,5 +237,40 @@ describe("selectors", () => {
     state.session_meta.exclude_session_creator_only = true;
 
     expect(selectFilteredVideoRows(state).map((row) => row.video_id)).toEqual(["s_other"]);
+  });
+
+  it("deduplicates creator self-cast overlaps and prefers creatorPublished rows", () => {
+    const rows = [
+      createRow({
+        row_id: "creatorCameos:s_overlap",
+        video_id: "s_overlap",
+        source_type: "creatorCameos",
+        source_bucket: "creators",
+        title: "Overlap cameo",
+        published_at: "2026-04-11T11:00:00.000Z"
+      }),
+      createRow({
+        row_id: "creatorPublished:s_overlap",
+        video_id: "s_overlap",
+        source_type: "creatorPublished",
+        source_bucket: "creators",
+        title: "Overlap published",
+        published_at: "2026-04-11T11:00:00.000Z"
+      }),
+      createRow({
+        row_id: "creatorCameos:s_cast_only",
+        video_id: "s_cast_only",
+        source_type: "creatorCameos",
+        source_bucket: "creators",
+        title: "Cast-only",
+        published_at: "2026-04-10T11:00:00.000Z"
+      })
+    ];
+    const state = createState("published_newest", rows);
+
+    const filteredRows = selectFilteredVideoRows(state);
+    expect(filteredRows.map((row) => row.video_id)).toEqual(["s_overlap", "s_cast_only"]);
+    expect(filteredRows[0].source_type).toBe("creatorPublished");
+    expect(filteredRows[1].source_type).toBe("creatorCameos");
   });
 });

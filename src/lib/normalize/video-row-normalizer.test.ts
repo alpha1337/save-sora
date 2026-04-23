@@ -22,6 +22,9 @@ describe("video-row-normalizer", () => {
           creator: { display_name: "Jordan Lee", username: "jordan" },
           character_name: "Astra",
           thumbnail_url: "https://videos.openai.com/thumb.jpg",
+          download_urls: {
+            watermark: "https://videos.openai.com/watermark-alpha123.mp4"
+          },
           created_at: "2026-04-10T18:00:00.000Z",
           metrics: { likes: 12, views: 44, shares: 3, reposts: 1, remixes: 2 }
         }
@@ -43,6 +46,27 @@ describe("video-row-normalizer", () => {
       skip_reason: ""
     });
     expect(row.row_id).toMatch(/^profile:/);
+  });
+
+  it("uses liked_at timestamps for likes rows to preserve web UI order semantics", () => {
+    const [row] = normalizePostRows(
+      "likes",
+      [
+        {
+          post: {
+            id: "s_like_order_1",
+            created_at: "2024-01-01T00:00:00.000Z"
+          },
+          liked_at: "2026-04-20T15:30:00.000Z",
+          __save_sora_like_rank: 12
+        }
+      ],
+      FETCHED_AT
+    );
+
+    expect(row.created_at).toBe("2026-04-20T15:30:00.000Z");
+    expect(row.published_at).toBe("2026-04-20T15:30:00.000Z");
+    expect(row.source_order).toBe(12);
   });
 
   it("prefers thumbnail_url over preview_image_url for card thumbnails to match 1.x", () => {
@@ -111,12 +135,61 @@ describe("video-row-normalizer", () => {
     expect(row.thumbnail_url).toBe("https://videos.openai.com/az/files/post-8/drvs/thumbnail/raw");
   });
 
-  it("marks multi-attachment posts as skipped", () => {
+  it("maps attachment gif encoding path for default animated card media", () => {
+    const [row] = normalizePostRows(
+      "profile",
+      [
+        {
+          id: "s_gifattach1",
+          attachments: [
+            {
+              encodings: {
+                gif: {
+                  path: "https://videos.openai.com/az/files/post-9/drvs/gif/raw"
+                }
+              }
+            }
+          ]
+        }
+      ],
+      FETCHED_AT
+    );
+
+    expect(row.gif_url).toBe("https://videos.openai.com/az/files/post-9/drvs/gif/raw");
+  });
+
+  it("keeps multi-attachment posts when a final shared video id is available", () => {
     const [row] = normalizePostRows(
       "profile",
       [
         {
           id: "s_multi123",
+          prompt: "A multi-shot post",
+          attachments: [
+            {
+              id: 1,
+              download_urls: {
+                watermark: "https://videos.openai.com/watermark-multi123.mp4"
+              }
+            },
+            { id: 2 }
+          ]
+        }
+      ],
+      FETCHED_AT
+    );
+
+    expect(row.video_id).toBe("s_multi123");
+    expect(row.is_downloadable).toBe(true);
+    expect(row.skip_reason).toBe("");
+  });
+
+  it("marks multi-attachment posts as skipped when no final shared video id is available", () => {
+    const [row] = normalizePostRows(
+      "profile",
+      [
+        {
+          id: "post_multi123",
           prompt: "A multi-shot post",
           attachments: [{ id: 1 }, { id: 2 }]
         }
@@ -236,6 +309,61 @@ describe("video-row-normalizer", () => {
     expect(row.row_id).toMatch(/^characterAccountAppearances:/);
     expect(row.character_names).toEqual(["Crystal Sparkle"]);
     expect(row.published_at).toBe(new Date(1775636349.345291 * 1000).toISOString());
+  });
+
+  it("uses top-level post.id as the video reference for side-character rows", () => {
+    const [row] = normalizePostRows(
+      "sideCharacter",
+      [
+        {
+          post: {
+            id: "s_side_top_level",
+            discovery_phrase: "top level id wins",
+            attachments: [{ downloadable_url: "https://videos.openai.com/raw.mp4" }]
+          },
+          ancestors: {
+            items: [
+              {
+                post: {
+                  id: "s_nested_ancestor"
+                }
+              }
+            ]
+          }
+        }
+      ],
+      FETCHED_AT
+    );
+
+    expect(row.video_id).toBe("s_side_top_level");
+    expect(row.row_id).toMatch(/^sideCharacter:/);
+  });
+
+  it("does not fall back to nested ids when side-character post.id is missing", () => {
+    const [row] = normalizePostRows(
+      "sideCharacter",
+      [
+        {
+          post: {
+            discovery_phrase: "missing top level id",
+            attachments: [{ downloadable_url: "https://videos.openai.com/raw.mp4" }]
+          },
+          ancestors: {
+            items: [
+              {
+                post: {
+                  id: "s_nested_ancestor"
+                }
+              }
+            ]
+          }
+        }
+      ],
+      FETCHED_AT
+    );
+
+    expect(row.video_id).toBe("");
+    expect(row.skip_reason).toBe("missing_video_id");
   });
 
   it("uses nested post text as the title fallback when discovery phrase is missing", () => {
@@ -518,6 +646,29 @@ describe("video-row-normalizer", () => {
     expect(row.video_id).toBe("gen_nested_prompt_123");
   });
 
+  it("keeps draft wrappers downloadable when playback url exists only on nested output", () => {
+    const [row] = normalizeDraftRows(
+      "characterAccountDrafts",
+      [
+        {
+          draft: {
+            id: "draft-2y7hm9",
+            output: {
+              id: "gen_01kb71jra0ed6a0ycawbbc880h",
+              downloadable_url: "https://videos.openai.com/az/files/00000000-8548-7283-8d14-1f78c1381d40/raw"
+            }
+          }
+        }
+      ],
+      FETCHED_AT
+    );
+
+    expect(row.video_id).toBe("gen_01kb71jra0ed6a0ycawbbc880h");
+    expect(row.playback_url).toBe("https://videos.openai.com/az/files/00000000-8548-7283-8d14-1f78c1381d40/raw");
+    expect(row.is_downloadable).toBe(true);
+    expect(row.skip_reason).toBe("");
+  });
+
   it("maps nested characterAccountDrafts metadata from draft payload fields", () => {
     const draftCreatedAtSeconds = 1763170088;
     const [row] = normalizeDraftRows(
@@ -666,6 +817,25 @@ describe("video-row-normalizer", () => {
       prompt: "Extended draft",
       playback_url: "https://videos.openai.com/extended-draft.mp4"
     });
+  });
+
+  it("omits edited draft snapshots addressed by /de/ detail urls", () => {
+    const rows = normalizeDraftRows(
+      "drafts",
+      [
+        {
+          detail_url: "https://sora.chatgpt.com/de/69e84716494481919a868253644fcd6a",
+          draft: {
+            id: "draft-2y7hm9",
+            kind: "sora_draft",
+            downloadable_url: "https://videos.openai.com/az/files/00000000-8548-7283-8d14-1f78c1381d40/raw"
+          }
+        }
+      ],
+      FETCHED_AT
+    );
+
+    expect(rows).toHaveLength(0);
   });
 
   it("filters out nested characterAccountDrafts content violations", () => {
@@ -833,6 +1003,7 @@ describe("video-row-normalizer", () => {
     expect(profile).toMatchObject({
       user_id: "ch_crystal",
       is_character_profile: true,
+      account_type: "sideCharacter",
       published_count: null,
       appearance_count: null
     });
@@ -894,6 +1065,54 @@ describe("video-row-normalizer", () => {
     expect(profile).toMatchObject({
       user_id: "ch_crystal",
       appearance_count: 143852,
+      is_character_profile: true
+    });
+  });
+
+  it("normalizes creator profiles when user fields are nested under profile", () => {
+    const profile = normalizeCreatorProfile(
+      {
+        profile: {
+          user_id: "user-yL6Ds2iYv0sIf3lMvvDpkpFB",
+          username: "binaryrot",
+          display_name: "Binary Rot",
+          post_count: 3016,
+          cameo_count: 2537
+        }
+      },
+      "https://sora.chatgpt.com/profile/binaryrot"
+    );
+
+    expect(profile).toMatchObject({
+      user_id: "user-yL6Ds2iYv0sIf3lMvvDpkpFB",
+      username: "binaryrot",
+      display_name: "Binary Rot",
+      published_count: 3016,
+      appearance_count: 2537,
+      account_type: "creator",
+      is_character_profile: false
+    });
+  });
+
+  it("classifies side characters when owner profile identity differs from the profile identity", () => {
+    const profile = normalizeCreatorProfile(
+      {
+        user_id: "user_owner_like",
+        username: "crystal.party",
+        display_name: "Crystal Sparkle",
+        owner_profile: {
+          user_id: "user-notbobby",
+          username: "notbobbylee"
+        },
+        post_count: 1086,
+        cameo_count: 143852
+      },
+      "https://sora.chatgpt.com/profile/crystal.party"
+    );
+
+    expect(profile).toMatchObject({
+      username: "crystal.party",
+      account_type: "sideCharacter",
       is_character_profile: true
     });
   });

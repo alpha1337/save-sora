@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { VideoRow } from "types/domain";
 import { VideoMetadataCard } from "./video-metadata-card";
 
@@ -8,7 +8,7 @@ const baseRow: VideoRow = {
   video_id: "s_123",
   source_type: "profile",
   source_bucket: "published",
-  title: "",
+  title: "Auto title should not display",
   prompt: "Prompt text",
   discovery_phrase: "Discovery title",
   description: "Description text",
@@ -20,7 +20,7 @@ const baseRow: VideoRow = {
   character_names: [],
   category_tags: [],
   created_at: null,
-  published_at: null,
+  published_at: "2026-04-21T12:00:00.000Z",
   like_count: null,
   view_count: null,
   share_count: null,
@@ -40,7 +40,31 @@ const baseRow: VideoRow = {
 };
 
 describe("VideoMetadataCard", () => {
-  it("uses discovery phrase as the first title fallback and hides raw video id + downloadable badge", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("uses video id as the default card title", () => {
+    const { container } = render(
+      <VideoMetadataCard
+        onPreviewToggle={vi.fn()}
+        onToggleSelectedVideoId={vi.fn()}
+        previewActive={false}
+        row={baseRow}
+        selected={false}
+        skipReasonLabel=""
+      />
+    );
+
+    expect(screen.getByText("s_123")).toBeInTheDocument();
+    expect(screen.queryByText("creator")).not.toBeInTheDocument();
+    expect(screen.getByText("04/21/2026")).toBeInTheDocument();
+    expect(container.querySelector(".ss-results-card-filesize")).toBeNull();
+    expect(screen.queryByText("Discovery title")).not.toBeInTheDocument();
+    expect(screen.queryByText("Auto title should not display")).not.toBeInTheDocument();
+  });
+
+  it("does not render creator handles in the card summary section", () => {
     render(
       <VideoMetadataCard
         onPreviewToggle={vi.fn()}
@@ -52,27 +76,110 @@ describe("VideoMetadataCard", () => {
       />
     );
 
-    expect(screen.getByText("Discovery title")).toBeInTheDocument();
-    expect(screen.queryByText("s_123")).not.toBeInTheDocument();
-    expect(screen.queryByText("downloadable")).not.toBeInTheDocument();
+    expect(screen.queryByText("Creator")).not.toBeInTheDocument();
+    expect(screen.queryByText("creator")).not.toBeInTheDocument();
+    expect(screen.getByText("04/21/2026")).toBeInTheDocument();
   });
 
-  it("shows file size in card metadata and keeps duration in thumbnail stats instead of card body", () => {
+  it("shows relative posted timestamps using the expected thresholds", () => {
+    vi.useFakeTimers();
+    const now = new Date("2026-04-22T12:00:00.000Z");
+    vi.setSystemTime(now);
+
+    const scenarios = [
+      { postedAt: "2026-04-22T11:59:40.000Z", expected: "Just now" },
+      { postedAt: "2026-04-22T11:50:00.000Z", expected: "10 minutes ago" },
+      { postedAt: "2026-04-22T09:00:00.000Z", expected: "3 hours ago" },
+      { postedAt: "2026-04-20T12:00:00.000Z", expected: "2 days ago" },
+      { postedAt: "2026-04-01T12:00:00.000Z", expected: "3 weeks ago" },
+      { postedAt: "2026-01-22T12:00:00.000Z", expected: "3 months ago" }
+    ];
+
+    for (const scenario of scenarios) {
+      const { unmount } = render(
+        <VideoMetadataCard
+          onPreviewToggle={vi.fn()}
+          onToggleSelectedVideoId={vi.fn()}
+          previewActive={false}
+          row={{ ...baseRow, published_at: scenario.postedAt }}
+          selected={false}
+          skipReasonLabel=""
+        />
+      );
+
+      expect(screen.getByText(scenario.expected)).toBeInTheDocument();
+      unmount();
+    }
+  });
+
+  it("shows a Draft badge when a draft row still uses a gen_* id", () => {
     render(
       <VideoMetadataCard
         onPreviewToggle={vi.fn()}
         onToggleSelectedVideoId={vi.fn()}
         previewActive={false}
-        row={{ ...baseRow, estimated_size_bytes: 1024 * 1024 * 5, duration_seconds: 14, view_count: 333 }}
+        row={{
+          ...baseRow,
+          source_type: "drafts",
+          source_bucket: "drafts",
+          video_id: "gen_alpha123"
+        }}
         selected={false}
         skipReasonLabel=""
       />
     );
 
-    expect(screen.getByText("File Size")).toBeInTheDocument();
-    expect(screen.getByText("5.00 MB")).toBeInTheDocument();
-    expect(screen.queryByText("Duration")).not.toBeInTheDocument();
-    expect(screen.queryByText("Views")).not.toBeInTheDocument();
+    expect(screen.getByText("Draft")).toBeInTheDocument();
+    expect(screen.queryByText("Shared")).not.toBeInTheDocument();
+  });
+
+  it("shows a Shared badge when a draft row has a shared s_* id", () => {
+    render(
+      <VideoMetadataCard
+        onPreviewToggle={vi.fn()}
+        onToggleSelectedVideoId={vi.fn()}
+        previewActive={false}
+        row={{
+          ...baseRow,
+          source_type: "characterAccountDrafts",
+          source_bucket: "character-account",
+          video_id: "s_shared123"
+        }}
+        selected={false}
+        skipReasonLabel=""
+      />
+    );
+
+    expect(screen.getByText("Shared")).toBeInTheDocument();
+    expect(screen.queryByText("Draft")).not.toBeInTheDocument();
+  });
+
+  it("renders duration in bottom-left and keeps remixes/likes/views in bottom-right stack order", () => {
+    const { container } = render(
+      <VideoMetadataCard
+        onPreviewToggle={vi.fn()}
+        onToggleSelectedVideoId={vi.fn()}
+        previewActive={false}
+        row={{
+          ...baseRow,
+          duration_seconds: 14,
+          remix_count: 7,
+          like_count: 3,
+          view_count: 123,
+          thumbnail_url: "https://example.com/thumb.jpg"
+        }}
+        selected={false}
+        skipReasonLabel=""
+      />
+    );
+
+    const durationNode = container.querySelector(".ss-results-thumb-duration .ss-results-thumb-stat");
+    expect(durationNode?.textContent?.trim()).toBe("0:14");
+
+    const stackNodes = [...container.querySelectorAll(".ss-results-thumb-stats .ss-results-thumb-stat")].map((node) =>
+      node.textContent?.trim()
+    );
+    expect(stackNodes).toEqual(["7", "3", "123"]);
   });
 
   it("shows calculating file size for unresolved draft rows", () => {
@@ -94,38 +201,9 @@ describe("VideoMetadataCard", () => {
       />
     );
 
+    fireEvent.click(screen.getByRole("button", { name: "Open details" }));
     expect(screen.getByText("File Size")).toBeInTheDocument();
     expect(screen.getByText("Calculating...")).toBeInTheDocument();
-  });
-
-  it("hides zero or null stats from thumbnail and metadata", () => {
-    const { container } = render(
-      <VideoMetadataCard
-        onPreviewToggle={vi.fn()}
-        onToggleSelectedVideoId={vi.fn()}
-        previewActive={false}
-        row={{
-          ...baseRow,
-          source_type: "",
-          creator_name: "",
-          character_name: "",
-          character_names: [],
-          published_at: null,
-          duration_seconds: 0,
-          view_count: 0,
-          like_count: null,
-          remix_count: 0,
-          estimated_size_bytes: null
-        }}
-        selected={false}
-        skipReasonLabel=""
-      />
-    );
-
-    expect(container.querySelectorAll(".ss-results-thumb-stat")).toHaveLength(0);
-    expect(screen.queryByText("File Size")).not.toBeInTheDocument();
-    expect(screen.queryByText("Published")).not.toBeInTheDocument();
-    expect(screen.queryByText("-")).not.toBeInTheDocument();
   });
 
   it("renders video only for active preview state", () => {
@@ -147,6 +225,7 @@ describe("VideoMetadataCard", () => {
 
     expect(document.querySelector("video")).toBeNull();
     expect(screen.getByRole("img")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Play preview" })).toBeInTheDocument();
 
     rerender(
       <VideoMetadataCard
@@ -160,9 +239,141 @@ describe("VideoMetadataCard", () => {
     );
 
     expect(document.querySelector("video")).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Pause preview" })).toBeInTheDocument();
   });
 
-  it("toggles selection when clicking card surface but not action controls", () => {
+  it("uses gif_url when raw payload is stripped", () => {
+    const gifUrl = "https://videos.openai.com/az/files/strip-safe-gif/raw";
+    const rowWithGifUrl = {
+      ...baseRow,
+      gif_url: gifUrl,
+      thumbnail_url: "https://example.com/thumb.jpg",
+      raw_payload_json: ""
+    };
+
+    render(
+      <VideoMetadataCard
+        onPreviewToggle={vi.fn()}
+        onToggleSelectedVideoId={vi.fn()}
+        previewActive={false}
+        row={rowWithGifUrl}
+        selected={false}
+        skipReasonLabel=""
+      />
+    );
+
+    const thumbnail = screen.getByRole("img");
+    expect(thumbnail).toHaveClass("ss-results-card-thumb--gif");
+    expect((thumbnail as HTMLImageElement).src).toContain(gifUrl);
+  });
+
+  it("does not use gif encoding path from items payload", () => {
+    const gifUrl = "https://videos.openai.com/az/files/hover-gif/raw";
+    const rowWithHoverGif = {
+      ...baseRow,
+      thumbnail_url: "https://example.com/thumb.jpg",
+      raw_payload_json: JSON.stringify({
+        items: [
+          {
+            post: {
+              attachments: [
+                {
+                  encodings: {
+                    gif: {
+                      path: gifUrl
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      })
+    };
+
+    render(
+      <VideoMetadataCard
+        onPreviewToggle={vi.fn()}
+        onToggleSelectedVideoId={vi.fn()}
+        previewActive={false}
+        row={rowWithHoverGif}
+        selected={false}
+        skipReasonLabel=""
+      />
+    );
+
+    const thumbnail = screen.getByRole("img");
+    expect(thumbnail).toHaveClass("ss-results-card-thumb--image");
+    expect(thumbnail.getAttribute("style")).toContain("thumb.jpg");
+  });
+
+  it("uses gif encoding path by default from top-level post attachment", () => {
+    const gifUrl = "https://videos.openai.com/az/files/post-level-gif/raw";
+    const rowWithTopLevelPostGif = {
+      ...baseRow,
+      thumbnail_url: "https://example.com/thumb.jpg",
+      raw_payload_json: JSON.stringify({
+        post: {
+          attachments: [
+            {
+              encodings: {
+                gif: {
+                  path: gifUrl
+                }
+              }
+            }
+          ]
+        }
+      })
+    };
+
+    render(
+      <VideoMetadataCard
+        onPreviewToggle={vi.fn()}
+        onToggleSelectedVideoId={vi.fn()}
+        previewActive={false}
+        row={rowWithTopLevelPostGif}
+        selected={false}
+        skipReasonLabel=""
+      />
+    );
+
+    const thumbnail = screen.getByRole("img");
+    expect(thumbnail).toHaveClass("ss-results-card-thumb--gif");
+    expect((thumbnail as HTMLImageElement).src).toContain(gifUrl);
+  });
+
+  it("opens and closes full-card details takeover from the three-dot button", () => {
+    render(
+      <VideoMetadataCard
+        onPreviewToggle={vi.fn()}
+        onToggleSelectedVideoId={vi.fn()}
+        previewActive={false}
+        row={baseRow}
+        selected={false}
+        skipReasonLabel=""
+      />
+    );
+
+    expect(screen.queryByText("Prompt")).not.toBeInTheDocument();
+    expect(screen.queryByText("Caption")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Open details" }));
+    expect(screen.getByText("Prompt")).toBeInTheDocument();
+    expect(screen.getByText("Prompt text")).toBeInTheDocument();
+    expect(screen.getByText("Caption")).toBeInTheDocument();
+    expect(screen.getByText("Caption text")).toBeInTheDocument();
+    expect(screen.getByText("File Size")).toBeInTheDocument();
+    expect(screen.getByText("-")).toBeInTheDocument();
+    expect(screen.queryByText("Source")).not.toBeInTheDocument();
+    expect(screen.queryByText("Duration")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Close details" }));
+    expect(screen.queryByText("Prompt")).not.toBeInTheDocument();
+    expect(screen.queryByText("Caption")).not.toBeInTheDocument();
+  });
+
+  it("toggles selection on card click but not on details/actions", () => {
     const onToggleSelectedVideoId = vi.fn();
     const onPreviewToggle = vi.fn();
 
@@ -187,6 +398,13 @@ describe("VideoMetadataCard", () => {
     fireEvent.click(screen.getByRole("button", { name: "Play preview" }));
     expect(onPreviewToggle).toHaveBeenCalledTimes(1);
     expect(onToggleSelectedVideoId).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Open details" }));
+    expect(onToggleSelectedVideoId).toHaveBeenCalledTimes(1);
+
+    const overlayActions = document.querySelector(".ss-results-card-overlay .ss-results-media-actions");
+    expect(overlayActions?.querySelectorAll("button").length).toBe(0);
+    expect(overlayActions?.querySelectorAll("a").length).toBe(1);
 
     fireEvent.click(screen.getByRole("link", { name: "Open in Sora" }));
     expect(onToggleSelectedVideoId).toHaveBeenCalledTimes(1);

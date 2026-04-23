@@ -52,6 +52,66 @@ export function ResultsToolbar({
 
   return (
     <div className="ss-toolbar">
+      <div className="ss-toolbar-control">
+        <span className="ss-toolbar-control-label">Select</span>
+        <Select
+          aria-label="Selection preset"
+          disabled={selectableRowCount === 0}
+          onValueChange={(value) => {
+            const preset = value as "all_visible" | "mine" | "others" | "none";
+            setSelectionPreset(preset);
+            onSelectionPresetChange(preset);
+          }}
+          options={[
+            { label: "Select all videos", value: "all_visible" },
+            { label: "Videos made by you", value: "mine" },
+            { label: "Videos made by others", value: "others" },
+            { label: "Select none", value: "none" }
+          ]}
+          value={selectionPreset}
+        />
+      </div>
+      <div className="ss-toolbar-control">
+        <span className="ss-toolbar-control-label">Sort By</span>
+        <Select
+          aria-label="Sort Field"
+          onValueChange={(value) => onSortKeyChange(buildSortKey(value as SortField, direction))}
+          options={[
+            { label: "Published date", value: "published" },
+            { label: "Created date", value: "created" },
+            { label: "Title", value: "title" },
+            { label: "Views", value: "views" },
+            { label: "Likes", value: "likes" },
+            { label: "Remixes", value: "remixes" }
+          ]}
+          value={field}
+        />
+      </div>
+      <div className="ss-toolbar-control">
+        <span className="ss-toolbar-control-label">Order</span>
+        <Select
+          aria-label="Sort Direction"
+          onValueChange={(value) => onSortKeyChange(buildSortKey(field, value as SortDirection))}
+          options={[
+            { label: "Ascending", value: "asc" },
+            { label: "Descending", value: "desc" }
+          ]}
+          value={direction}
+        />
+      </div>
+      <div className="ss-toolbar-control">
+        <span className="ss-toolbar-control-label">Group By</span>
+        <Select
+          aria-label="Group Session Results"
+          onValueChange={(value) => onGroupByChange(value as GroupByOption)}
+          options={[
+            { label: "No grouping", value: "none" },
+            { label: "Group by creator", value: "creator" },
+            { label: "Group by character", value: "character" }
+          ]}
+          value={groupBy}
+        />
+      </div>
       <Input
         aria-label="Search Session Results"
         autoComplete="off"
@@ -60,54 +120,6 @@ export function ResultsToolbar({
         placeholder="Search title, prompt, creator, character…"
         spellCheck={false}
         value={query}
-      />
-      <Select
-        aria-label="Selection preset"
-        disabled={selectableRowCount === 0}
-        onValueChange={(value) => {
-          const preset = value as "all_visible" | "mine" | "others" | "none";
-          setSelectionPreset(preset);
-          onSelectionPresetChange(preset);
-        }}
-        options={[
-          { label: "Select all videos", value: "all_visible" },
-          { label: "Videos made by you", value: "mine" },
-          { label: "Videos made by others", value: "others" },
-          { label: "Select none", value: "none" }
-        ]}
-        value={selectionPreset}
-      />
-      <Select
-        aria-label="Sort Field"
-        onValueChange={(value) => onSortKeyChange(buildSortKey(value as SortField, direction))}
-        options={[
-          { label: "Published date", value: "published" },
-          { label: "Created date", value: "created" },
-          { label: "Title", value: "title" },
-          { label: "Views", value: "views" },
-          { label: "Likes", value: "likes" },
-          { label: "Remixes", value: "remixes" }
-        ]}
-        value={field}
-      />
-      <Select
-        aria-label="Sort Direction"
-        onValueChange={(value) => onSortKeyChange(buildSortKey(field, value as SortDirection))}
-        options={[
-          { label: "Ascending", value: "asc" },
-          { label: "Descending", value: "desc" }
-        ]}
-        value={direction}
-      />
-      <Select
-        aria-label="Group Session Results"
-        onValueChange={(value) => onGroupByChange(value as GroupByOption)}
-        options={[
-          { label: "No grouping", value: "none" },
-          { label: "Group by creator", value: "creator" },
-          { label: "Group by character", value: "character" }
-        ]}
-        value={groupBy}
       />
     </div>
   );

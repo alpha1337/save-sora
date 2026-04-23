@@ -105,34 +105,48 @@ export function extractThumbnailUrlFromAnyRecord(record: Record<string, unknown>
 }
 
 export function extractPlaybackUrlFromAnyRecord(record: Record<string, unknown>): string {
-  const directPlayback = pickFirstString([
-    record.resolved_playback_url,
-    record.resolvedPlaybackUrl,
-    record.downloadable_url,
-    record.downloadableUrl
-  ]);
-  if (directPlayback) {
-    return directPlayback;
-  }
-
   const directDownloadUrls = record.download_urls && typeof record.download_urls === "object"
     ? record.download_urls as Record<string, unknown>
     : null;
   const directDownloadUrlsCamel = record.downloadUrls && typeof record.downloadUrls === "object"
     ? record.downloadUrls as Record<string, unknown>
     : null;
-  const directDownloadPlayback = pickFirstString([
-    directDownloadUrls?.no_watermark,
-    directDownloadUrlsCamel?.no_watermark,
+  const directPlayback = pickFirstOpenAiVideoUrl([
     directDownloadUrls?.watermark,
-    directDownloadUrlsCamel?.watermark,
-    directDownloadUrls?.endcard_watermark,
-    directDownloadUrlsCamel?.endcard_watermark
+    directDownloadUrlsCamel?.watermark
   ]);
-  if (directDownloadPlayback) {
-    return directDownloadPlayback;
+  if (directPlayback) {
+    return directPlayback;
   }
 
+  const attachments = getNestedObjectArrays(record);
+  for (const attachment of attachments) {
+    const attachmentDownloadUrls = attachment.download_urls && typeof attachment.download_urls === "object"
+      ? attachment.download_urls as Record<string, unknown>
+      : null;
+    const attachmentDownloadUrlsCamel = attachment.downloadUrls && typeof attachment.downloadUrls === "object"
+      ? attachment.downloadUrls as Record<string, unknown>
+      : null;
+
+    const attachmentPlayback = pickFirstOpenAiVideoUrl([
+      attachmentDownloadUrls?.watermark,
+      attachmentDownloadUrlsCamel?.watermark,
+    ]);
+    if (attachmentPlayback) {
+      return attachmentPlayback;
+    }
+  }
+
+  return "";
+}
+
+export function extractDownloadUrlFromAnyRecord(record: Record<string, unknown>): string {
+  const directDownloadUrls = record.download_urls && typeof record.download_urls === "object"
+    ? record.download_urls as Record<string, unknown>
+    : null;
+  const directDownloadUrlsCamel = record.downloadUrls && typeof record.downloadUrls === "object"
+    ? record.downloadUrls as Record<string, unknown>
+    : null;
   const directEncodings = record.encodings && typeof record.encodings === "object"
     ? record.encodings as Record<string, unknown>
     : null;
@@ -148,9 +162,26 @@ export function extractPlaybackUrlFromAnyRecord(record: Record<string, unknown>)
   const directLd = directEncodings?.ld && typeof directEncodings.ld === "object"
     ? directEncodings.ld as Record<string, unknown>
     : null;
-  const directEncodingPlayback = pickFirstString([directSourceWm?.path, directSource?.path, directMd?.path, directLd?.path]);
-  if (directEncodingPlayback) {
-    return directEncodingPlayback;
+  const directDownload = pickFirstOpenAiVideoUrl([
+    directDownloadUrls?.no_watermark,
+    directDownloadUrlsCamel?.no_watermark,
+    directDownloadUrlsCamel?.noWatermark,
+    directDownloadUrls?.watermark,
+    directDownloadUrlsCamel?.watermark,
+    record.resolved_download_url,
+    record.resolvedDownloadUrl,
+    record.resolved_playback_url,
+    record.resolvedPlaybackUrl,
+    record.downloadable_url,
+    record.downloadableUrl,
+    directSourceWm?.path,
+    directSource?.path,
+    record.url,
+    directMd?.path,
+    directLd?.path
+  ]);
+  if (directDownload) {
+    return directDownload;
   }
 
   const attachments = getNestedObjectArrays(record);
@@ -176,30 +207,30 @@ export function extractPlaybackUrlFromAnyRecord(record: Record<string, unknown>)
     const attachmentLd = attachmentEncodings?.ld && typeof attachmentEncodings.ld === "object"
       ? attachmentEncodings.ld as Record<string, unknown>
       : null;
-
-    const attachmentPlayback = pickFirstString([
+    const attachmentDownload = pickFirstOpenAiVideoUrl([
+      attachmentDownloadUrls?.no_watermark,
+      attachmentDownloadUrlsCamel?.no_watermark,
+      attachmentDownloadUrlsCamel?.noWatermark,
+      attachmentDownloadUrls?.watermark,
+      attachmentDownloadUrlsCamel?.watermark,
+      attachment.resolved_download_url,
+      attachment.resolvedDownloadUrl,
       attachment.resolved_playback_url,
       attachment.resolvedPlaybackUrl,
       attachment.downloadable_url,
       attachment.downloadableUrl,
-      attachmentDownloadUrls?.no_watermark,
-      attachmentDownloadUrlsCamel?.no_watermark,
-      attachmentDownloadUrls?.watermark,
-      attachmentDownloadUrlsCamel?.watermark,
-      attachmentDownloadUrls?.endcard_watermark,
-      attachmentDownloadUrlsCamel?.endcard_watermark,
       attachmentSourceWm?.path,
       attachmentSource?.path,
       attachment.url,
       attachmentMd?.path,
       attachmentLd?.path
     ]);
-    if (attachmentPlayback) {
-      return attachmentPlayback;
+    if (attachmentDownload) {
+      return attachmentDownload;
     }
   }
 
-  return pickFirstString([record.url]);
+  return "";
 }
 
 export function resolveExistingDraftVideoId(row: Record<string, unknown>): string {
@@ -250,6 +281,35 @@ function getNestedObjectArrays(record: Record<string, unknown>): Array<Record<st
     }
   }
   return nested;
+}
+
+function pickFirstOpenAiVideoUrl(candidates: unknown[]): string {
+  for (const candidate of candidates) {
+    const normalized = normalizeOpenAiVideoUrl(candidate);
+    if (normalized) {
+      return normalized;
+    }
+  }
+
+  return "";
+}
+
+function normalizeOpenAiVideoUrl(value: unknown): string {
+  if (typeof value !== "string" || !value.trim()) {
+    return "";
+  }
+
+  try {
+    const parsed = new URL(value, "https://sora.chatgpt.com");
+    const hostname = parsed.hostname.toLowerCase();
+    if (hostname === "videos.openai.com" || hostname.endsWith(".videos.openai.com")) {
+      return parsed.toString();
+    }
+  } catch (_error) {
+    return "";
+  }
+
+  return "";
 }
 
 function getDirectSharedVideoId(record: Record<string, unknown>): string {

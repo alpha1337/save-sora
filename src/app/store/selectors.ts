@@ -7,7 +7,7 @@ export function selectFilteredVideoRows(state: AppStoreState): VideoRow[] {
   const viewerUsername = normalizeIdentity(state.session_meta.viewer_username ?? "");
   const historyIds = new Set(state.download_history_ids);
 
-  return [...state.video_rows]
+  const sortedRows = [...state.video_rows]
     .filter((row) => {
       if (excludeSessionCreatorOnly && viewerUsername) {
         const rowCreatorUsername = normalizeIdentity(row.creator_username);
@@ -39,6 +39,8 @@ export function selectFilteredVideoRows(state: AppStoreState): VideoRow[] {
       return searchableText.includes(query);
     })
     .sort((left, right) => compareRows(left, right, state.session_meta.sort_key, historyIds));
+
+  return dedupeCreatorSelfCastRows(sortedRows);
 }
 
 export function selectVisibleDownloadableVideoIds(state: AppStoreState): string[] {
@@ -99,6 +101,10 @@ function compareRows(
   }
 
   if (sortKey === "published_oldest") {
+    const likesOrderComparison = compareLikesSourceOrder(left, right, "oldest");
+    if (likesOrderComparison != null) {
+      return likesOrderComparison;
+    }
     return compareTimestampAsc(left.published_at, right.published_at, left.title, right.title);
   }
 
@@ -106,6 +112,10 @@ function compareRows(
     return compareTimestampDesc(left.created_at, right.created_at, left.title, right.title);
   }
 
+  const likesOrderComparison = compareLikesSourceOrder(left, right, "newest");
+  if (likesOrderComparison != null) {
+    return likesOrderComparison;
+  }
   return compareTimestampDesc(left.published_at, right.published_at, left.title, right.title);
 }
 
@@ -169,4 +179,85 @@ function isZipReadyRow(row: VideoRow): row is VideoRow & { video_id: string } {
 
 function normalizeIdentity(value: string): string {
   return value.trim().toLowerCase();
+}
+
+function compareLikesSourceOrder(left: VideoRow, right: VideoRow, direction: "newest" | "oldest"): number | null {
+  if (left.source_type !== "likes" || right.source_type !== "likes") {
+    return null;
+  }
+
+  const leftRank = typeof left.source_order === "number" ? left.source_order : null;
+  const rightRank = typeof right.source_order === "number" ? right.source_order : null;
+  if (leftRank == null || rightRank == null || leftRank === rightRank) {
+    return null;
+  }
+
+  return direction === "newest" ? leftRank - rightRank : rightRank - leftRank;
+}
+
+function dedupeCreatorSelfCastRows(rows: VideoRow[]): VideoRow[] {
+  const dedupedRows: VideoRow[] = [];
+  const creatorVideoIdToIndex = new Map<string, number>();
+
+  for (const row of rows) {
+    if (!isCreatorVideoRow(row) || !row.video_id) {
+      dedupedRows.push(row);
+      continue;
+    }
+
+    const existingIndex = creatorVideoIdToIndex.get(row.video_id);
+    if (existingIndex == null) {
+      creatorVideoIdToIndex.set(row.video_id, dedupedRows.length);
+      dedupedRows.push(row);
+      continue;
+    }
+
+    const existingRow = dedupedRows[existingIndex];
+    dedupedRows[existingIndex] = pickPreferredCreatorDuplicateRow(existingRow, row);
+  }
+
+  return dedupedRows;
+}
+
+function isCreatorVideoRow(row: VideoRow): boolean {
+  return row.source_type === "creatorPublished" || row.source_type === "creatorCameos";
+}
+
+function pickPreferredCreatorDuplicateRow(left: VideoRow, right: VideoRow): VideoRow {
+  const leftPriority = getCreatorDuplicatePriority(left);
+  const rightPriority = getCreatorDuplicatePriority(right);
+  if (rightPriority > leftPriority) {
+    return right;
+  }
+  if (leftPriority > rightPriority) {
+    return left;
+  }
+
+  if (right.is_downloadable && !left.is_downloadable) {
+    return right;
+  }
+  if (left.is_downloadable && !right.is_downloadable) {
+    return left;
+  }
+
+  const leftTimestamp = Date.parse(left.published_at ?? "") || 0;
+  const rightTimestamp = Date.parse(right.published_at ?? "") || 0;
+  if (rightTimestamp > leftTimestamp) {
+    return right;
+  }
+  if (leftTimestamp > rightTimestamp) {
+    return left;
+  }
+
+  return left;
+}
+
+function getCreatorDuplicatePriority(row: VideoRow): number {
+  if (row.source_type === "creatorPublished") {
+    return 2;
+  }
+  if (row.source_type === "creatorCameos") {
+    return 1;
+  }
+  return 0;
 }

@@ -6,6 +6,7 @@ describe("fetch-runtime-utils draft parity guards", () => {
     expect(shouldStopForStalledCursor(99, "drafts")).toBe(false);
     expect(shouldStopForStalledCursor(99, "characterDrafts")).toBe(false);
     expect(shouldStopForStalledCursor(99, "characterAccountDrafts")).toBe(false);
+    expect(shouldStopForStalledCursor(99, "likes")).toBe(false);
     expect(shouldStopForStalledCursor(2, "profile")).toBe(true);
   });
 
@@ -13,6 +14,7 @@ describe("fetch-runtime-utils draft parity guards", () => {
     expect(shouldStopForNoGrowthPages(99, 0, "drafts")).toBe(false);
     expect(shouldStopForNoGrowthPages(99, 0, "characterDrafts")).toBe(false);
     expect(shouldStopForNoGrowthPages(99, 0, "characterAccountDrafts")).toBe(false);
+    expect(shouldStopForNoGrowthPages(99, 0, "likes")).toBe(false);
     expect(shouldStopForNoGrowthPages(3, 0, "profile")).toBe(true);
   });
 });

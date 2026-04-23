@@ -1,5 +1,5 @@
 /// <reference lib="webworker" />
-import { Zip, ZipPassThrough, strToU8 } from "fflate";
+import { Zip, ZipPassThrough } from "fflate";
 import type { ArchiveWorkPlan, DownloadProgressState, DownloadWorkerProgress } from "../src/types/domain";
 
 interface BuildArchiveMessage {
@@ -7,20 +7,26 @@ interface BuildArchiveMessage {
   payload: ArchiveWorkPlan;
 }
 
+interface DownloadResult {
+  bytes: Uint8Array;
+  extension: string;
+}
+
 const ZIP_FETCH_CONCURRENCY = 1;
-const WATERMARK_FETCH_MAX_ATTEMPTS = 12;
-const WATERMARK_FETCH_BASE_RETRY_MS = 1200;
-const WATERMARK_FETCH_MAX_RETRY_MS = 20000;
-const WATERMARK_QUEUE_MIN_INTERVAL_MS = 1800;
 const SHARED_VIDEO_ID_PATTERN = /^s_[A-Za-z0-9_-]+$/;
-const MIN_VIDEO_BYTES_FALLBACK_THRESHOLD = 256 * 1024;
-const ESTIMATED_SIZE_FALLBACK_RATIO = 0.2;
-const WATERMARK_VALIDATION_RETRY_DELAY_MS = 1600;
-const WATERMARK_PROVIDER_URL = "https://soravdl.com/api/proxy/video/";
-let globalRateLimitCooldownUntilMs = 0;
-let watermarkRateLimitStreak = 0;
-let watermarkQueueTail: Promise<void> = Promise.resolve();
-let lastWatermarkRequestStartedAtMs = 0;
+const FALLBACK_VIDEO_EXTENSION = "mp4";
+const ALLOWED_VIDEO_EXTENSIONS = new Set([
+  "mp4",
+  "m4v",
+  "mov",
+  "webm",
+  "ogv",
+  "mkv",
+  "avi",
+  "mpeg",
+  "mpg",
+  "ts"
+]);
 
 function logZipStep(step: string, context: Record<string, unknown> = {}): void {
   try {
@@ -44,30 +50,41 @@ self.addEventListener("message", (event: MessageEvent<BuildArchiveMessage>) => {
 });
 
 async function buildArchive(workPlan: ArchiveWorkPlan): Promise<void> {
+  if (workPlan.rows.length === 0) {
+    throw new Error("No downloadable rows selected for ZIP.");
+  }
+
   logZipStep("build-archive:start", {
     total_rows: workPlan.rows.length,
     archive_name: workPlan.archive_name
   });
-  const libraryPathByVideoId = new Map(workPlan.organizer_rows.map((row) => [row.video_id, row.library_path]));
+
   const chunks: Uint8Array[] = [];
   const totalWorkers = Math.min(ZIP_FETCH_CONCURRENCY, workPlan.rows.length);
   const workerProgress = createWorkerProgress(totalWorkers);
   let completedItems = 0;
+  let successfulItems = 0;
   let activeLabel = "Preparing archive";
+
+  let settleZipPromise: ((value: Blob) => void) | null = null;
+  let rejectZipPromise: ((reason?: unknown) => void) | null = null;
+  const zipDone = new Promise<Blob>((resolve, reject) => {
+    settleZipPromise = resolve;
+    rejectZipPromise = reject;
+  });
+
   const zip = new Zip((error, chunk, final) => {
     if (error) {
-      throw error;
+      rejectZipPromise?.(error);
+      settleZipPromise = null;
+      rejectZipPromise = null;
+      return;
     }
     chunks.push(chunk);
     if (final) {
-      const archiveBlob = new Blob(chunks as unknown as BlobPart[], { type: "application/zip" });
-      self.postMessage({
-        type: "complete",
-        payload: {
-          archive_name: workPlan.archive_name,
-          blob: archiveBlob
-        }
-      });
+      settleZipPromise?.(new Blob(chunks as unknown as BlobPart[], { type: "application/zip" }));
+      settleZipPromise = null;
+      rejectZipPromise = null;
     }
   });
 
@@ -89,6 +106,12 @@ async function buildArchive(workPlan: ArchiveWorkPlan): Promise<void> {
 
   publishProgress();
 
+  if (workPlan.supplemental_entries.length > 0) {
+    activeLabel = "Writing archive instructions";
+    publishProgress();
+    await appendSupplementalEntries(zip, workPlan.supplemental_entries);
+  }
+
   await runWithConcurrency(
     workPlan.rows,
     totalWorkers,
@@ -107,21 +130,22 @@ async function buildArchive(workPlan: ArchiveWorkPlan): Promise<void> {
       activeLabel = `Bundling ${itemLabel}`;
       publishProgress();
       try {
-        const bytes = await fetchPreferredVideoBytes(row, (statusLabel) => {
+        const result = await fetchPreferredVideoBytes(row, (statusLabel) => {
           worker.active_item_label = statusLabel;
           activeLabel = `${itemLabel} · ${statusLabel}`;
           publishProgress();
         });
         worker.active_item_label = "Download ready";
         publishProgress();
-        const entry = new ZipPassThrough(libraryPathByVideoId.get(row.video_id) ?? `library/${row.video_id}.mp4`);
+        const entry = new ZipPassThrough(buildArchiveEntryName(row, result.extension));
         zip.add(entry);
-        entry.push(bytes, true);
+        entry.push(result.bytes, true);
+        successfulItems += 1;
         worker.last_completed_item_label = "Complete!";
         logZipStep("row:complete", {
           worker: worker.worker_id,
           video_id: row.video_id,
-          bytes: bytes.byteLength
+          bytes: result.bytes.byteLength
         });
       } catch (_error) {
         worker.last_completed_item_label = "Skipped: download unavailable";
@@ -144,25 +168,52 @@ async function buildArchive(workPlan: ArchiveWorkPlan): Promise<void> {
     }
   );
 
+  if (successfulItems === 0) {
+    throw new Error("No downloadable files were added to the ZIP. Re-fetch rows and try again.");
+  }
+
   activeLabel = "Finalizing archive";
   publishProgress();
   logZipStep("build-archive:finalizing", {
     completed_items: completedItems,
+    successful_items: successfulItems,
     total_items: workPlan.rows.length
   });
 
-  for (const supplementalEntry of workPlan.supplemental_entries) {
-    const entry = new ZipPassThrough(supplementalEntry.archive_path);
-    zip.add(entry);
-    if (typeof supplementalEntry.content === "string") {
-      entry.push(strToU8(supplementalEntry.content), true);
-    } else {
-      entry.push(new Uint8Array(await supplementalEntry.content.arrayBuffer()), true);
-    }
-  }
-
   zip.end();
-  logZipStep("build-archive:zip-end");
+  const archiveBlob = await zipDone;
+  self.postMessage({
+    type: "complete",
+    payload: {
+      archive_name: workPlan.archive_name,
+      blob: archiveBlob
+    }
+  });
+  logZipStep("build-archive:zip-end", { successful_items: successfulItems });
+}
+
+async function appendSupplementalEntries(
+  zip: Zip,
+  supplementalEntries: ArchiveWorkPlan["supplemental_entries"]
+): Promise<void> {
+  for (const entry of supplementalEntries) {
+    const archivePath = normalizeArchivePath(entry.archive_path || "README.txt");
+    const contentBytes = await toBytes(entry.content);
+    if (contentBytes.byteLength <= 0) {
+      continue;
+    }
+    const supplementalFile = new ZipPassThrough(archivePath);
+    zip.add(supplementalFile);
+    supplementalFile.push(contentBytes, true);
+  }
+}
+
+async function toBytes(content: Blob | string): Promise<Uint8Array> {
+  if (typeof content === "string") {
+    return new TextEncoder().encode(content);
+  }
+  const buffer = await content.arrayBuffer();
+  return new Uint8Array(buffer);
 }
 
 function createWorkerProgress(totalWorkers: number): DownloadWorkerProgress[] {
@@ -201,108 +252,30 @@ async function runWithConcurrency<T>(
 async function fetchPreferredVideoBytes(
   row: ArchiveWorkPlan["rows"][number],
   onStatusLabel?: (statusLabel: string) => void
-): Promise<Uint8Array> {
-  if (SHARED_VIDEO_ID_PATTERN.test(row.video_id)) {
-    onStatusLabel?.(`Using shared id ${row.video_id}: removing watermark`);
-    logZipStep("watermark-flow:start", { video_id: row.video_id });
-    for (let attempt = 0; attempt < WATERMARK_FETCH_MAX_ATTEMPTS; attempt += 1) {
-      const attemptLabel = `${attempt + 1}/${WATERMARK_FETCH_MAX_ATTEMPTS}`;
-      try {
-        const bytes = await fetchWatermarkFreeVideoBytes(
-          row.video_id,
-          attempt,
-          WATERMARK_FETCH_MAX_ATTEMPTS,
-          onStatusLabel
-        );
-        if (shouldFallbackToSourceDownload(row, bytes)) {
-          if (attempt + 1 < WATERMARK_FETCH_MAX_ATTEMPTS) {
-            const retryDelayMs = resolveValidationRetryDelayMs(attempt);
-            onStatusLabel?.(`Watermark removal attempt ${attemptLabel}: payload too small, retrying in ${formatDurationMs(retryDelayMs)}`);
-            logZipStep("watermark-flow:payload-too-small", {
-              video_id: row.video_id,
-              attempt: attempt + 1,
-              max_attempts: WATERMARK_FETCH_MAX_ATTEMPTS,
-              retry_delay_ms: retryDelayMs
-            });
-            await sleep(retryDelayMs);
-            continue;
-          }
-          if (!row.playback_url) {
-            throw new Error("Watermark-free payload is unexpectedly small and source URL is unavailable.");
-          }
-          onStatusLabel?.("Failed to remove watermark, downloading source URL");
-          logZipStep("watermark-flow:fallback-to-source", {
-            video_id: row.video_id,
-            reason: "payload_too_small",
-            source_url: row.playback_url
-          });
-          return fetchDirectVideoBytes(row.playback_url, { video_id: row.video_id, reason: "fallback_from_watermark" });
-        }
-        logZipStep("watermark-flow:success", {
-          video_id: row.video_id,
-          attempt: attempt + 1,
-          bytes: bytes.byteLength
-        });
-        return bytes;
-      } catch (error) {
-        if (attempt + 1 < WATERMARK_FETCH_MAX_ATTEMPTS) {
-          const retryDelayMs = resolveValidationRetryDelayMs(attempt);
-          onStatusLabel?.(`Watermark removal attempt ${attemptLabel}: retrying in ${formatDurationMs(retryDelayMs)}`);
-          logZipStep("watermark-flow:attempt-failed", {
-            video_id: row.video_id,
-            attempt: attempt + 1,
-            max_attempts: WATERMARK_FETCH_MAX_ATTEMPTS,
-            retry_delay_ms: retryDelayMs,
-            error: error instanceof Error ? error.message : String(error)
-          });
-          await sleep(retryDelayMs);
-          continue;
-        }
-        if (!row.playback_url) {
-          logZipStep("watermark-flow:terminal-failure-no-fallback", {
-            video_id: row.video_id,
-            error: error instanceof Error ? error.message : String(error)
-          });
-          throw error;
-        }
-        onStatusLabel?.("Failed to remove watermark, downloading source URL");
-        logZipStep("watermark-flow:fallback-to-source", {
-          video_id: row.video_id,
-          reason: "attempts_exhausted",
-          source_url: row.playback_url
-        });
-        return fetchDirectVideoBytes(row.playback_url, { video_id: row.video_id, reason: "fallback_from_watermark" });
-      }
-    }
-
-    if (row.playback_url) {
-      onStatusLabel?.("Failed to remove watermark, downloading source URL");
-      logZipStep("watermark-flow:fallback-to-source", {
-        video_id: row.video_id,
-        reason: "loop_exhausted",
-        source_url: row.playback_url
-      });
-      return fetchDirectVideoBytes(row.playback_url, { video_id: row.video_id, reason: "fallback_from_watermark" });
-    }
-    logZipStep("watermark-flow:failed-no-fallback", { video_id: row.video_id });
-    throw new Error("Failed to remove watermark.");
-  }
-
-  if (row.playback_url) {
-    onStatusLabel?.(`No shared id (${row.video_id}): sharing not attempted in ZIP, downloading source URL`);
+): Promise<DownloadResult> {
+  const downloadUrl = row.archive_download_url || row.download_url || row.playback_url;
+  if (downloadUrl) {
+    onStatusLabel?.(`Downloading: ${downloadUrl}`);
     logZipStep("source-flow:direct-download", {
       video_id: row.video_id,
+      archive_path: row.archive_path,
       playback_url: row.playback_url,
-      note: "sharing is only attempted during fetch"
+      download_url: row.download_url,
+      archive_download_url: row.archive_download_url
     });
-    return fetchDirectVideoBytes(row.playback_url, { video_id: row.video_id, reason: "no_shared_id_source_download" });
+    return fetchDirectVideoBytes(downloadUrl, { video_id: row.video_id, reason: "source_download" });
+  }
+
+  if (SHARED_VIDEO_ID_PATTERN.test(row.video_id)) {
+    logZipStep("source-flow:missing-playback-shared-id", { video_id: row.video_id });
+    throw new Error(`Missing downloadable source URL for ${row.video_id}. Re-fetch this item before building ZIP.`);
   }
 
   logZipStep("source-flow:unresolved-no-playback", { video_id: row.video_id });
   throw new Error("Draft is unresolved: missing shared post id (s_*). Re-fetch drafts to resolve before building ZIP.");
 }
 
-async function fetchDirectVideoBytes(url: string, context?: { video_id?: string; reason?: string }): Promise<Uint8Array> {
+async function fetchDirectVideoBytes(url: string, context?: { video_id?: string; reason?: string }): Promise<DownloadResult> {
   logZipStep("source-download:request", {
     video_id: context?.video_id ?? "",
     reason: context?.reason ?? "",
@@ -317,221 +290,72 @@ async function fetchDirectVideoBytes(url: string, context?: { video_id?: string;
   if (!response.ok) {
     throw new Error(`Source video download failed (status ${response.status}).`);
   }
-  const bytes = new Uint8Array(await response.arrayBuffer());
+  const buffer = await response.arrayBuffer();
+  if (buffer.byteLength <= 0) {
+    throw new Error("Source video download returned an empty response.");
+  }
+  const bytes = new Uint8Array(buffer);
+  const extension = resolveVideoExtension(response.headers.get("content-type"), url);
   logZipStep("source-download:success", {
     video_id: context?.video_id ?? "",
-    bytes: bytes.byteLength
+    bytes: bytes.byteLength,
+    extension
   });
-  return bytes;
+  return { bytes, extension };
 }
 
-async function fetchWatermarkFreeVideoBytes(
-  videoId: string,
-  attempt: number,
-  maxAttempts: number,
-  onStatusLabel?: (statusLabel: string) => void
-): Promise<Uint8Array> {
-  const attemptLabel = `${attempt + 1}/${maxAttempts}`;
-  onStatusLabel?.(`Watermark removal attempt ${attemptLabel}: preparing request`);
-  logZipStep("watermark-provider:request-prep", {
-    video_id: videoId,
-    attempt: attempt + 1,
-    max_attempts: maxAttempts,
-    provider_url: `${WATERMARK_PROVIDER_URL}${encodeURIComponent(videoId)}`
-  });
-  const response = await runSerializedWatermarkRequest(() =>
-    fetch(`${WATERMARK_PROVIDER_URL}${encodeURIComponent(videoId)}`),
-    onStatusLabel,
-    attemptLabel,
-    videoId
-  );
-  logZipStep("watermark-provider:response", {
-    video_id: videoId,
-    attempt: attempt + 1,
-    status: response.status,
-    ok: response.ok
-  });
-  if (response.ok) {
-    onStatusLabel?.(`Watermark removal attempt ${attemptLabel}: validating response`);
-    const bytes = new Uint8Array(await response.arrayBuffer());
-    const contentType = (response.headers.get("content-type") ?? "").toLowerCase();
-    if (!isLikelyVideoPayload(bytes, contentType)) {
-      throw new Error("Watermark removal returned a non-video payload.");
-    }
-    watermarkRateLimitStreak = 0;
-    onStatusLabel?.(`Watermark removal attempt ${attemptLabel}: watermark removed`);
-    return bytes;
-  }
-  const status = response.status;
-  if (status === 429) {
-    watermarkRateLimitStreak += 1;
-    const retryDelayMs = resolveRetryDelayMs(response, 0, watermarkRateLimitStreak);
-    globalRateLimitCooldownUntilMs = Date.now() + retryDelayMs;
-    onStatusLabel?.(`Watermark removal attempt ${attemptLabel}: rate-limited, cooling down ${formatDurationMs(retryDelayMs)}`);
-  } else {
-    watermarkRateLimitStreak = 0;
-    onStatusLabel?.(`Watermark removal attempt ${attemptLabel}: request failed (status ${status})`);
-  }
-  throw new Error(buildWatermarkRemovalErrorMessage(status));
+function buildArchiveEntryName(row: ArchiveWorkPlan["rows"][number], extension: string): string {
+  const safePath = normalizeArchivePath(row.archive_path || row.video_id || "video");
+  return `${safePath}.${normalizeVideoExtension(extension)}`;
 }
 
-function resolveValidationRetryDelayMs(attempt: number): number {
-  const dynamicDelayMs = WATERMARK_VALIDATION_RETRY_DELAY_MS * (attempt + 1);
-  return Math.min(WATERMARK_FETCH_MAX_RETRY_MS, dynamicDelayMs + jitterMs(400));
+function normalizeArchivePath(value: string): string {
+  const normalized = value
+    .split("/")
+    .map((segment) => segment.trim().replace(/[^A-Za-z0-9 _.-]+/g, "_").replace(/^\.+$/, ""))
+    .filter(Boolean)
+    .join("/");
+
+  return normalized || "video";
 }
 
-function shouldFallbackToSourceDownload(
-  row: ArchiveWorkPlan["rows"][number],
-  bytes: Uint8Array
-): boolean {
-  if (!row.playback_url) {
-    return false;
-  }
-  if (!Number.isFinite(row.estimated_size_bytes ?? NaN) || (row.estimated_size_bytes ?? 0) <= 0) {
-    return bytes.byteLength < MIN_VIDEO_BYTES_FALLBACK_THRESHOLD;
-  }
-  const estimatedSizeBytes = row.estimated_size_bytes ?? 0;
-  const minimumExpectedBytes = Math.max(
-    MIN_VIDEO_BYTES_FALLBACK_THRESHOLD,
-    Math.floor(estimatedSizeBytes * ESTIMATED_SIZE_FALLBACK_RATIO)
-  );
-  return bytes.byteLength < minimumExpectedBytes;
-}
-
-function isLikelyVideoPayload(bytes: Uint8Array, contentType: string): boolean {
-  if (contentType.includes("video/")) {
-    return true;
-  }
-  if (contentType.includes("application/octet-stream") || !contentType) {
-    return hasVideoContainerSignature(bytes);
-  }
-  return hasVideoContainerSignature(bytes);
-}
-
-function hasVideoContainerSignature(bytes: Uint8Array): boolean {
-  return hasMp4FtypSignature(bytes) || hasWebmSignature(bytes);
-}
-
-function hasMp4FtypSignature(bytes: Uint8Array): boolean {
-  if (bytes.byteLength < 12) {
-    return false;
-  }
-  return bytes[4] === 0x66 && bytes[5] === 0x74 && bytes[6] === 0x79 && bytes[7] === 0x70;
-}
-
-function hasWebmSignature(bytes: Uint8Array): boolean {
-  if (bytes.byteLength < 4) {
-    return false;
-  }
-  return bytes[0] === 0x1a && bytes[1] === 0x45 && bytes[2] === 0xdf && bytes[3] === 0xa3;
-}
-
-function buildWatermarkRemovalErrorMessage(status: number): string {
-  if (status === 429) {
-    return "Watermark removal is being rate-limited right now. Please wait a minute and try Build ZIP again.";
-  }
-  if (status === 400) {
-    return "Watermark removal is unavailable for one or more selected videos right now. They may still be processing.";
-  }
-  if (status === 404) {
-    return "A selected video is no longer available for watermark removal.";
-  }
-  if (status >= 500) {
-    return "Watermark removal is temporarily unavailable due to a server issue. Please retry shortly.";
-  }
-  return `Watermark removal failed (status ${status}).`;
-}
-
-function sleep(durationMs: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, durationMs));
-}
-
-function formatDurationMs(durationMs: number): string {
-  if (durationMs < 1000) {
-    return `${durationMs}ms`;
-  }
-  const seconds = durationMs / 1000;
-  return seconds >= 10 ? `${Math.round(seconds)}s` : `${seconds.toFixed(1)}s`;
-}
-
-function resolveRetryDelayMs(response: Response, attempt: number, rateLimitStreak: number): number {
-  const retryAfterSeconds = Number(response.headers.get("retry-after"));
-  if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0) {
-    return clampRetryMs(retryAfterSeconds * 1000 + jitterMs(400));
+function resolveVideoExtension(contentType: string | null, url: string): string {
+  const fromContentType = extensionFromContentType(contentType ?? "");
+  if (fromContentType) {
+    return fromContentType;
   }
 
-  const exponentialMultiplier = Math.max(1, Math.min(6, attempt + 1 + rateLimitStreak));
-  const backoffMs = WATERMARK_FETCH_BASE_RETRY_MS * exponentialMultiplier;
-  return clampRetryMs(backoffMs + jitterMs(500));
-}
-
-function clampRetryMs(value: number): number {
-  return Math.min(WATERMARK_FETCH_MAX_RETRY_MS, Math.max(800, Math.round(value)));
-}
-
-function jitterMs(maxJitterMs: number): number {
-  return Math.floor(Math.random() * maxJitterMs);
-}
-
-async function waitForGlobalRateLimitCooldown(
-  onStatusLabel?: (statusLabel: string) => void,
-  attemptLabel?: string
-): Promise<void> {
-  const remainingMs = globalRateLimitCooldownUntilMs - Date.now();
-  if (remainingMs > 0) {
-    if (attemptLabel) {
-      onStatusLabel?.(`Watermark removal attempt ${attemptLabel}: waiting rate-limit cooldown ${formatDurationMs(remainingMs)}`);
-    }
-    await sleep(remainingMs);
-  }
-}
-
-async function runSerializedWatermarkRequest<T>(
-  requestFn: () => Promise<T>,
-  onStatusLabel?: (statusLabel: string) => void,
-  attemptLabel?: string,
-  videoId?: string
-): Promise<T> {
-  const previousTurn = watermarkQueueTail;
-  let releaseTurn!: () => void;
-  const currentTurn = new Promise<void>((resolve) => {
-    releaseTurn = resolve;
-  });
-  watermarkQueueTail = previousTurn.then(() => currentTurn);
-
-  if (attemptLabel) {
-    onStatusLabel?.(`Watermark removal attempt ${attemptLabel}: waiting queue slot`);
-  }
-  logZipStep("watermark-provider:queue-wait", {
-    video_id: videoId ?? "",
-    attempt_label: attemptLabel ?? ""
-  });
-  await previousTurn;
   try {
-    await waitForGlobalRateLimitCooldown(onStatusLabel, attemptLabel);
-    await waitForWatermarkQueueInterval(onStatusLabel, attemptLabel);
-    if (attemptLabel) {
-      onStatusLabel?.(`Watermark removal attempt ${attemptLabel}: submitting request`);
-      onStatusLabel?.(`Watermark removal attempt ${attemptLabel}: waiting for watermark provider response`);
+    const parsed = new URL(url);
+    const match = parsed.pathname.match(/\.([A-Za-z0-9]{2,5})$/);
+    if (match) {
+      return normalizeVideoExtension(match[1] ?? "");
     }
-    return await requestFn();
-  } finally {
-    releaseTurn();
+  } catch (_error) {
+    // Ignore parse failures; fallback extension will be applied.
   }
+
+  return FALLBACK_VIDEO_EXTENSION;
 }
 
-async function waitForWatermarkQueueInterval(
-  onStatusLabel?: (statusLabel: string) => void,
-  attemptLabel?: string
-): Promise<void> {
-  const elapsedMs = Date.now() - lastWatermarkRequestStartedAtMs;
-  const remainingMs = WATERMARK_QUEUE_MIN_INTERVAL_MS - elapsedMs;
-  if (remainingMs > 0) {
-    const pacingDelayMs = remainingMs + jitterMs(180);
-    if (attemptLabel) {
-      onStatusLabel?.(`Watermark removal attempt ${attemptLabel}: pacing requests ${formatDurationMs(pacingDelayMs)}`);
-    }
-    await sleep(pacingDelayMs);
+function extensionFromContentType(contentType: string): string {
+  const normalized = contentType.toLowerCase();
+  if (normalized.includes("video/mp4")) return "mp4";
+  if (normalized.includes("video/webm")) return "webm";
+  if (normalized.includes("video/quicktime")) return "mov";
+  if (normalized.includes("video/x-m4v")) return "m4v";
+  if (normalized.includes("video/ogg")) return "ogv";
+  if (normalized.includes("video/x-matroska")) return "mkv";
+  if (normalized.includes("video/x-msvideo")) return "avi";
+  if (normalized.includes("video/mpeg")) return "mpeg";
+  if (normalized.includes("video/mp2t")) return "ts";
+  return "";
+}
+
+function normalizeVideoExtension(extension: string): string {
+  const normalized = extension.toLowerCase().replace(/^\.+/, "");
+  if (!normalized || !ALLOWED_VIDEO_EXTENSIONS.has(normalized)) {
+    return FALLBACK_VIDEO_EXTENSION;
   }
-  lastWatermarkRequestStartedAtMs = Date.now();
+  return normalized;
 }

@@ -2,89 +2,83 @@ import { useAppStore } from "@app/store/use-app-store";
 import type { BackgroundResponse, ResolveViewerIdentityResponse } from "types/background";
 import { sendBackgroundRequest } from "@lib/background/client";
 import { listDownloadHistoryIds } from "@lib/db/download-history-db";
+import { hasResumableLatestSelectionCheckpoint, loadLatestSelectionFetchRows, loadRecentFetchRows } from "@lib/db/fetch-cache-db";
 import { migrateLegacyV1DataIfNeeded } from "@lib/db/legacy-v1-migration";
-import { loadSessionDbSnapshot } from "@lib/db/session-db";
+import { loadSessionState, loadSettings } from "@lib/db/session-db";
 import { createLogger } from "@lib/logging/logger";
 import { stripRawPayloadFromRows } from "@lib/utils/video-row-utils";
-import type { VideoSortOption } from "types/domain";
+import type { VideoRow } from "types/domain";
 
 const logger = createLogger("bootstrap-controller");
+const BOOTSTRAP_CACHED_ROWS_LIMIT = 1_000;
 
 /**
- * Loads the persisted session snapshot and permanent history into the global
- * store before the React app renders the working UI.
+ * Loads settings and permanent history into the global store before the React
+ * app renders the working UI.
  */
 export async function bootstrapAppState(): Promise<void> {
   await migrateLegacyV1DataIfNeeded();
 
-  const [sessionSnapshot, historyIds, viewerIdentity] = await Promise.all([
-    loadSessionDbSnapshot(),
+  const [savedSettings, persistedSessionState, historyIds, viewerIdentity] = await Promise.all([
+    loadSettings(),
+    loadSessionState(),
     listDownloadHistoryIds(),
     resolveViewerIdentitySafe()
   ]);
+  const resumeEnabled = savedSettings?.enable_fetch_resume === true;
+  let cachedRows: VideoRow[] = [];
+  let hasResumableFetch = false;
+  if (resumeEnabled) {
+    try {
+      const [latestSelectionRows, hasResumableLatestSelection] = await Promise.all([
+        loadLatestSelectionFetchRows(),
+        hasResumableLatestSelectionCheckpoint()
+      ]);
+      hasResumableFetch = hasResumableLatestSelection;
+      cachedRows = latestSelectionRows.length > 0
+        ? stripRawPayloadFromRows(latestSelectionRows)
+        : stripRawPayloadFromRows(await loadRecentFetchRows(BOOTSTRAP_CACHED_ROWS_LIMIT));
+    } catch (error) {
+      logger.warn("cached fetch row hydration failed", error);
+    }
+  }
 
-  const existingSessionMeta = sessionSnapshot.session_meta ?? useAppStore.getState().session_meta;
+  const existingSessionMeta = useAppStore.getState().session_meta;
+  const viewerCanCameo = viewerIdentity?.can_cameo ?? existingSessionMeta.viewer_can_cameo ?? true;
+  const activeSources = {
+    ...existingSessionMeta.active_sources,
+    characters: viewerCanCameo ? existingSessionMeta.active_sources.characters : false
+  };
   const hydratedSessionMeta = {
     ...existingSessionMeta,
+    active_sources: activeSources,
     viewer_user_id: viewerIdentity?.user_id ?? existingSessionMeta.viewer_user_id ?? "",
     viewer_username: viewerIdentity?.username ?? existingSessionMeta.viewer_username ?? "",
+    viewer_can_cameo: viewerCanCameo,
     exclude_session_creator_only: existingSessionMeta.exclude_session_creator_only ?? false,
     fetch_range_confirmed: existingSessionMeta.fetch_range_confirmed ?? false,
-    sort_key: normalizeSortOption(existingSessionMeta.sort_key),
+    resume_fetch_available: hasResumableFetch,
     group_by: existingSessionMeta.group_by ?? "none",
     date_range_preset: existingSessionMeta.date_range_preset ?? "all",
     custom_date_start: existingSessionMeta.custom_date_start ?? "",
-    custom_date_end: existingSessionMeta.custom_date_end ?? ""
+    custom_date_end: existingSessionMeta.custom_date_end ?? "",
+    selected_character_account_ids: persistedSessionState?.selected_character_account_ids ?? existingSessionMeta.selected_character_account_ids ?? []
   };
 
-  const strippedRows = stripRawPayloadFromRows(sessionSnapshot.video_rows);
-  const eligibleVideoIdSet = new Set(
-    strippedRows
-      .filter((row) => Boolean(row.is_downloadable && row.video_id))
-      .map((row) => row.video_id)
-  );
-  const hydratedDownloadQueue = [...new Set(sessionSnapshot.download_queue.filter((videoId) => eligibleVideoIdSet.has(videoId)))];
-
   useAppStore.getState().hydrateState({
-    settings: sessionSnapshot.settings ?? useAppStore.getState().settings,
+    settings: savedSettings ?? useAppStore.getState().settings,
+    creator_profiles: persistedSessionState?.creator_profiles ?? useAppStore.getState().creator_profiles,
     session_meta: hydratedSessionMeta,
-    video_rows: strippedRows,
-    selected_video_ids: hydratedDownloadQueue,
-    download_history_ids: historyIds
+    download_history_ids: historyIds,
+    video_rows: cachedRows
   });
 
   logger.info("bootstrap complete", {
+    cachedRowCount: cachedRows.length,
+    cachedRowFallbackLimit: resumeEnabled ? BOOTSTRAP_CACHED_ROWS_LIMIT : 0,
     historyCount: historyIds.length,
-    rowCount: sessionSnapshot.video_rows.length,
     viewerUsername: hydratedSessionMeta.viewer_username
   });
-}
-
-function normalizeSortOption(value: unknown): VideoSortOption {
-  if (value === "published_oldest" || value === "created_newest" || value === "created_oldest" ||
-    value === "title_asc" || value === "title_desc" || value === "views_most" || value === "views_fewest" ||
-    value === "likes_most" || value === "likes_fewest" || value === "remixes_most" || value === "remixes_fewest") {
-    return value;
-  }
-
-  // v2 legacy sort_key compatibility
-  if (value === "published_at") {
-    return "published_newest";
-  }
-  if (value === "created_at") {
-    return "created_newest";
-  }
-  if (value === "title") {
-    return "title_asc";
-  }
-  if (value === "view_count") {
-    return "views_most";
-  }
-  if (value === "like_count") {
-    return "likes_most";
-  }
-
-  return "published_newest";
 }
 
 async function resolveViewerIdentitySafe(): Promise<ResolveViewerIdentityResponse["payload"] | null> {

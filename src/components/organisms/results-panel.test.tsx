@@ -58,6 +58,112 @@ const baseRow: VideoRow = {
 };
 
 describe("ResultsPanel", () => {
+  it("shows conditional sidebar toggle labels", () => {
+    const { rerender } = render(
+      <ResultsPanel
+        allVisibleSelected={false}
+        downloadableRowCount={0}
+        downloadProgress={emptyDownloadProgress}
+        fetchProgress={emptyFetchProgress}
+        hasSidebar
+        hasRows={false}
+        hasQuery={false}
+        groupBy="none"
+        phase="idle"
+        onDownload={vi.fn()}
+        onToggleSidebar={vi.fn()}
+        onSelectionPresetChange={vi.fn()}
+        onGroupByChange={vi.fn()}
+        onQueryChange={vi.fn()}
+        onSetSelectedVideoIds={vi.fn()}
+        onSortKeyChange={vi.fn()}
+        onToggleSelectedVideoId={vi.fn()}
+        query=""
+        rows={[]}
+        selectableRowCount={0}
+        selectedDownloadableRowCount={0}
+        selectedBytes={0}
+        selectedVideoIds={[]}
+        selectedVisibleRowCount={0}
+        sidebarCollapsed={false}
+        sortKey="published_newest"
+        totalRowCount={0}
+      />
+    );
+
+    expect(screen.getByRole("button", { name: "Hide Sidebar" })).toBeInTheDocument();
+
+    rerender(
+      <ResultsPanel
+        allVisibleSelected={false}
+        downloadableRowCount={0}
+        downloadProgress={emptyDownloadProgress}
+        fetchProgress={emptyFetchProgress}
+        hasSidebar
+        hasRows={false}
+        hasQuery={false}
+        groupBy="none"
+        phase="idle"
+        onDownload={vi.fn()}
+        onToggleSidebar={vi.fn()}
+        onSelectionPresetChange={vi.fn()}
+        onGroupByChange={vi.fn()}
+        onQueryChange={vi.fn()}
+        onSetSelectedVideoIds={vi.fn()}
+        onSortKeyChange={vi.fn()}
+        onToggleSelectedVideoId={vi.fn()}
+        query=""
+        rows={[]}
+        selectableRowCount={0}
+        selectedDownloadableRowCount={0}
+        selectedBytes={0}
+        selectedVideoIds={[]}
+        selectedVisibleRowCount={0}
+        sidebarCollapsed
+        sortKey="published_newest"
+        totalRowCount={0}
+      />
+    );
+
+    expect(screen.getByRole("button", { name: "Show Sidebar" })).toBeInTheDocument();
+  });
+
+  it("renders filter controls above the search bar", () => {
+    const { container } = render(
+      <ResultsPanel
+        allVisibleSelected={false}
+        downloadableRowCount={0}
+        downloadProgress={emptyDownloadProgress}
+        fetchProgress={emptyFetchProgress}
+        hasRows={false}
+        hasQuery={false}
+        groupBy="none"
+        phase="idle"
+        onDownload={vi.fn()}
+        onSelectionPresetChange={vi.fn()}
+        onGroupByChange={vi.fn()}
+        onQueryChange={vi.fn()}
+        onSetSelectedVideoIds={vi.fn()}
+        onSortKeyChange={vi.fn()}
+        onToggleSelectedVideoId={vi.fn()}
+        query=""
+        rows={[]}
+        selectableRowCount={0}
+        selectedDownloadableRowCount={0}
+        selectedBytes={0}
+        selectedVideoIds={[]}
+        selectedVisibleRowCount={0}
+        sortKey="published_newest"
+        totalRowCount={0}
+      />
+    );
+
+    const toolbar = container.querySelector(".ss-toolbar");
+    expect(toolbar).not.toBeNull();
+    expect(toolbar?.firstElementChild).toHaveTextContent("Select");
+    expect(toolbar?.lastElementChild).toHaveAttribute("name", "results-search");
+  });
+
   it("surfaces total session counts separately from filtered results", () => {
     render(
       <ResultsPanel
@@ -70,7 +176,6 @@ describe("ResultsPanel", () => {
         groupBy="none"
         phase="ready"
         onDownload={vi.fn()}
-        onExportCsv={vi.fn()}
         onSelectionPresetChange={vi.fn()}
         onGroupByChange={vi.fn()}
         onQueryChange={vi.fn()}
@@ -106,7 +211,6 @@ describe("ResultsPanel", () => {
         groupBy="none"
         phase="ready"
         onDownload={vi.fn()}
-        onExportCsv={vi.fn()}
         onSelectionPresetChange={vi.fn()}
         onGroupByChange={vi.fn()}
         onQueryChange={vi.fn()}
@@ -148,7 +252,6 @@ describe("ResultsPanel", () => {
         groupBy="creator"
         phase="ready"
         onDownload={vi.fn()}
-        onExportCsv={vi.fn()}
         onSelectionPresetChange={vi.fn()}
         onGroupByChange={vi.fn()}
         onQueryChange={vi.fn()}
@@ -168,7 +271,7 @@ describe("ResultsPanel", () => {
     );
 
     expect(screen.getAllByText(/1 videos/)).toHaveLength(2);
-    expect(screen.getAllByText("Second Creator")).toHaveLength(2);
+    expect(screen.getAllByText("Second Creator")).toHaveLength(1);
   });
 
   it("bulk selects all selectable cards in a group when group checkbox is toggled", () => {
@@ -191,7 +294,6 @@ describe("ResultsPanel", () => {
         groupBy="creator"
         phase="ready"
         onDownload={vi.fn()}
-        onExportCsv={vi.fn()}
         onSelectionPresetChange={vi.fn()}
         onGroupByChange={vi.fn()}
         onQueryChange={vi.fn()}
@@ -212,5 +314,345 @@ describe("ResultsPanel", () => {
 
     fireEvent.click(screen.getByRole("checkbox", { name: "Creator" }));
     expect(onSetSelectedVideoIds).toHaveBeenCalledWith(["s_123", "s_234"]);
+  });
+
+  it("does not render an in-panel Stop Fetch button while fetching is active", () => {
+    const activeFetchProgress = {
+      ...emptyFetchProgress,
+      running_jobs: 1,
+      total_jobs: 1,
+      job_progress: [
+        {
+          job_id: "character-account-appearances:ch_crystal",
+          label: "Crystal Sparkle appearances",
+          source: "characterAccountAppearances" as const,
+          status: "running" as const,
+          active_item_title: "Requesting page 1...",
+          fetched_rows: 0,
+          processed_batches: 0,
+          expected_total_count: 100
+        }
+      ]
+    };
+
+    render(
+      <ResultsPanel
+        allVisibleSelected={false}
+        downloadableRowCount={0}
+        downloadProgress={emptyDownloadProgress}
+        fetchProgress={activeFetchProgress}
+        hasRows={false}
+        hasQuery={false}
+        groupBy="none"
+        phase="fetching"
+        onDownload={vi.fn()}
+        onSelectionPresetChange={vi.fn()}
+        onGroupByChange={vi.fn()}
+        onQueryChange={vi.fn()}
+        onSetSelectedVideoIds={vi.fn()}
+        onSortKeyChange={vi.fn()}
+        onToggleSelectedVideoId={vi.fn()}
+        query=""
+        rows={[]}
+        selectableRowCount={0}
+        selectedDownloadableRowCount={0}
+        selectedBytes={0}
+        selectedVideoIds={[]}
+        selectedVisibleRowCount={0}
+        sortKey="published_newest"
+        totalRowCount={0}
+      />
+    );
+
+    expect(screen.queryByRole("button", { name: "Stop Fetch" })).not.toBeInTheDocument();
+  });
+
+  it("shows an ETA label while fetching", () => {
+    const activeFetchProgress = {
+      ...emptyFetchProgress,
+      running_jobs: 1,
+      total_jobs: 1,
+      processed_batches: 8,
+      job_progress: [
+        {
+          job_id: "side-character-appearances:ch_thursday",
+          label: "Thursday appearances",
+          source: "sideCharacter" as const,
+          status: "running" as const,
+          active_item_title: "Requesting side-character-feed-appearances page 9...",
+          fetched_rows: 64,
+          processed_batches: 8,
+          expected_total_count: 160
+        }
+      ]
+    };
+
+    render(
+      <ResultsPanel
+        allVisibleSelected={false}
+        downloadableRowCount={0}
+        downloadProgress={emptyDownloadProgress}
+        fetchProgress={activeFetchProgress}
+        hasRows={false}
+        hasQuery={false}
+        groupBy="none"
+        phase="fetching"
+        onDownload={vi.fn()}
+        onSelectionPresetChange={vi.fn()}
+        onGroupByChange={vi.fn()}
+        onQueryChange={vi.fn()}
+        onSetSelectedVideoIds={vi.fn()}
+        onSortKeyChange={vi.fn()}
+        onToggleSelectedVideoId={vi.fn()}
+        query=""
+        rows={[]}
+        selectableRowCount={0}
+        selectedDownloadableRowCount={0}
+        selectedBytes={0}
+        selectedVideoIds={[]}
+        selectedVisibleRowCount={0}
+        sortKey="published_newest"
+        totalRowCount={0}
+      />
+    );
+
+    expect(screen.getByText(/left/i)).toBeInTheDocument();
+  });
+
+  it("shows a single fetch bar and separate overall completion percent", () => {
+    const activeFetchProgress = {
+      ...emptyFetchProgress,
+      running_jobs: 1,
+      total_jobs: 1,
+      processed_batches: 17,
+      job_progress: [
+        {
+          job_id: "side-character-appearances:ch_crystal",
+          label: "Crystal Sparkle appearances",
+          source: "sideCharacter" as const,
+          status: "running" as const,
+          active_item_title: "Requesting side-character-feed-appearances page 18...",
+          fetched_rows: 136,
+          processed_batches: 17,
+          expected_total_count: 145205
+        }
+      ]
+    };
+
+    const { container } = render(
+      <ResultsPanel
+        allVisibleSelected={false}
+        downloadableRowCount={0}
+        downloadProgress={emptyDownloadProgress}
+        fetchProgress={activeFetchProgress}
+        hasRows={false}
+        hasQuery={false}
+        groupBy="none"
+        phase="fetching"
+        onDownload={vi.fn()}
+        onSelectionPresetChange={vi.fn()}
+        onGroupByChange={vi.fn()}
+        onQueryChange={vi.fn()}
+        onSetSelectedVideoIds={vi.fn()}
+        onSortKeyChange={vi.fn()}
+        onToggleSelectedVideoId={vi.fn()}
+        query=""
+        rows={[]}
+        selectableRowCount={0}
+        selectedDownloadableRowCount={0}
+        selectedBytes={0}
+        selectedVideoIds={[]}
+        selectedVisibleRowCount={0}
+        sortKey="published_newest"
+        totalRowCount={0}
+      />
+    );
+
+    expect(screen.getAllByText(/overall$/i)).toHaveLength(1);
+    expect(screen.queryByText("0/1 jobs")).not.toBeInTheDocument();
+    expect(screen.getByText("Processing Batch 1 of 757 (Page 18/24)")).toBeInTheDocument();
+    expect(screen.getByText("Page 18/18,151 (0.099%)")).toBeInTheDocument();
+    expect(container.querySelectorAll(".ss-download-progress-fill")).toHaveLength(1);
+    expect(container.querySelectorAll(".ss-download-worker-progress-track")).toHaveLength(0);
+  });
+
+  it("shows fetch active status text beneath the rotating headline", () => {
+    const activeFetchProgress = {
+      ...emptyFetchProgress,
+      active_label: "Loading cached rows and checkpoints...",
+      running_jobs: 1,
+      total_jobs: 1,
+      processed_batches: 1,
+      job_progress: [
+        {
+          job_id: "character-account-appearances:ch_crystal",
+          label: "Crystal Sparkle appearances",
+          source: "characterAccountAppearances" as const,
+          status: "running" as const,
+          active_item_title: "Requesting side-character-feed-appearances page 1...",
+          fetched_rows: 8,
+          processed_batches: 1,
+          expected_total_count: 145205
+        }
+      ]
+    };
+
+    render(
+      <ResultsPanel
+        allVisibleSelected={false}
+        downloadableRowCount={0}
+        downloadProgress={emptyDownloadProgress}
+        fetchProgress={activeFetchProgress}
+        hasRows={false}
+        hasQuery={false}
+        groupBy="none"
+        phase="fetching"
+        onDownload={vi.fn()}
+        onSelectionPresetChange={vi.fn()}
+        onGroupByChange={vi.fn()}
+        onQueryChange={vi.fn()}
+        onSetSelectedVideoIds={vi.fn()}
+        onSortKeyChange={vi.fn()}
+        onToggleSelectedVideoId={vi.fn()}
+        query=""
+        rows={[]}
+        selectableRowCount={0}
+        selectedDownloadableRowCount={0}
+        selectedBytes={0}
+        selectedVideoIds={[]}
+        selectedVisibleRowCount={0}
+        sortKey="published_newest"
+        totalRowCount={0}
+      />
+    );
+
+    expect(screen.getByText("Loading cached rows and checkpoints...")).toBeInTheDocument();
+  });
+
+  it("uses aggregate status and overall progress fill when multiple fetch jobs run in parallel", () => {
+    const activeFetchProgress = {
+      ...emptyFetchProgress,
+      active_label: "This label should not win while multiple jobs run",
+      running_jobs: 2,
+      total_jobs: 2,
+      processed_rows: 30,
+      processed_batches: 4,
+      job_progress: [
+        {
+          job_id: "creator-published:user_1",
+          label: "Creator one published",
+          source: "creatorPublished" as const,
+          status: "running" as const,
+          active_item_title: "Requesting creator-feed page 3...",
+          fetched_rows: 20,
+          processed_batches: 2,
+          expected_total_count: 100
+        },
+        {
+          job_id: "creator-cameos:user_1",
+          label: "Creator one cameos",
+          source: "creatorCameos" as const,
+          status: "running" as const,
+          active_item_title: "Requesting creator-cameos page 2...",
+          fetched_rows: 10,
+          processed_batches: 2,
+          expected_total_count: 100
+        }
+      ]
+    };
+
+    const { container } = render(
+      <ResultsPanel
+        allVisibleSelected={false}
+        downloadableRowCount={0}
+        downloadProgress={emptyDownloadProgress}
+        fetchProgress={activeFetchProgress}
+        hasRows={false}
+        hasQuery={false}
+        groupBy="none"
+        phase="fetching"
+        onDownload={vi.fn()}
+        onSelectionPresetChange={vi.fn()}
+        onGroupByChange={vi.fn()}
+        onQueryChange={vi.fn()}
+        onSetSelectedVideoIds={vi.fn()}
+        onSortKeyChange={vi.fn()}
+        onToggleSelectedVideoId={vi.fn()}
+        query=""
+        rows={[]}
+        selectableRowCount={0}
+        selectedDownloadableRowCount={0}
+        selectedBytes={0}
+        selectedVideoIds={[]}
+        selectedVisibleRowCount={0}
+        sortKey="published_newest"
+        totalRowCount={0}
+      />
+    );
+
+    expect(screen.getByText("Fetching 2 sources in parallel · 30 new rows")).toBeInTheDocument();
+    expect(screen.queryByText(/Processing Batch/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Page \d+\//i)).not.toBeInTheDocument();
+
+    const fill = container.querySelector(".ss-download-progress-fill") as HTMLElement | null;
+    expect(fill).not.toBeNull();
+    const widthPercent = Number.parseFloat(fill?.style.width ?? "0");
+    expect(widthPercent).toBeCloseTo(15, 3);
+  });
+
+  it("keeps progress fill aligned with in-flight page while persisting", () => {
+    const activeFetchProgress = {
+      ...emptyFetchProgress,
+      running_jobs: 1,
+      total_jobs: 1,
+      processed_batches: 433,
+      job_progress: [
+        {
+          job_id: "side-character-appearances:ch_crystal",
+          label: "Crystal Sparkle appearances",
+          source: "sideCharacter" as const,
+          status: "running" as const,
+          active_item_title: "Persisting 8 rows...",
+          fetched_rows: 3464,
+          processed_batches: 433,
+          expected_total_count: 145205
+        }
+      ]
+    };
+
+    const { container } = render(
+      <ResultsPanel
+        allVisibleSelected={false}
+        downloadableRowCount={0}
+        downloadProgress={emptyDownloadProgress}
+        fetchProgress={activeFetchProgress}
+        hasRows={false}
+        hasQuery={false}
+        groupBy="none"
+        phase="fetching"
+        onDownload={vi.fn()}
+        onSelectionPresetChange={vi.fn()}
+        onGroupByChange={vi.fn()}
+        onQueryChange={vi.fn()}
+        onSetSelectedVideoIds={vi.fn()}
+        onSortKeyChange={vi.fn()}
+        onToggleSelectedVideoId={vi.fn()}
+        query=""
+        rows={[]}
+        selectableRowCount={0}
+        selectedDownloadableRowCount={0}
+        selectedBytes={0}
+        selectedVideoIds={[]}
+        selectedVisibleRowCount={0}
+        sortKey="published_newest"
+        totalRowCount={0}
+      />
+    );
+
+    expect(screen.getByText("Processing Batch 19 of 757 (Page 2/24)")).toBeInTheDocument();
+    const fill = container.querySelector(".ss-download-progress-fill") as HTMLElement | null;
+    expect(fill).not.toBeNull();
+    const widthPercent = Number.parseFloat(fill?.style.width ?? "0");
+    expect(widthPercent).toBeCloseTo((2 / 24) * 100, 3);
   });
 });

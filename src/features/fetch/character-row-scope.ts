@@ -5,6 +5,11 @@ export function filterRowsForCharacterScope(
   rows: unknown[],
   job: FetchJob
 ): unknown[] {
+  if (job.source === "characterAccountAppearances" || job.source === "sideCharacter") {
+    // The appearances endpoint is already server-scoped to the target `ch_*` id.
+    // Filtering again here can drop valid older rows where cameo metadata is sparse.
+    return rows;
+  }
   if (!isCharacterScopedSource(job.source)) {
     return rows;
   }
@@ -155,7 +160,7 @@ function pickFirstString(candidates: unknown[]): string {
 }
 
 function isCharacterScopedSource(source: LowLevelSourceType): boolean {
-  return source === "characterAccountAppearances" || source === "characterAccountDrafts";
+  return source === "characterAccountAppearances" || source === "characterAccountDrafts" || source === "sideCharacter";
 }
 
 function getCharacterLabelFromJob(displayName: string, jobLabel: string): string {

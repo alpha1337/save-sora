@@ -11,6 +11,15 @@ const CHARACTER_APPEARANCES_JOB: FetchJob = {
   creator_username: "crystal.party"
 };
 
+const CHARACTER_DRAFTS_JOB: FetchJob = {
+  id: "character-account-drafts:ch_crystal",
+  label: "Crystal Sparkle drafts",
+  source: "characterAccountDrafts",
+  expected_total_count: 100,
+  character_id: "ch_crystal",
+  creator_username: "crystal.party"
+};
+
 describe("character-row-scope", () => {
   it("passes through non-character sources without filtering", () => {
     const nonCharacterJob: FetchJob = {
@@ -26,36 +35,47 @@ describe("character-row-scope", () => {
     expect(filteredRows).toEqual(rows);
   });
 
-  it("filters out false-positive appearance rows that are not tagged to the selected character", () => {
+  it("passes through character appearance rows without client-side filtering", () => {
+    const rows = [
+      { post: { id: "s_without_character_metadata" }, creator: { username: "alpha1337" } },
+      { post: { id: "s_with_character_metadata" }, cameo_profiles: [{ user_id: "ch_crystal", username: "crystal.party" }] }
+    ];
+
+    const filteredRows = filterRowsForCharacterScope(rows, CHARACTER_APPEARANCES_JOB);
+
+    expect(filteredRows).toEqual(rows);
+  });
+
+  it("filters out false-positive draft rows that are not tagged to the selected character", () => {
     const rows = [
       { post: { id: "s_false_positive" }, creator: { username: "alpha1337" } },
       { post: { id: "s_true_positive" }, cameo_profiles: [{ user_id: "ch_crystal", username: "crystal.party" }] }
     ];
 
-    const filteredRows = filterRowsForCharacterScope(rows, CHARACTER_APPEARANCES_JOB);
+    const filteredRows = filterRowsForCharacterScope(rows, CHARACTER_DRAFTS_JOB);
 
     expect(filteredRows).toHaveLength(1);
     expect((filteredRows[0] as { post: { id: string } }).post.id).toBe("s_true_positive");
   });
 
-  it("does not match username-only rows without ch_* metadata", () => {
+  it("does not match username-only draft rows without ch_* metadata", () => {
     const rows = [
       { post: { id: "s_with_username" }, character_username: "crystal.party" },
       { post: { id: "s_with_other_username" }, character_username: "someone.else" }
     ];
 
-    const filteredRows = filterRowsForCharacterScope(rows, CHARACTER_APPEARANCES_JOB);
+    const filteredRows = filterRowsForCharacterScope(rows, CHARACTER_DRAFTS_JOB);
 
     expect(filteredRows).toHaveLength(0);
   });
 
-  it("does not match mention-only rows that are missing explicit character metadata", () => {
+  it("does not match mention-only draft rows that are missing explicit character metadata", () => {
     const rows = [
       { post: { id: "s_with_mention_only" }, prompt: "@crystal.party check this out" },
       { post: { id: "s_with_explicit_id" }, cameo_profiles: [{ user_id: "ch_crystal" }] }
     ];
 
-    const filteredRows = filterRowsForCharacterScope(rows, CHARACTER_APPEARANCES_JOB);
+    const filteredRows = filterRowsForCharacterScope(rows, CHARACTER_DRAFTS_JOB);
 
     expect(filteredRows).toHaveLength(1);
     expect((filteredRows[0] as { post: { id: string } }).post.id).toBe("s_with_explicit_id");
@@ -63,7 +83,7 @@ describe("character-row-scope", () => {
 
   it("returns no rows when a character-scoped job id is not ch_*", () => {
     const nonCharacterJob: FetchJob = {
-      ...CHARACTER_APPEARANCES_JOB,
+      ...CHARACTER_DRAFTS_JOB,
       id: "character-account-appearances:user_owner_1",
       character_id: "user_owner_1"
     };
@@ -111,7 +131,7 @@ describe("character-row-scope", () => {
       }
     ];
 
-    const filteredRows = filterRowsForCharacterScope(rows, CHARACTER_APPEARANCES_JOB);
+    const filteredRows = filterRowsForCharacterScope(rows, CHARACTER_DRAFTS_JOB);
 
     expect(filteredRows).toHaveLength(1);
     expect((filteredRows[0] as { draft: { id: string } }).draft.id).toBe("gen_01nested");
@@ -137,7 +157,7 @@ describe("character-row-scope", () => {
       }
     ];
 
-    const filteredRows = filterRowsForCharacterScope(rows, CHARACTER_APPEARANCES_JOB);
+    const filteredRows = filterRowsForCharacterScope(rows, CHARACTER_DRAFTS_JOB);
 
     expect(filteredRows).toHaveLength(1);
     expect((filteredRows[0] as { draft: { id: string } }).draft.id).toBe("gen_01direct");

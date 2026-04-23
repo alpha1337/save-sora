@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { ChevronDown, Download, FileSpreadsheet, PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ChevronDown, Download, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import type { DownloadProgressState, FetchProgressState, GroupByOption, VideoRow, VideoSortOption } from "types/domain";
 import { Button } from "@components/atoms/button";
 import { Checkbox } from "@components/atoms/checkbox";
@@ -7,8 +7,112 @@ import { Panel } from "@components/atoms/panel";
 import { SummaryStat } from "@components/atoms/summary-stat";
 import { ResultsToolbar } from "@components/molecules/results-toolbar";
 import { VideoMetadataCard } from "@components/molecules/video-metadata-card";
-import { getFetchJobStatusLabel } from "@lib/utils/fetch-status";
 import { formatBytes, formatCount } from "@lib/utils/format-utils";
+
+const FETCH_HEADLINE_PHRASES = [
+    "Rendering pigeons with cinematic ambition...",
+    "Teaching pixels to believe in themselves...",
+    "Summoning director mode from the void...",
+    "Loading one more dramatic camera pan...",
+    "Bypassing content violations...",
+    "Compiling pure main-character energy...",
+    "Adding 12 percent more plot twist...",
+    "Calibrating chaos to studio standards...",
+    "Cue the slow-motion hair flip...",
+    "Upgrading potato quality to prestige drama...",
+    "Reticulating storyboards...",
+    "The timeline is doing timeline things...",
+    "Injecting extra cinematic nonsense...",
+    "Making every frame legally iconic...",
+    "This montage has no business going this hard...",
+    "Finding the most dramatic frame possible...",
+    "Converting vibes into video...",
+    "Crunching clips and questionable decisions...",
+    "Loading a suspiciously expensive transition...",
+    "Stabilizing handheld chaos...",
+    "Trying not to drop any lore...",
+    "Rendering like its awards season...",
+    "Assembling meme physics...",
+    "Rehearsing the perfect reaction shot...",
+    "Fine-tuning the boom wow ratio...",
+    "Adding depth, drama, and a little delusion...",
+    "Polishing frames until they sparkle...",
+    "Applying cinematic tax...",
+    "Putting the Sora in sorcery...",
+    "Generating scenes the algorithm dreamed about...",
+    "Bribing the compression goblins...",
+    "Turning side quests into feature films...",
+    "Syncing audio in spirit...",
+    "Cooking at 4K energy levels...",
+    "Rendering faster than your group chat rumors...",
+    "Building the directors cut of this fetch...",
+    "Finding continuity in absolute chaos...",
+    "Deploying premium b-roll vibes...",
+    "Loading dramatic pause...",
+    "Teaching the camera to hit its mark...",
+    "Collecting clips like infinity stones...",
+    "Adjusting exposure and expectations...",
+    "Preheating the render farm...",
+    "Making every second trailer-worthy...",
+    "Converting caffeine into frame rate...",
+    "Queueing scenes with unreasonable confidence...",
+    "Manifesting a clean export...",
+    "Generating cinema, one questionable choice at a time...",
+    "Hold my popcorn, this fetch is cooking...",
+    "Digging through the cloud...",
+    "Shaking the data tree...",
+    "Bribing the servers with electricity...",
+    "Asking nicely for your videos...",
+    "Opening way too many boxes...",
+    "Hunting for the good stuff...",
+    "Dusting off old files...",
+    "Convincing pixels to cooperate...",
+    "Following the digital breadcrumbs...",
+    "Knocking on Sora's door...",
+    "Checking under the couch...",
+    "Waking up sleepy servers...",
+    "Looking everywhere except where it is...",
+    "Making things less lost...",
+    "Arguing with the internet...",
+    "Counting... losing count... counting again...",
+    "Speedrunning your archive...",
+    "Politely stealing your data back...",
+    "Asking 'are we there yet?'",
+    "Turning chaos into results...",
+    "Poking around suspicious folders...",
+    "Negotiating with the algorithm...",
+    "Translating computer nonsense...",
+    "Grabbing things before they disappear...",
+    "Doing important-looking work...",
+    "Spinning in a loading circle...",
+    "Definitely not stuck... probably...",
+    "Sneaking past watermarks...",
+    "Searching high and low...",
+    "Pressing all the right buttons...",
+    "Whispering to the cloud...",
+    "Making sense of the mess...",
+    "Running faster than your WiFi...",
+    "Asking the server again, but louder...",
+    "Gathering your digital memories...",
+    "Doing the thing... you know... the thing...",
+    "Pretending this is instant...",
+    "Loading... but dramatically...",
+    "Almost there™",
+    "Still working, promise...",
+    "Sending packets on a journey...",
+    "Trying not to break anything...",
+    "Pulling rabbits out of hats...",
+    "Making downloads happen...",
+    "Untangling the spaghetti...",
+    "Checking one more place...",
+    "This is taking longer than expected...",
+    "Trust the process...",
+    "Wrapping things up...",
+    "Boom. There it is.",
+] as const;
+const RESUME_LOADING_STATUS_LABEL = "Loading cached rows and checkpoints...";
+const RESUME_LOADING_HEADLINE = "Please wait patiently while the fetch resumes";
+const RESULTS_PAGE_SIZE = 100;
 
 interface ResultsPanelProps {
   allVisibleSelected: boolean;
@@ -29,11 +133,9 @@ interface ResultsPanelProps {
   sortKey: VideoSortOption;
   groupBy: GroupByOption;
   downloadDisabled?: boolean;
-  exportDisabled?: boolean;
   hasSidebar?: boolean;
   sidebarCollapsed?: boolean;
   onDownload: () => void;
-  onExportCsv: () => void;
   onToggleSidebar?: () => void;
   onSelectionPresetChange: (preset: "all_visible" | "mine" | "others" | "none") => void;
   onQueryChange: (value: string) => void;
@@ -52,13 +154,11 @@ export function ResultsPanel({
   downloadProgress,
   fetchProgress,
   downloadDisabled = false,
-  exportDisabled = false,
   hasSidebar = false,
   hasRows,
   hasQuery,
   phase,
   onDownload,
-  onExportCsv,
   onToggleSidebar,
   onSelectionPresetChange,
   onQueryChange,
@@ -80,17 +180,106 @@ export function ResultsPanel({
 }: ResultsPanelProps) {
   const [activePreviewRowId, setActivePreviewRowId] = useState("");
   const [collapsedGroupKeys, setCollapsedGroupKeys] = useState<string[]>([]);
+  const [etaTickMs, setEtaTickMs] = useState(() => Date.now());
+  const [fetchStartedAtMs, setFetchStartedAtMs] = useState<number | null>(null);
+  const [fetchHeadline, setFetchHeadline] = useState("Fetching");
+  const [currentResultsPage, setCurrentResultsPage] = useState(1);
+  const fetchHeadlineQueueRef = useRef<string[]>([]);
+  const wasShowingFetchProgressRef = useRef(false);
+  const wasResumeLoadingRef = useRef(false);
   const hasZipSelection = selectedDownloadableRowCount > 0;
-  const showFetchProgress = phase === "fetching" || fetchProgress.running_jobs > 0;
+  const sidebarToggleLabel = sidebarCollapsed ? "Show Sidebar" : "Hide Sidebar";
+  const showFetchProgress = phase === "fetching";
   const showDownloadProgress = phase === "downloading" || downloadProgress.running_workers > 0;
+  const runningFetchJobs = useMemo(
+    () => fetchProgress.job_progress.filter((job) => job.status === "running"),
+    [fetchProgress.job_progress]
+  );
   const activeFetchJobs = useMemo(
     () => fetchProgress.job_progress.filter((job) => job.status !== "completed"),
     [fetchProgress.job_progress]
   );
-  const groupedRows = useMemo(
-    () => (groupBy === "none" ? [] : buildGroupedRows(rows, groupBy)),
-    [groupBy, rows]
+  const activeFetchJob = useMemo(
+    () =>
+      fetchProgress.job_progress.find((job) => job.status === "running") ??
+      fetchProgress.job_progress.find((job) => job.status !== "completed") ??
+      null,
+    [fetchProgress.job_progress]
   );
+  const hasConcurrentFetchJobs = runningFetchJobs.length > 1;
+  const currentBatchProgressPercent = useMemo(
+    () => getCurrentBatchProgressPercent(activeFetchJob, fetchProgress),
+    [activeFetchJob, fetchProgress]
+  );
+  const overallFetchCompletionPercent = useMemo(
+    () => getOverallFetchCompletionPercent(fetchProgress),
+    [fetchProgress]
+  );
+  const overallFetchPercentLabel = useMemo(
+    () => formatFetchOverallPercentLabel(overallFetchCompletionPercent),
+    [overallFetchCompletionPercent]
+  );
+  const fetchEtaLabel = useMemo(
+    () => buildFetchEtaLabel(fetchProgress, activeFetchJobs, etaTickMs, fetchStartedAtMs),
+    [activeFetchJobs, etaTickMs, fetchProgress, fetchStartedAtMs]
+  );
+  const fetchTimeLeftMetaLabel = useMemo(
+    () => formatFetchTimeLeftMetaLabel(fetchEtaLabel),
+    [fetchEtaLabel]
+  );
+  const overallPageProgressLabel = useMemo(
+    () => (activeFetchJob ? formatOverallPageProgressLabel(activeFetchJob) : ""),
+    [activeFetchJob]
+  );
+  const fetchProgressTrackPercent = useMemo(
+    () => (hasConcurrentFetchJobs ? overallFetchCompletionPercent : currentBatchProgressPercent),
+    [currentBatchProgressPercent, hasConcurrentFetchJobs, overallFetchCompletionPercent]
+  );
+  const fetchStatusLabel = useMemo(() => {
+    if (hasConcurrentFetchJobs) {
+      return `Fetching ${formatCount(runningFetchJobs.length)} sources in parallel · ${formatCount(fetchProgress.processed_rows)} new rows`;
+    }
+    return fetchProgress.active_label;
+  }, [fetchProgress.active_label, fetchProgress.processed_rows, hasConcurrentFetchJobs, runningFetchJobs.length]);
+  const shouldShowMultiJobCounter = fetchProgress.total_jobs > 1;
+  const isResumeLoading = showFetchProgress && fetchProgress.active_label.trim() === RESUME_LOADING_STATUS_LABEL;
+  const totalResultsPages = useMemo(
+    () => Math.max(1, Math.ceil(rows.length / RESULTS_PAGE_SIZE)),
+    [rows.length]
+  );
+  const safeCurrentResultsPage = useMemo(
+    () => Math.min(totalResultsPages, Math.max(1, currentResultsPage)),
+    [currentResultsPage, totalResultsPages]
+  );
+  const pagedRows = useMemo(() => {
+    if (rows.length === 0) {
+      return [];
+    }
+    const startIndex = (safeCurrentResultsPage - 1) * RESULTS_PAGE_SIZE;
+    return rows.slice(startIndex, startIndex + RESULTS_PAGE_SIZE);
+  }, [rows, safeCurrentResultsPage]);
+  const currentResultsRange = useMemo(() => {
+    if (rows.length === 0) {
+      return { start: 0, end: 0 };
+    }
+    const start = (safeCurrentResultsPage - 1) * RESULTS_PAGE_SIZE + 1;
+    const end = Math.min(rows.length, safeCurrentResultsPage * RESULTS_PAGE_SIZE);
+    return { start, end };
+  }, [rows.length, safeCurrentResultsPage]);
+  const groupedRows = useMemo(
+    () => (groupBy === "none" ? [] : buildGroupedRows(pagedRows, groupBy)),
+    [groupBy, pagedRows]
+  );
+
+  useEffect(() => {
+    if (currentResultsPage !== safeCurrentResultsPage) {
+      setCurrentResultsPage(safeCurrentResultsPage);
+    }
+  }, [currentResultsPage, safeCurrentResultsPage]);
+
+  useEffect(() => {
+    setCurrentResultsPage(1);
+  }, [groupBy, query, sortKey]);
 
   useEffect(() => {
     if (groupBy === "none") {
@@ -100,6 +289,81 @@ export function ResultsPanel({
 
     setCollapsedGroupKeys((current) => current.filter((key) => groupedRows.some((group) => group.key === key)));
   }, [groupBy, groupedRows]);
+
+  useEffect(() => {
+    if (!showFetchProgress) {
+      setFetchStartedAtMs(null);
+      return;
+    }
+    setFetchStartedAtMs((currentValue) => currentValue ?? Date.now());
+  }, [showFetchProgress]);
+
+  useEffect(() => {
+    const wasShowingFetchProgress = wasShowingFetchProgressRef.current;
+    if (showFetchProgress && !wasShowingFetchProgress) {
+      if (isResumeLoading) {
+        fetchHeadlineQueueRef.current = [];
+        setFetchHeadline(RESUME_LOADING_HEADLINE);
+      } else {
+        fetchHeadlineQueueRef.current = buildShuffledFetchHeadlineQueue();
+        const initialHeadline = fetchHeadlineQueueRef.current.shift() ?? "Fetching";
+        setFetchHeadline(initialHeadline);
+      }
+    }
+    if (!showFetchProgress) {
+      fetchHeadlineQueueRef.current = [];
+    }
+    wasShowingFetchProgressRef.current = showFetchProgress;
+  }, [isResumeLoading, showFetchProgress]);
+
+  useEffect(() => {
+    if (!showFetchProgress) {
+      wasResumeLoadingRef.current = false;
+      return;
+    }
+    if (isResumeLoading) {
+      fetchHeadlineQueueRef.current = [];
+      setFetchHeadline(RESUME_LOADING_HEADLINE);
+      wasResumeLoadingRef.current = true;
+      return;
+    }
+    if (wasResumeLoadingRef.current) {
+      fetchHeadlineQueueRef.current = buildShuffledFetchHeadlineQueue();
+      const initialHeadline = fetchHeadlineQueueRef.current.shift() ?? "Fetching";
+      setFetchHeadline(initialHeadline);
+      wasResumeLoadingRef.current = false;
+    }
+  }, [isResumeLoading, showFetchProgress]);
+
+  useEffect(() => {
+    if (!showFetchProgress || isResumeLoading) {
+      return;
+    }
+    const interval = window.setInterval(() => {
+      setFetchHeadline((currentValue) => {
+        if (fetchHeadlineQueueRef.current.length === 0) {
+          fetchHeadlineQueueRef.current = buildShuffledFetchHeadlineQueue(currentValue);
+        }
+        return fetchHeadlineQueueRef.current.shift() ?? currentValue;
+      });
+    }, 5000);
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, [isResumeLoading, showFetchProgress]);
+
+  useEffect(() => {
+    if (!showFetchProgress) {
+      return;
+    }
+    const interval = window.setInterval(() => {
+      setEtaTickMs(Date.now());
+    }, 1000);
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, [showFetchProgress]);
+
   return (
     <Panel className="ss-stack ss-panel--stretch">
       <div className="ss-section-heading">
@@ -108,14 +372,17 @@ export function ResultsPanel({
         </div>
         <div className="ss-inline-actions">
           {hasSidebar && onToggleSidebar ? (
-            <Button className="ss-sidebar-toggle" onClick={onToggleSidebar} tone="secondary" type="button">
+            <Button
+              aria-label={sidebarToggleLabel}
+              className="ss-sidebar-toggle"
+              onClick={onToggleSidebar}
+              tone="secondary"
+              type="button"
+            >
               {sidebarCollapsed ? <PanelLeftOpen aria-hidden="true" size={16} /> : <PanelLeftClose aria-hidden="true" size={16} />}
+              {sidebarToggleLabel}
             </Button>
           ) : null}
-          <Button disabled={exportDisabled} onClick={onExportCsv} tone="secondary" type="button">
-            <FileSpreadsheet aria-hidden="true" size={16} />
-            Export CSV
-          </Button>
           <Button disabled={downloadDisabled} onClick={onDownload} type="button">
             <Download aria-hidden="true" size={16} />
             {hasZipSelection
@@ -139,37 +406,35 @@ export function ResultsPanel({
       {showFetchProgress ? (
         <div className="ss-download-progress-panel">
           <div className="ss-download-progress-head">
-            <strong>{fetchProgress.active_label || "Fetching rows"}</strong>
-            <span className="ss-muted">
-              {formatCount(fetchProgress.completed_jobs)}/{formatCount(fetchProgress.total_jobs)} jobs
-            </span>
+            <div className="ss-download-progress-head-copy">
+              <strong className="ss-download-progress-quote">{fetchHeadline}</strong>
+              {fetchStatusLabel ? (
+                <span className="ss-download-progress-status">{fetchStatusLabel}</span>
+              ) : null}
+            </div>
+            <div className="ss-download-progress-head-actions">
+              <span className="ss-fetch-progress-percent">{`${overallFetchPercentLabel} overall`}</span>
+            </div>
           </div>
           <div className="ss-download-progress-track" aria-hidden="true">
             <div
               className="ss-download-progress-fill"
-              style={{ width: `${formatProgressPercent(fetchProgress.completed_jobs, fetchProgress.total_jobs)}%` }}
+              style={{ width: `${fetchProgressTrackPercent}%` }}
             />
           </div>
-          <div className="ss-download-worker-list">
-            {activeFetchJobs.length > 0 ? (
-              activeFetchJobs.map((job) => (
-                <div className="ss-download-worker-row" key={job.job_id}>
-                  <div className="ss-download-worker-main">
-                    <strong>{job.label}</strong>
-                    <span className="ss-muted">{getFetchJobStatusLabel(job)}</span>
-                    <div className="ss-download-worker-progress-track" aria-hidden="true">
-                      <div
-                        className="ss-download-worker-progress-fill"
-                        style={{ width: `${formatFetchJobProgressPercent(job)}%` }}
-                      />
-                    </div>
-                  </div>
-                  <span className="ss-download-worker-meta">{`${formatFetchJobProgressPercent(job)}%`}</span>
-                </div>
-              ))
-            ) : (
-              <div className="ss-muted">No active jobs in queue.</div>
-            )}
+          <div className="ss-fetch-progress-meta">
+            <span className="ss-fetch-progress-pill">{fetchTimeLeftMetaLabel}</span>
+            {!hasConcurrentFetchJobs && activeFetchJob
+              ? <span className="ss-fetch-progress-pill">{formatCurrentBatchProgressLabel(activeFetchJob)}</span>
+              : null}
+            {!hasConcurrentFetchJobs && overallPageProgressLabel
+              ? <span className="ss-fetch-progress-pill">{overallPageProgressLabel}</span>
+              : null}
+            {shouldShowMultiJobCounter ? (
+              <span className="ss-fetch-progress-pill">
+                {`${formatCount(fetchProgress.completed_jobs)}/${formatCount(fetchProgress.total_jobs)} jobs`}
+              </span>
+            ) : null}
           </div>
         </div>
       ) : null}
@@ -242,7 +507,7 @@ export function ResultsPanel({
           </div>
         ) : (
           renderRowsWithGrouping(
-            rows,
+            pagedRows,
             groupBy,
             selectedVideoIds,
             activePreviewRowId,
@@ -258,6 +523,34 @@ export function ResultsPanel({
             onToggleSelectedVideoId
           )
         )}
+        {rows.length > RESULTS_PAGE_SIZE ? (
+          <div className="ss-results-pagination" role="navigation" aria-label="Session results pagination">
+            <span className="ss-results-pagination-summary">
+              {`Showing ${formatCount(currentResultsRange.start)}-${formatCount(currentResultsRange.end)} of ${formatCount(rows.length)} videos`}
+            </span>
+            <div className="ss-results-pagination-actions">
+              <Button
+                disabled={safeCurrentResultsPage <= 1}
+                onClick={() => setCurrentResultsPage((current) => Math.max(1, current - 1))}
+                tone="secondary"
+                type="button"
+              >
+                Previous
+              </Button>
+              <span className="ss-results-pagination-page">
+                {`Page ${formatCount(safeCurrentResultsPage)} of ${formatCount(totalResultsPages)}`}
+              </span>
+              <Button
+                disabled={safeCurrentResultsPage >= totalResultsPages}
+                onClick={() => setCurrentResultsPage((current) => Math.min(totalResultsPages, current + 1))}
+                tone="secondary"
+                type="button"
+              >
+                Next
+              </Button>
+            </div>
+          </div>
+        ) : null}
       </div>
     </Panel>
   );
@@ -276,25 +569,252 @@ function formatWorkerProgressPercent(completedItems: number, downloadProgress: D
   return Math.min(100, Math.max(0, Math.round((completedItems / estimatedItemsPerWorker) * 100)));
 }
 
-function formatFetchJobProgressPercent(job: FetchProgressState["job_progress"][number]): number {
-  if (typeof job.expected_total_count === "number" && job.expected_total_count > 0) {
-    return Math.min(100, Math.max(0, Math.round((job.fetched_rows / job.expected_total_count) * 100)));
+function buildFetchEtaLabel(
+  fetchProgress: FetchProgressState,
+  activeJobs: FetchProgressState["job_progress"],
+  nowMs: number,
+  fetchStartedAtMs: number | null
+): string {
+  if (activeJobs.length === 0) {
+    return "Fetching";
   }
-  const draftResolutionProgressMatch = (job.active_item_title ?? "").match(/Resolving draft IDs\s+(\d+)\/(\d+)\s+processed/i);
-  if (draftResolutionProgressMatch) {
-    const processed = Number(draftResolutionProgressMatch[1]);
-    const total = Number(draftResolutionProgressMatch[2]);
-    if (Number.isFinite(processed) && Number.isFinite(total) && total > 0) {
-      return Math.min(95, Math.max(5, Math.round((processed / total) * 95)));
+
+  if (fetchProgress.processed_batches <= 0) {
+    return "Fetching · calculating time left…";
+  }
+
+  if (!fetchStartedAtMs) {
+    return "Fetching · calculating time left…";
+  }
+
+  const estimatedRemainingPages = activeJobs.reduce((sum, job) => {
+    if (typeof job.expected_total_count !== "number" || job.expected_total_count <= 0) {
+      return sum;
     }
+    const batchLimit = getEstimatedBatchLimitForSource(job.source);
+    const totalPages = Math.max(1, Math.ceil(job.expected_total_count / batchLimit));
+    const remainingPages = Math.max(0, totalPages - job.processed_batches);
+    return sum + remainingPages;
+  }, 0);
+
+  if (estimatedRemainingPages <= 0) {
+    return "Fetching · finishing…";
   }
-  if (job.status === "completed") {
+
+  const elapsedPerBatchMs = Math.max(1, nowMs - fetchStartedAtMs) / Math.max(1, fetchProgress.processed_batches);
+  const remainingMs = Math.max(1000, Math.round(estimatedRemainingPages * elapsedPerBatchMs));
+  return `Fetching · ~${formatDurationMs(remainingMs)} left`;
+}
+
+function getEstimatedBatchLimitForSource(source: string): number {
+  if (source === "sideCharacter" || source === "characterAccountAppearances" || source === "characters") {
+    return 8;
+  }
+  return 100;
+}
+
+function formatDurationMs(durationMs: number): string {
+  const totalSeconds = Math.max(1, Math.round(durationMs / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) {
+    return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
+  }
+  if (minutes > 0) {
+    return `${minutes}m ${seconds}s`;
+  }
+  return `${seconds}s`;
+}
+
+function formatFetchTimeLeftMetaLabel(fetchEtaLabel: string): string {
+  const normalizedLabel = fetchEtaLabel.trim();
+  if (!normalizedLabel || normalizedLabel === "Fetching") {
+    return "Calculating time left…";
+  }
+
+  return normalizedLabel.replace(/^Fetching\s*·\s*/i, "");
+}
+
+function getCurrentBatchProgressPercent(
+  activeJob: FetchProgressState["job_progress"][number] | null,
+  fetchProgress: FetchProgressState
+): number {
+  if (!activeJob) {
+    return formatProgressPercent(fetchProgress.completed_jobs, fetchProgress.total_jobs);
+  }
+  if (activeJob.status === "completed") {
     return 100;
   }
-  if (job.status === "running") {
-    return Math.min(95, Math.max(5, job.processed_batches * 20));
+  const batchPageSize = getCurrentBatchPageSizeForSource(activeJob.source);
+  const batchPagePosition = getCurrentBatchPagePosition(activeJob, batchPageSize);
+  if (batchPagePosition > 0) {
+    return Math.min(100, Math.max(0, (batchPagePosition / batchPageSize) * 100));
   }
   return 0;
+}
+
+function formatCurrentBatchProgressLabel(job: FetchProgressState["job_progress"][number]): string {
+  const batchPageSize = getCurrentBatchPageSizeForSource(job.source);
+  const totalPages = getTotalPagesForJob(job);
+  const currentPage = resolveCurrentPageForJob(job, totalPages);
+  const pageInBatch = currentPage > 0 ? normalizePageWithinBatch(currentPage, batchPageSize) : 0;
+  const currentBatch = currentPage > 0 ? Math.ceil(currentPage / batchPageSize) : 0;
+
+  if (typeof totalPages === "number" && totalPages > 0) {
+    const totalBatches = Math.max(1, Math.ceil(totalPages / batchPageSize));
+    return `Processing Batch ${formatCount(currentBatch)} of ${formatCount(totalBatches)} (Page ${pageInBatch}/${batchPageSize})`;
+  }
+
+  return `Processing Batch ${formatCount(currentBatch)} (Page ${pageInBatch}/${batchPageSize})`;
+}
+
+function formatOverallPageProgressLabel(job: FetchProgressState["job_progress"][number]): string {
+  const totalPages = getTotalPagesForJob(job);
+  if (typeof totalPages !== "number" || totalPages <= 0) {
+    return "";
+  }
+
+  const currentPage = resolveCurrentPageForJob(job, totalPages);
+  const pagePercent = totalPages > 0 ? (currentPage / totalPages) * 100 : 0;
+
+  return `Page ${formatCount(currentPage)}/${formatCount(totalPages)} (${formatPageProgressPercent(pagePercent)})`;
+}
+
+function formatPageProgressPercent(percent: number): string {
+  if (!Number.isFinite(percent) || percent <= 0) {
+    return "0.000%";
+  }
+  if (percent < 1) {
+    return `${percent.toFixed(3)}%`;
+  }
+  if (percent < 10) {
+    return `${percent.toFixed(2)}%`;
+  }
+  if (percent < 100) {
+    return `${percent.toFixed(1)}%`;
+  }
+  return "100%";
+}
+
+function getCurrentBatchPageSizeForSource(source: string): number {
+  if (source === "sideCharacter" || source === "characterAccountAppearances") {
+    return 24;
+  }
+  return 1;
+}
+
+function getCurrentBatchPagePosition(
+  job: FetchProgressState["job_progress"][number],
+  batchPageSize: number
+): number {
+  const requestedPage = extractPageNumberFromStatus(job.active_item_title ?? "");
+  if (requestedPage != null) {
+    return normalizePageWithinBatch(requestedPage, batchPageSize);
+  }
+  const inferredPageNumber = job.status === "running"
+    ? Math.max(1, job.processed_batches + 1)
+    : Math.max(0, job.processed_batches);
+  if (inferredPageNumber <= 0) {
+    return 0;
+  }
+  return normalizePageWithinBatch(inferredPageNumber, batchPageSize);
+}
+
+function extractPageNumberFromStatus(statusLabel: string): number | null {
+  const match = statusLabel.match(/\bpage\s+(\d+)\b/i);
+  if (!match) {
+    return null;
+  }
+  const parsed = Number(match[1]);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return null;
+  }
+  return parsed;
+}
+
+function normalizePageWithinBatch(pageNumber: number, batchPageSize: number): number {
+  if (batchPageSize <= 0 || pageNumber <= 0) {
+    return 0;
+  }
+  const pageOffset = pageNumber % batchPageSize;
+  return pageOffset === 0 ? batchPageSize : pageOffset;
+}
+
+function getTotalPagesForJob(job: FetchProgressState["job_progress"][number]): number | null {
+  if (typeof job.expected_total_count !== "number" || job.expected_total_count <= 0) {
+    return null;
+  }
+  const pageSize = getEstimatedBatchLimitForSource(job.source);
+  return Math.max(1, Math.ceil(job.expected_total_count / pageSize));
+}
+
+function resolveCurrentPageForJob(job: FetchProgressState["job_progress"][number], totalPages: number | null): number {
+  const requestedPage = extractPageNumberFromStatus(job.active_item_title ?? "");
+  const fallbackPage = job.status === "running"
+    ? Math.max(1, job.processed_batches + 1)
+    : Math.max(0, job.processed_batches);
+  const rawCurrentPage = Math.max(0, requestedPage ?? fallbackPage);
+
+  if (typeof totalPages === "number" && totalPages > 0) {
+    return Math.min(totalPages, rawCurrentPage);
+  }
+
+  return rawCurrentPage;
+}
+
+function buildShuffledFetchHeadlineQueue(previousHeadline = ""): string[] {
+  const queue = [...FETCH_HEADLINE_PHRASES];
+  for (let index = queue.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(Math.random() * (index + 1));
+    [queue[index], queue[swapIndex]] = [queue[swapIndex], queue[index]];
+  }
+
+  if (queue.length > 1 && queue[0] === previousHeadline) {
+    const firstDifferentIndex = queue.findIndex((phrase) => phrase !== previousHeadline);
+    if (firstDifferentIndex > 0) {
+      [queue[0], queue[firstDifferentIndex]] = [queue[firstDifferentIndex], queue[0]];
+    }
+  }
+
+  return queue;
+}
+
+function getOverallFetchCompletionPercent(fetchProgress: FetchProgressState): number {
+  if (fetchProgress.job_progress.length === 0) {
+    return formatProgressPercent(fetchProgress.completed_jobs, fetchProgress.total_jobs);
+  }
+
+  let weightedCompleted = 0;
+  let weightedTotal = 0;
+
+  fetchProgress.job_progress.forEach((job) => {
+    const expectedTotal = typeof job.expected_total_count === "number" && job.expected_total_count > 0
+      ? job.expected_total_count
+      : 1;
+    const completedUnits = typeof job.expected_total_count === "number" && job.expected_total_count > 0
+      ? (job.status === "completed" ? expectedTotal : Math.max(0, Math.min(expectedTotal, job.fetched_rows)))
+      : (job.status === "completed" ? 1 : 0);
+
+    weightedCompleted += completedUnits;
+    weightedTotal += expectedTotal;
+  });
+
+  if (weightedTotal <= 0) {
+    return 0;
+  }
+
+  return Math.min(100, Math.max(0, (weightedCompleted / weightedTotal) * 100));
+}
+
+function formatFetchOverallPercentLabel(percent: number): string {
+  if (percent >= 10) {
+    return `${Math.round(percent)}%`;
+  }
+  if (percent >= 1) {
+    return `${percent.toFixed(1)}%`;
+  }
+  return `${percent.toFixed(2)}%`;
 }
 
 function formatSkipReasonLabel(reason: string): string {

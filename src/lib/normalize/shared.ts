@@ -187,7 +187,7 @@ export function getDraftGenerationId(value: unknown): string {
   }
 
   const record = value as Record<string, unknown>;
-  const generationId = pickFirstString([
+  const candidates = [
     record.generation_id,
     record.generationId,
     record.id,
@@ -199,9 +199,19 @@ export function getDraftGenerationId(value: unknown): string {
     getDraftGenerationId(record.draft),
     getDraftGenerationId(record.item),
     getDraftGenerationId(record.data)
-  ]);
+  ];
 
-  return GENERATION_ID_PATTERN.test(generationId) ? generationId : "";
+  for (const candidate of candidates) {
+    if (typeof candidate !== "string") {
+      continue;
+    }
+    const trimmed = candidate.trim();
+    if (GENERATION_ID_PATTERN.test(trimmed)) {
+      return trimmed;
+    }
+  }
+
+  return "";
 }
 
 export function getRowPostId(value: unknown): string {
@@ -587,6 +597,50 @@ export function getPublishedAt(value: unknown): string | null {
   ]);
 }
 
+export function getLikedAt(value: unknown): string | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const record = value as Record<string, unknown>;
+  return pickFirstTimestamp([
+    record.liked_at,
+    record.likedAt,
+    record.liked_on,
+    record.likedOn,
+    ...getCandidateObjects(record).flatMap((candidate) => [
+      candidate.liked_at,
+      candidate.likedAt,
+      candidate.liked_on,
+      candidate.likedOn
+    ])
+  ]);
+}
+
+export function getLikeRank(value: unknown): number | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const record = value as Record<string, unknown>;
+  const rank = pickFirstNumber([
+    record.__save_sora_like_rank,
+    record.like_rank,
+    record.likeRank,
+    ...getCandidateObjects(record).flatMap((candidate) => [
+      candidate.__save_sora_like_rank,
+      candidate.like_rank,
+      candidate.likeRank
+    ])
+  ]);
+
+  if (typeof rank !== "number" || !Number.isFinite(rank) || rank < 0) {
+    return null;
+  }
+
+  return Math.floor(rank);
+}
+
 export function getCreatedAt(value: unknown): string | null {
   if (!value || typeof value !== "object") {
     return null;
@@ -669,6 +723,9 @@ export function resolveSourceBucket(source: LowLevelSourceType): SourceBucket {
   }
   if (source === "characters" || source === "characterDrafts") {
     return "characters";
+  }
+  if (source === "sideCharacter") {
+    return "character-account";
   }
   if (source.startsWith("characterAccount")) {
     return "character-account";

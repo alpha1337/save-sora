@@ -1,4 +1,4 @@
-import type { FetchJobCheckpoint, LowLevelSourceType, VideoRow } from "types/domain";
+import type { CreatorProfile, FetchJobCheckpoint, LowLevelSourceType, VideoRow } from "types/domain";
 import type { FetchJob } from "./source-adapters";
 
 export class FetchCancellationError extends Error {
@@ -60,7 +60,16 @@ export function getPageSignature(endpointKey: string | null, rowKeys: string[]):
   return `${endpointKey ?? "default"}:${hash.toString(36)}`;
 }
 
-export function getFetchBatchLimit(source: LowLevelSourceType, defaultLimit: number, appearanceFeedLimit: number): number {
+export function getFetchBatchLimit(
+  source: LowLevelSourceType,
+  defaultLimit: number,
+  appearanceFeedLimit: number,
+  sideCharacterLimit: number
+): number {
+  if (isSideCharacterSource(source)) {
+    return sideCharacterLimit;
+  }
+
   if (isServerCursorOnlyAppearanceFeed(source)) {
     return appearanceFeedLimit;
   }
@@ -75,23 +84,32 @@ export function isDraftSource(source: LowLevelSourceType): boolean {
 export function shouldRefreshCreatorProfile(profile: {
   permalink: string;
   user_id: string;
+  account_type?: "creator" | "sideCharacter";
   is_character_profile: boolean;
   appearance_count: number | null;
   published_count: number | null;
 }): boolean {
-  if (!profile.permalink) {
-    return false;
+  return Boolean(profile.permalink);
+}
+
+export function mergeRefreshedCreatorProfile(savedProfile: CreatorProfile, refreshedProfile: CreatorProfile): CreatorProfile {
+  const mergedProfile: CreatorProfile = {
+    ...savedProfile,
+    ...refreshedProfile,
+    profile_id: savedProfile.profile_id
+  };
+
+  if (savedProfile.account_type !== "sideCharacter") {
+    return mergedProfile;
   }
 
-  if (!profile.user_id) {
-    return true;
-  }
-
-  if (profile.is_character_profile) {
-    return profile.appearance_count == null;
-  }
-
-  return profile.published_count == null || profile.appearance_count == null;
+  return {
+    ...mergedProfile,
+    account_type: "sideCharacter",
+    is_character_profile: true,
+    character_user_id: resolveSideCharacterId(savedProfile, refreshedProfile),
+    owner_user_id: resolveOwnerUserId(savedProfile, refreshedProfile)
+  };
 }
 
 export function throwIfFetchCanceled(signal: AbortSignal): void {
@@ -123,7 +141,11 @@ export async function runWithConcurrency<T>(
 }
 
 function isServerCursorOnlyAppearanceFeed(source: LowLevelSourceType): boolean {
-  return source === "characters" || source === "characterAccountAppearances" || source === "creatorCameos";
+  return source === "creatorPublished" || source === "characters" || source === "characterAccountAppearances" || source === "sideCharacter";
+}
+
+function isSideCharacterSource(source: LowLevelSourceType): boolean {
+  return source === "sideCharacter";
 }
 
 export function dedupeVideoRowsById(rows: VideoRow[]): VideoRow[] {
@@ -145,4 +167,40 @@ export function parseVideoRowRawPayload(row: VideoRow): Record<string, unknown> 
 export function getGenerationIdFromDetailUrl(detailUrl: string): string {
   const match = detailUrl.match(/\/d\/(gen_[A-Za-z0-9_-]+)/i);
   return match?.[1] ?? "";
+}
+
+function resolveSideCharacterId(savedProfile: CreatorProfile, refreshedProfile: CreatorProfile): string {
+  const candidates = [
+    refreshedProfile.character_user_id,
+    savedProfile.character_user_id,
+    refreshedProfile.user_id,
+    savedProfile.user_id
+  ];
+
+  for (const candidate of candidates) {
+    const normalizedCandidate = (candidate || "").trim();
+    if (normalizedCandidate.startsWith("ch_")) {
+      return normalizedCandidate;
+    }
+  }
+
+  return savedProfile.character_user_id || refreshedProfile.character_user_id || "";
+}
+
+function resolveOwnerUserId(savedProfile: CreatorProfile, refreshedProfile: CreatorProfile): string {
+  const candidates = [
+    refreshedProfile.owner_user_id,
+    savedProfile.owner_user_id,
+    refreshedProfile.user_id,
+    savedProfile.user_id
+  ];
+
+  for (const candidate of candidates) {
+    const normalizedCandidate = (candidate || "").trim();
+    if (normalizedCandidate.startsWith("user_") || normalizedCandidate.startsWith("user-")) {
+      return normalizedCandidate;
+    }
+  }
+
+  return savedProfile.owner_user_id || refreshedProfile.owner_user_id || "";
 }

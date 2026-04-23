@@ -2,6 +2,7 @@ import type { CharacterAccount, CreatorProfile, LowLevelSourceType, VideoRow } f
 import {
   buildRowId,
   buildRowIdFromPayload,
+  getCandidateObjects,
   getCaption,
   createSkippedRow,
   getAttachmentObjects,
@@ -17,6 +18,8 @@ import {
   getDraftGenerationId,
   getDurationSeconds,
   getEstimatedSizeBytes,
+  getLikedAt,
+  getLikeRank,
   getMetrics,
   getPublishedAt,
   getPrompt,
@@ -39,12 +42,14 @@ export function normalizePostRows(source: LowLevelSourceType, rows: unknown[], f
 
   for (const row of rows) {
     const postId = getRowPostId(row);
-    const videoId = getVideoIdFromValue(row);
+    const videoId = source === "sideCharacter"
+      ? resolveSideCharacterVideoId(row)
+      : getVideoIdFromValue(row);
     const detailUrl = getDetailUrl(row, postId);
     const attachments = getAttachmentObjects(row);
     const title = getRowTitle(row, "video");
 
-    if (attachments.length > 1) {
+    if (attachments.length > 1 && !videoId) {
       normalizedRows.push(
         createSkippedRow({
           detail_url: detailUrl,
@@ -61,6 +66,18 @@ export function normalizePostRows(source: LowLevelSourceType, rows: unknown[], f
     const metrics = getMetrics(row);
     const dimensions = getDimensions(row);
     const characterNames = getCharacterNames(row);
+    const likedAt = source === "likes" ? getLikedAt(row) : null;
+    const likeRank = source === "likes" ? getLikeRank(row) : null;
+    const createdAt = likedAt || getCreatedAt(row);
+    const publishedAt = likedAt || getPublishedAt(row);
+    const playbackUrl = getPlaybackUrlFromRow(row);
+    const downloadUrl = getDownloadUrlFromRow(row) || playbackUrl;
+    const isDownloadable = Boolean(videoId && downloadUrl);
+    const skipReason = !videoId
+      ? "missing_video_id"
+      : downloadUrl
+        ? ""
+        : "missing_download_url";
 
     normalizedRows.push({
       row_id: videoId || postId
@@ -80,8 +97,8 @@ export function normalizePostRows(source: LowLevelSourceType, rows: unknown[], f
       character_username: getCharacterUsername(row),
       character_names: characterNames,
       category_tags: [resolveSourceBucket(source)],
-      created_at: getCreatedAt(row),
-      published_at: getPublishedAt(row),
+      created_at: createdAt,
+      published_at: publishedAt,
       like_count: metrics.like_count,
       view_count: metrics.view_count,
       share_count: metrics.share_count,
@@ -89,19 +106,41 @@ export function normalizePostRows(source: LowLevelSourceType, rows: unknown[], f
       remix_count: metrics.remix_count,
       detail_url: detailUrl,
       thumbnail_url: getPreferredThumbnailUrl(row),
-      playback_url: getPlaybackUrlFromRow(row),
+      gif_url: getGifUrlFromRow(row),
+      playback_url: playbackUrl,
+      download_url: downloadUrl,
       duration_seconds: getDurationSeconds(row),
       estimated_size_bytes: getEstimatedSizeBytes(row),
       width: dimensions.width,
       height: dimensions.height,
       raw_payload_json: stringifyRawPayload(row),
-      is_downloadable: Boolean(videoId),
-      skip_reason: videoId ? "" : "missing_video_id",
+      source_order: likeRank,
+      is_downloadable: isDownloadable,
+      skip_reason: skipReason,
       fetched_at: fetchedAt
     });
   }
 
   return normalizedRows;
+}
+
+function resolveSideCharacterVideoId(value: unknown): string {
+  if (!value || typeof value !== "object") {
+    return "";
+  }
+  const record = value as Record<string, unknown>;
+  const postRecord = record.post && typeof record.post === "object" ? record.post as Record<string, unknown> : null;
+  if (!postRecord) {
+    return "";
+  }
+  const postId = pickFirstString([
+    postRecord.id,
+    postRecord.post_id,
+    postRecord.postId,
+    postRecord.shared_post_id,
+    postRecord.sharedPostId
+  ]);
+  return /^s_[A-Za-z0-9_-]+$/.test(postId) ? postId : "";
 }
 
 export function normalizeDraftRows(source: LowLevelSourceType, rows: unknown[], fetchedAt: string): VideoRow[] {
@@ -111,7 +150,8 @@ export function normalizeDraftRows(source: LowLevelSourceType, rows: unknown[], 
     const rowRecord = asRecord(row);
     const draftRecord = resolveNestedDraftRecord(rowRecord);
     const draftKind = extractDraftRowKind(rowRecord, draftRecord);
-    if (shouldSkipDraftKind(draftKind)) {
+    const rawDetailUrl = getDetailUrl(draftRecord) || getDetailUrl(row);
+    if (shouldSkipDraftRow(rowRecord, draftRecord, draftKind, rawDetailUrl)) {
       continue;
     }
     const metadataRecord = buildDraftMetadataRecord(rowRecord, draftRecord);
@@ -127,8 +167,9 @@ export function normalizeDraftRows(source: LowLevelSourceType, rows: unknown[], 
     const resolvedVideoId = isSourceResolvedDraftId(draftRecord, resolvedVideoIdCandidate) ? "" : resolvedVideoIdCandidate;
     const fallbackDraftId = pickFirstString([generationId, getRowPostId(draftRecord), getRowPostId(row)]);
     const playbackUrl = getDraftPlaybackUrlFromRow(draftRecord, generationId, resolvedVideoId);
-    const effectiveVideoId = resolvedVideoId || (playbackUrl ? fallbackDraftId : "");
-    const isDownloadable = Boolean(resolvedVideoId || playbackUrl);
+    const downloadUrl = getDraftDownloadUrlFromRow(draftRecord, generationId, resolvedVideoId) || playbackUrl;
+    const effectiveVideoId = resolvedVideoId || (downloadUrl ? fallbackDraftId : "");
+    const isDownloadable = Boolean(resolvedVideoId || downloadUrl);
     const title = getRowTitle(draftRecord, "draft");
     const sharedDetailUrl = normalizeAbsoluteUrl(
       pickFirstString([
@@ -170,12 +211,15 @@ export function normalizeDraftRows(source: LowLevelSourceType, rows: unknown[], 
       remix_count: null,
       detail_url: detailUrl,
       thumbnail_url: getPreferredThumbnailUrl(draftRecord) || getPreferredThumbnailUrl(row),
+      gif_url: getGifUrlFromRow(draftRecord) || getGifUrlFromRow(row),
       playback_url: playbackUrl,
+      download_url: downloadUrl,
       duration_seconds: getDurationSeconds(draftRecord),
       estimated_size_bytes: getEstimatedSizeBytes(draftRecord),
       width: dimensions.width,
       height: dimensions.height,
       raw_payload_json: stringifyRawPayload(row),
+      source_order: null,
       is_downloadable: isDownloadable,
       skip_reason: isDownloadable ? "" : "unresolved_draft_video_id",
       fetched_at: fetchedAt
@@ -227,18 +271,75 @@ function extractDraftRowKind(
   ]).toLowerCase();
 }
 
+function shouldSkipDraftRow(
+  rowRecord: Record<string, unknown>,
+  draftRecord: Record<string, unknown>,
+  draftKind: string,
+  detailUrl: string
+): boolean {
+  return shouldSkipDraftKind(draftKind) || isEditedDraftRow(rowRecord, draftRecord, draftKind, detailUrl);
+}
+
 function shouldSkipDraftKind(kind: string): boolean {
   const normalized = kind.trim().toLowerCase();
   return normalized === "sora_error" || normalized === "sora_content_violation";
 }
 
+function isEditedDraftRow(
+  rowRecord: Record<string, unknown>,
+  draftRecord: Record<string, unknown>,
+  draftKind: string,
+  detailUrl: string
+): boolean {
+  const normalizedKind = draftKind.trim().toLowerCase();
+  if (normalizedKind.includes("edit") || normalizedKind.includes("snapshot")) {
+    return true;
+  }
+
+  if (isEditedDraftDetailUrl(detailUrl)) {
+    return true;
+  }
+
+  const creationConfig = resolveDraftCreationConfig(draftRecord) ?? resolveDraftCreationConfig(rowRecord);
+  if (!creationConfig) {
+    return false;
+  }
+
+  return (
+    creationConfig.editing_config != null ||
+    creationConfig.editingConfig != null ||
+    creationConfig.inpaint_image != null ||
+    creationConfig.inpaintImage != null ||
+    creationConfig.reference_inpaint_items != null ||
+    creationConfig.referenceInpaintItems != null
+  );
+}
+
+function isEditedDraftDetailUrl(detailUrl: string): boolean {
+  if (!detailUrl) {
+    return false;
+  }
+
+  try {
+    const pathname = new URL(detailUrl).pathname.toLowerCase();
+    return pathname.startsWith("/de/");
+  } catch (_error) {
+    return detailUrl.toLowerCase().includes("/de/");
+  }
+}
+
+function resolveDraftCreationConfig(record: Record<string, unknown>): Record<string, unknown> | null {
+  if (record.creation_config && typeof record.creation_config === "object") {
+    return record.creation_config as Record<string, unknown>;
+  }
+  if (record.creationConfig && typeof record.creationConfig === "object") {
+    return record.creationConfig as Record<string, unknown>;
+  }
+  return null;
+}
+
 function extractCreationConfigCameoProfiles(draftRecord: Record<string, unknown>): unknown[] {
-  const creationConfig =
-    draftRecord.creation_config && typeof draftRecord.creation_config === "object"
-      ? draftRecord.creation_config as Record<string, unknown>
-      : draftRecord.creationConfig && typeof draftRecord.creationConfig === "object"
-        ? draftRecord.creationConfig as Record<string, unknown>
-        : null;
+  const creationConfig = resolveDraftCreationConfig(draftRecord);
   return Array.isArray(creationConfig?.cameo_profiles) ? creationConfig.cameo_profiles : [];
 }
 
@@ -349,7 +450,64 @@ function getPreferredThumbnailUrl(row: unknown): string {
   return getThumbnailUrl(row);
 }
 
+function getGifUrlFromRow(value: unknown): string {
+  if (!value || typeof value !== "object") {
+    return "";
+  }
+
+  const record = value as Record<string, unknown>;
+  const candidateObjects = [record, ...getCandidateObjects(record), ...getAttachmentObjects(record)];
+  for (const candidate of candidateObjects) {
+    const encodings = candidate.encodings && typeof candidate.encodings === "object"
+      ? candidate.encodings as Record<string, unknown>
+      : null;
+    const gifEncoding = encodings?.gif && typeof encodings.gif === "object"
+      ? encodings.gif as Record<string, unknown>
+      : null;
+    const resolvedGifUrl = normalizeAbsoluteUrl(
+      pickFirstString([
+        candidate.resolved_gif_url,
+        candidate.resolvedGifUrl,
+        candidate.gif_url,
+        candidate.gifUrl,
+        gifEncoding?.path
+      ])
+    );
+    if (resolvedGifUrl) {
+      return resolvedGifUrl;
+    }
+  }
+
+  return "";
+}
+
 function getPlaybackUrlFromRow(value: unknown): string {
+  if (!value || typeof value !== "object") {
+    return "";
+  }
+
+  const record = value as Record<string, unknown>;
+  const candidateObjects = [record, ...getAttachmentObjects(record)];
+  for (const candidate of candidateObjects) {
+    const downloadUrls = candidate.download_urls && typeof candidate.download_urls === "object"
+      ? candidate.download_urls as Record<string, unknown>
+      : null;
+    const downloadUrlsCamel = candidate.downloadUrls && typeof candidate.downloadUrls === "object"
+      ? candidate.downloadUrls as Record<string, unknown>
+      : null;
+    const resolved = pickFirstOpenAiVideoUrl([
+      downloadUrls?.watermark,
+      downloadUrlsCamel?.watermark,
+    ]);
+    if (resolved) {
+      return resolved;
+    }
+  }
+
+  return "";
+}
+
+function getDownloadUrlFromRow(value: unknown): string {
   if (!value || typeof value !== "object") {
     return "";
   }
@@ -378,23 +536,24 @@ function getPlaybackUrlFromRow(value: unknown): string {
     const downloadUrlsCamel = candidate.downloadUrls && typeof candidate.downloadUrls === "object"
       ? candidate.downloadUrls as Record<string, unknown>
       : null;
-    const resolved = normalizeAbsoluteUrl(
-      pickFirstString([
-        candidate.downloadable_url,
-        candidate.downloadableUrl,
-        downloadUrls?.watermark,
-        downloadUrls?.no_watermark,
-        downloadUrls?.endcard_watermark,
-        downloadUrlsCamel?.watermark,
-        downloadUrlsCamel?.no_watermark,
-        downloadUrlsCamel?.endcard_watermark,
-        sourceWmEncoding?.path,
-        sourceEncoding?.path,
-        candidate.url,
-        mdEncoding?.path,
-        ldEncoding?.path
-      ])
-    );
+    const resolved = pickFirstOpenAiVideoUrl([
+      candidate.resolved_download_url,
+      candidate.resolvedDownloadUrl,
+      downloadUrls?.no_watermark,
+      downloadUrlsCamel?.no_watermark,
+      downloadUrlsCamel?.noWatermark,
+      downloadUrls?.watermark,
+      downloadUrlsCamel?.watermark,
+      candidate.resolved_playback_url,
+      candidate.resolvedPlaybackUrl,
+      candidate.downloadable_url,
+      candidate.downloadableUrl,
+      sourceWmEncoding?.path,
+      sourceEncoding?.path,
+      candidate.url,
+      mdEncoding?.path,
+      ldEncoding?.path
+    ]);
     if (resolved) {
       return resolved;
     }
@@ -404,15 +563,33 @@ function getPlaybackUrlFromRow(value: unknown): string {
 }
 
 function getDraftPlaybackUrlFromRow(value: unknown, generationId: string, resolvedVideoId: string): string {
+  return resolveDraftUrlFromRow(value, generationId, resolvedVideoId, getDraftPlaybackUrlSourceScore, getPlaybackUrlFromRow);
+}
+
+function getDraftDownloadUrlFromRow(value: unknown, generationId: string, resolvedVideoId: string): string {
+  return resolveDraftUrlFromRow(value, generationId, resolvedVideoId, getDraftDownloadUrlSourceScore, getDownloadUrlFromRow);
+}
+
+function resolveDraftUrlFromRow(
+  value: unknown,
+  generationId: string,
+  resolvedVideoId: string,
+  getSourceScore: (urlSource: string) => number,
+  getFallbackUrl: (value: unknown) => string
+): string {
   if (!value || typeof value !== "object") {
     return "";
   }
 
   const record = value as Record<string, unknown>;
-  const candidateObjects = [record, ...getAttachmentObjects(record)];
+  const candidateObjects = dedupeDraftPlaybackCandidates([
+    record,
+    ...getCandidateObjects(record),
+    ...getAttachmentObjects(record)
+  ]);
   const sourceOperationGenerationIds = extractSourceOperationGenerationIds(record);
-  const candidates = candidateObjects.flatMap((candidate, index) =>
-    collectDraftPlaybackCandidates(candidate, index === 0)
+  const candidates = candidateObjects.flatMap((candidate) =>
+    collectDraftPlaybackCandidates(candidate)
   );
 
   let bestScore = Number.NEGATIVE_INFINITY;
@@ -440,7 +617,7 @@ function getDraftPlaybackUrlFromRow(value: unknown, generationId: string, resolv
     if (!resolvedVideoId && generationId && /^s_[A-Za-z0-9_-]+$/i.test(candidate.candidateId)) {
       score -= 40;
     }
-    score += getDraftPlaybackUrlSourceScore(candidate.urlSource);
+    score += getSourceScore(candidate.urlSource);
 
     if (score > bestScore) {
       bestScore = score;
@@ -452,7 +629,20 @@ function getDraftPlaybackUrlFromRow(value: unknown, generationId: string, resolv
     return bestUrl;
   }
 
-  return getPlaybackUrlFromRow(value);
+  return getFallbackUrl(value);
+}
+
+function dedupeDraftPlaybackCandidates(candidates: Record<string, unknown>[]): Record<string, unknown>[] {
+  const deduped: Record<string, unknown>[] = [];
+  const seen = new Set<Record<string, unknown>>();
+  for (const candidate of candidates) {
+    if (seen.has(candidate)) {
+      continue;
+    }
+    seen.add(candidate);
+    deduped.push(candidate);
+  }
+  return deduped;
 }
 
 interface DraftPlaybackCandidate {
@@ -463,7 +653,7 @@ interface DraftPlaybackCandidate {
   urlSource: string;
 }
 
-function collectDraftPlaybackCandidates(candidate: Record<string, unknown>, includeResolvedFields: boolean): DraftPlaybackCandidate[] {
+function collectDraftPlaybackCandidates(candidate: Record<string, unknown>): DraftPlaybackCandidate[] {
   const encodings = candidate.encodings && typeof candidate.encodings === "object"
     ? candidate.encodings as Record<string, unknown>
     : null;
@@ -478,9 +668,6 @@ function collectDraftPlaybackCandidates(candidate: Record<string, unknown>, incl
     : null;
   const ldEncoding = encodings?.ld && typeof encodings.ld === "object"
     ? encodings.ld as Record<string, unknown>
-    : null;
-  const gifEncoding = encodings?.gif && typeof encodings.gif === "object"
-    ? encodings.gif as Record<string, unknown>
     : null;
   const downloadUrls = candidate.download_urls && typeof candidate.download_urls === "object"
     ? candidate.download_urls as Record<string, unknown>
@@ -509,30 +696,26 @@ function collectDraftPlaybackCandidates(candidate: Record<string, unknown>, incl
   ]).toLowerCase();
 
   const urlCandidates: Array<{ source: string; value: unknown }> = [
-    ...(includeResolvedFields
-      ? [
-          { source: "resolved_playback_url", value: candidate.resolved_playback_url },
-          { source: "resolved_playback_url", value: candidate.resolvedPlaybackUrl }
-        ]
-      : []),
-    { source: "downloadable_url", value: candidate.downloadable_url },
-    { source: "downloadable_url", value: candidate.downloadableUrl },
     { source: "download_urls_no_watermark", value: downloadUrls?.no_watermark },
     { source: "download_urls_no_watermark", value: downloadUrlsCamel?.no_watermark },
+    { source: "download_urls_no_watermark", value: downloadUrlsCamel?.noWatermark },
     { source: "download_urls_watermark", value: downloadUrls?.watermark },
     { source: "download_urls_watermark", value: downloadUrlsCamel?.watermark },
-    { source: "download_urls_endcard_watermark", value: downloadUrls?.endcard_watermark },
-    { source: "download_urls_endcard_watermark", value: downloadUrlsCamel?.endcard_watermark },
+    { source: "downloadable_url", value: candidate.downloadable_url },
+    { source: "downloadable_url", value: candidate.downloadableUrl },
+    { source: "resolved_download_url", value: candidate.resolved_download_url },
+    { source: "resolved_download_url", value: candidate.resolvedDownloadUrl },
+    { source: "resolved_playback_url", value: candidate.resolved_playback_url },
+    { source: "resolved_playback_url", value: candidate.resolvedPlaybackUrl },
     { source: "source_wm_encoding", value: sourceWmEncoding?.path },
     { source: "source_encoding", value: sourceEncoding?.path },
     { source: "direct_url", value: candidate.url },
     { source: "md_encoding", value: mdEncoding?.path },
-    { source: "ld_encoding", value: ldEncoding?.path },
-    { source: "gif_encoding", value: gifEncoding?.path }
+    { source: "ld_encoding", value: ldEncoding?.path }
   ];
 
   return urlCandidates
-    .map((entry) => ({ ...entry, url: normalizeAbsoluteUrl(entry.value) }))
+    .map((entry) => ({ ...entry, url: normalizeOpenAiVideoUrl(entry.value) }))
     .filter((entry) => entry.url)
     .map((entry) => ({
       candidateGenerationId,
@@ -545,31 +728,67 @@ function collectDraftPlaybackCandidates(candidate: Record<string, unknown>, incl
 
 function getDraftPlaybackUrlSourceScore(urlSource: string): number {
   switch (urlSource) {
-    case "resolved_playback_url":
-      return 160;
-    case "downloadable_url":
-      return 125;
-    case "download_urls_no_watermark":
-      return 120;
     case "download_urls_watermark":
-      return 115;
-    case "download_urls_endcard_watermark":
-      return 110;
-    case "source_wm_encoding":
-      return 105;
-    case "source_encoding":
-      return 95;
-    case "direct_url":
-      return 50;
-    case "md_encoding":
-      return 35;
-    case "ld_encoding":
-      return 25;
-    case "gif_encoding":
-      return 5;
+      return 200;
     default:
       return 0;
   }
+}
+
+function getDraftDownloadUrlSourceScore(urlSource: string): number {
+  switch (urlSource) {
+    case "download_urls_no_watermark":
+      return 220;
+    case "download_urls_watermark":
+      return 200;
+    case "resolved_download_url":
+      return 180;
+    case "downloadable_url":
+      return 160;
+    case "source_wm_encoding":
+      return 150;
+    case "resolved_playback_url":
+      return 140;
+    case "source_encoding":
+      return 130;
+    case "direct_url":
+      return 90;
+    case "md_encoding":
+      return 80;
+    case "ld_encoding":
+      return 70;
+    default:
+      return 0;
+  }
+}
+
+function pickFirstOpenAiVideoUrl(candidates: unknown[]): string {
+  for (const candidate of candidates) {
+    const normalizedUrl = normalizeOpenAiVideoUrl(candidate);
+    if (normalizedUrl) {
+      return normalizedUrl;
+    }
+  }
+
+  return "";
+}
+
+function normalizeOpenAiVideoUrl(value: unknown): string {
+  const normalizedUrl = normalizeAbsoluteUrl(value);
+  if (!normalizedUrl) {
+    return "";
+  }
+
+  try {
+    const hostname = new URL(normalizedUrl).hostname.toLowerCase();
+    if (hostname === "videos.openai.com" || hostname.endsWith(".videos.openai.com")) {
+      return normalizedUrl;
+    }
+  } catch (_error) {
+    return "";
+  }
+
+  return "";
 }
 
 function extractSourceOperationGenerationIds(record: Record<string, unknown>): Set<string> {
@@ -609,20 +828,58 @@ export function normalizeCreatorProfile(profile: unknown, routeUrl: string): Cre
     return null;
   }
 
-  const record = profile as Record<string, unknown>;
+  const rootRecord = profile as Record<string, unknown>;
+  const routeUsername = resolveProfileUsernameFromRoute(routeUrl);
+  const record =
+    rootRecord.profile && typeof rootRecord.profile === "object"
+      ? rootRecord.profile as Record<string, unknown>
+      : rootRecord;
   const ownerProfile =
     record.owner_profile && typeof record.owner_profile === "object"
       ? record.owner_profile as Record<string, unknown>
       : record.ownerProfile && typeof record.ownerProfile === "object"
         ? record.ownerProfile as Record<string, unknown>
+        : rootRecord.owner_profile && typeof rootRecord.owner_profile === "object"
+          ? rootRecord.owner_profile as Record<string, unknown>
+        : rootRecord.ownerProfile && typeof rootRecord.ownerProfile === "object"
+            ? rootRecord.ownerProfile as Record<string, unknown>
         : null;
-  const characterUserId = pickFirstString([record.character_user_id, record.characterUserId]);
-  const canonicalUserId = pickFirstString([
-    record.user_id,
-    record.userId,
+  const explicitAccountType = pickFirstString([
+    record.account_type,
+    record.accountType,
+    rootRecord.account_type,
+    rootRecord.accountType
+  ]).toLowerCase();
+  const resolvedCharacterUserId = pickFirstString([
+    record.character_user_id,
+    record.characterUserId,
+    record.profile_id,
+    record.profileId,
+    record.id,
+    rootRecord.character_user_id,
+    rootRecord.characterUserId,
+    rootRecord.profile_id,
+    rootRecord.profileId,
+    rootRecord.id
+  ]);
+  const characterUserId = resolvedCharacterUserId.startsWith("ch_") ? resolvedCharacterUserId : "";
+  const explicitOwnerUserId = pickFirstString([
+    record.owner_user_id,
     record.ownerUserId,
+    rootRecord.owner_user_id,
+    rootRecord.ownerUserId,
     ownerProfile?.user_id,
     ownerProfile?.userId
+  ]);
+  const directUserId = pickFirstString([
+    record.user_id,
+    record.userId,
+    rootRecord.user_id,
+    rootRecord.userId
+  ]);
+  const canonicalUserId = pickFirstString([
+    directUserId,
+    explicitOwnerUserId
   ]);
   const userId = canonicalUserId || characterUserId;
   const username = pickFirstString([
@@ -630,47 +887,129 @@ export function normalizeCreatorProfile(profile: unknown, routeUrl: string): Cre
     record.user_name,
     record.userName,
     record.handle,
+    rootRecord.username,
+    rootRecord.user_name,
+    rootRecord.userName,
+    rootRecord.handle,
+    routeUsername,
     ownerProfile?.username,
     ownerProfile?.user_name,
     ownerProfile?.userName,
     ownerProfile?.handle
   ]);
-  const profileId = pickFirstString([record.profile_id, record.profileId, userId, username, routeUrl]);
+  const profileId = pickFirstString([
+    record.profile_id,
+    record.profileId,
+    record.id,
+    rootRecord.profile_id,
+    rootRecord.profileId,
+    rootRecord.id,
+    userId,
+    username,
+    routeUrl
+  ]);
 
   if (!profileId) {
     return null;
   }
 
+  const publishedCount = pickFirstNumber([record.post_count, record.postCount, rootRecord.post_count, rootRecord.postCount]);
+  const appearanceCount = pickFirstNumber([
+    record.cameo_count,
+    record.cameoCount,
+    record.appearance_count,
+    record.appearanceCount,
+    rootRecord.cameo_count,
+    rootRecord.cameoCount,
+    rootRecord.appearance_count,
+    rootRecord.appearanceCount,
+    ownerProfile?.cameo_count,
+    ownerProfile?.cameoCount,
+    ownerProfile?.appearance_count,
+    ownerProfile?.appearanceCount
+  ]);
+  const draftCount = pickFirstNumber([
+    record.draft_count,
+    record.draftCount,
+    rootRecord.draft_count,
+    rootRecord.draftCount,
+    ownerProfile?.draft_count,
+    ownerProfile?.draftCount
+  ]);
+  const ownerUsername = pickFirstString([
+    ownerProfile?.username,
+    ownerProfile?.user_name,
+    ownerProfile?.userName,
+    ownerProfile?.handle
+  ]).toLowerCase();
+  const ownerUserId = pickFirstString([
+    ownerProfile?.user_id,
+    ownerProfile?.userId
+  ]);
+  const normalizedUsername = username.toLowerCase();
+  const hasDistinctOwnerIdentity = Boolean(
+    (ownerUserId && userId && ownerUserId !== userId) ||
+    (ownerUsername && normalizedUsername && ownerUsername !== normalizedUsername)
+  );
+  const hasExplicitSideCharacterType = explicitAccountType === "sidecharacter";
+  const isCharacterProfile =
+    hasExplicitSideCharacterType ||
+    Boolean(record.is_character_profile) ||
+    Boolean(rootRecord.is_character_profile) ||
+    Boolean(characterUserId) ||
+    userId.startsWith("ch_") ||
+    profileId.startsWith("ch_") ||
+    hasDistinctOwnerIdentity ||
+    (publishedCount === 0 && typeof appearanceCount === "number" && appearanceCount > 0);
+
   return {
     profile_id: profileId,
     user_id: userId,
-    owner_user_id: canonicalUserId || (!userId.startsWith("ch_") ? userId : ""),
+    owner_user_id: explicitOwnerUserId || (!userId.startsWith("ch_") ? userId : ""),
     character_user_id: characterUserId || (userId.startsWith("ch_") ? userId : ""),
     username,
     display_name: pickFirstString([record.display_name, record.displayName, record.name, username, profileId]),
-    permalink: normalizeAbsoluteUrl(pickFirstString([record.permalink, record.url, routeUrl])) || routeUrl,
+    permalink: normalizeAbsoluteUrl(pickFirstString([record.permalink, record.url, rootRecord.permalink, rootRecord.url, routeUrl])) || routeUrl,
     profile_picture_url:
       normalizeAbsoluteUrl(
-        pickFirstString([record.profile_picture_url, record.profilePictureUrl, record.avatar_url, record.avatarUrl])
+        pickFirstString([
+          record.profile_picture_url,
+          record.profilePictureUrl,
+          record.avatar_url,
+          record.avatarUrl,
+          rootRecord.profile_picture_url,
+          rootRecord.profilePictureUrl,
+          rootRecord.avatar_url,
+          rootRecord.avatarUrl
+        ])
       ) || null,
-    is_character_profile:
-      Boolean(record.is_character_profile) ||
-      Boolean(characterUserId) ||
-      userId.startsWith("ch_"),
-    published_count: pickFirstNumber([record.post_count, record.postCount]),
-    appearance_count: pickFirstNumber([
-      record.cameo_count,
-      record.cameoCount,
-      record.appearance_count,
-      record.appearanceCount,
-      ownerProfile?.cameo_count,
-      ownerProfile?.cameoCount,
-      ownerProfile?.appearance_count,
-      ownerProfile?.appearanceCount
-    ]),
-    draft_count: pickFirstNumber([record.draft_count, record.draftCount, ownerProfile?.draft_count, ownerProfile?.draftCount]),
+    account_type: isCharacterProfile ? "sideCharacter" : "creator",
+    is_character_profile: isCharacterProfile,
+    published_count: publishedCount,
+    appearance_count: appearanceCount,
+    draft_count: draftCount,
     created_at: new Date().toISOString()
   };
+}
+
+function resolveProfileUsernameFromRoute(routeUrl: string): string {
+  const trimmed = routeUrl.trim();
+  if (!trimmed) {
+    return "";
+  }
+  try {
+    const pathname = new URL(trimmed).pathname;
+    const segments = pathname.split("/").filter(Boolean);
+    if (segments[0] === "profile" && segments[1]) {
+      return decodeURIComponent(segments[1]).replace(/^@+/, "");
+    }
+    if (segments[0]) {
+      return decodeURIComponent(segments[0]).replace(/^@+/, "");
+    }
+    return "";
+  } catch {
+    return trimmed.replace(/^@+/, "");
+  }
 }
 
 export function extractVideoIdFromDetailHtml(detailHtml: string): string {

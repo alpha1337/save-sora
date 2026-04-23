@@ -1,0 +1,120 @@
+.ss-settings-modal-title {
+  margin: 0;
+}
+
+.ss-settings-name-label {
+  font-weight: 700;
+}
+
+.ss-settings-toggle-card {
+  background: rgba(148, 163, 184, 0.08);
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.75rem;
+}
+
+.ss-settings-toggle-card--compact {
+  margin-top: 0.25rem;
+}
+
+.ss-settings-toggle-card .ss-date-preset-grid {
+  margin-top: 0.2rem;
+}
+
+.ss-settings-toggle-card .ss-date-picker-row {
+  margin-top: 0.2rem;
+}
+
+.ss-settings-toggle-row {
+  align-items: center;
+  display: flex;
+  gap: 0.75rem;
+  justify-content: space-between;
+}
+
+.ss-settings-toggle-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.ss-settings-toggle-label {
+  font-size: 1rem;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.ss-settings-toggle-status {
+  font-size: 0.86rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.ss-settings-toggle-status[data-state="enabled"] {
+  color: #16a34a;
+}
+
+.ss-settings-toggle-status[data-state="disabled"] {
+  color: rgba(148, 163, 184, 0.92);
+}
+
+.ss-switch {
+  background: rgba(148, 163, 184, 0.35);
+  border: 1px solid rgba(148, 163, 184, 0.4);
+  border-radius: 999px;
+  cursor: pointer;
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 1.7rem;
+  justify-content: flex-start;
+  padding: 0.13rem;
+  transition: background-color 140ms ease, border-color 140ms ease, opacity 140ms ease;
+  width: 3rem;
+}
+
+.ss-switch[data-state="checked"] {
+  background: linear-gradient(135deg, #16a34a, #15803d);
+  border-color: #15803d;
+}
+
+.ss-switch[data-state="unchecked"] {
+  background: rgba(148, 163, 184, 0.24);
+  border-color: rgba(148, 163, 184, 0.35);
+}
+
+.ss-switch:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.ss-switch-thumb {
+  background: #ffffff;
+  border-radius: 999px;
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.25);
+  display: block;
+  height: 1.35rem;
+  transition: transform 140ms ease;
+  width: 1.35rem;
+}
+
+.ss-switch[data-state="checked"] .ss-switch-thumb {
+  transform: translateX(1.28rem);
+}
+
+.ss-switch[data-state="unchecked"] .ss-switch-thumb {
+  transform: translateX(0);
+}
+
+.ss-settings-actions-row {
+  display: flex;
+  gap: 0.75rem;
+  width: 100%;
+}
+
+.ss-settings-actions-row .ss-button {
+  flex: 1 1 50%;
+  width: 50%;
+}

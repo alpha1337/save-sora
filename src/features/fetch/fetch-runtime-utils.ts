@@ -156,7 +156,7 @@ function buildFetchProgressLabel(
 }
 
 function supportsOffsetPagination(source: LowLevelSourceType): boolean {
-  return source === "drafts";
+  return source === "drafts" || source === "likes";
 }
 
 function isDraftLikeSource(source: LowLevelSourceType): boolean {
@@ -164,5 +164,5 @@ function isDraftLikeSource(source: LowLevelSourceType): boolean {
 }
 
 function isServerCursorOnlyAppearanceFeed(source: LowLevelSourceType): boolean {
-  return source === "characters" || source === "characterAccountAppearances" || source === "creatorCameos";
+  return source === "characters" || source === "characterAccountAppearances" || source === "sideCharacter" || source === "creatorCameos";
 }
