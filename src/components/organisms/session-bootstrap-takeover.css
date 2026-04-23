@@ -1,0 +1,116 @@
+.ss-session-takeover {
+  align-items: center;
+  background: rgba(8, 14, 23, 0.94);
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  padding: clamp(1rem, 4vw, 2.5rem);
+  position: fixed;
+  z-index: 10000;
+}
+
+.ss-session-takeover-backdrop {
+  inset: 0;
+  pointer-events: none;
+  position: absolute;
+}
+
+.ss-session-takeover-video {
+  display: block;
+  height: 100%;
+  object-fit: cover;
+  width: 100%;
+}
+
+.ss-session-takeover-video-overlay {
+  background:
+    radial-gradient(ellipse at center, rgba(0, 0, 0, 0) 38%, rgba(3, 8, 14, 0.58) 100%),
+    radial-gradient(circle at 12% 16%, rgba(55, 124, 197, 0.24), transparent 52%),
+    radial-gradient(circle at 88% 82%, rgba(61, 167, 117, 0.2), transparent 48%),
+    linear-gradient(180deg, rgba(7, 14, 22, 0.7), rgba(7, 14, 22, 0.9));
+  inset: 0;
+  position: absolute;
+}
+
+.ss-session-takeover-panel {
+  align-self: end;
+  background: linear-gradient(140deg, rgba(13, 26, 42, 0.95), rgba(13, 31, 37, 0.93));
+  border: 1px solid rgba(133, 175, 200, 0.26);
+  border-radius: 24px;
+  box-shadow:
+    0 0 0 1px rgba(176, 222, 255, 0.08) inset,
+    0 26px 80px rgba(0, 0, 0, 0.5);
+  display: grid;
+  gap: 0.9rem;
+  max-width: 620px;
+  padding: clamp(1.1rem, 2.2vw, 1.7rem);
+  position: relative;
+  width: min(620px, 100%);
+  z-index: 1;
+}
+
+.ss-session-takeover-heading {
+  align-items: center;
+  display: flex;
+  gap: 0.7rem;
+}
+
+.ss-session-takeover-heading h2 {
+  font-size: clamp(1.2rem, 2.3vw, 1.65rem);
+  margin: 0;
+}
+
+.ss-session-takeover-icon {
+  flex: 0 0 auto;
+  height: 48px;
+  object-fit: contain;
+  width: 48px;
+}
+
+.ss-session-takeover-status {
+  align-items: center;
+  background: linear-gradient(120deg, rgba(20, 37, 53, 0.66), rgba(15, 29, 32, 0.62));
+  border: 1px solid rgba(132, 174, 205, 0.28);
+  border-radius: 12px;
+  color: rgba(218, 240, 255, 0.95);
+  display: inline-flex;
+  gap: 0.55rem;
+  min-height: 2.6rem;
+  padding: 0.7rem 0.85rem;
+}
+
+.ss-session-takeover-spinner {
+  animation: ss-session-takeover-spin 1s linear infinite;
+}
+
+.ss-session-takeover-error {
+  background: rgba(122, 20, 20, 0.24);
+  border: 1px solid rgba(252, 166, 166, 0.32);
+  border-radius: 12px;
+  display: grid;
+  gap: 0.7rem;
+  padding: 0.8rem 0.9rem;
+}
+
+.ss-session-takeover-error p {
+  margin: 0;
+}
+
+.ss-session-takeover-error ul {
+  margin: 0;
+  padding-left: 1.1rem;
+}
+
+.ss-session-takeover-error li {
+  margin: 0.1rem 0;
+}
+
+@keyframes ss-session-takeover-spin {
+  0% {
+    transform: rotate(0deg);
+  }
+
+  100% {
+    transform: rotate(360deg);
+  }
+}

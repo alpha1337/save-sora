@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, Download, PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import { ChevronDown, Download, PanelLeftClose, PanelLeftOpen, Trash2 } from "lucide-react";
 import type { DownloadProgressState, FetchProgressState, GroupByOption, VideoRow, VideoSortOption } from "types/domain";
 import { Button } from "@components/atoms/button";
 import { Checkbox } from "@components/atoms/checkbox";
@@ -130,14 +130,19 @@ interface ResultsPanelProps {
   selectedVisibleRowCount: number;
   totalRowCount: number;
   query: string;
+  hideDownloadedVideos?: boolean;
   sortKey: VideoSortOption;
   groupBy: GroupByOption;
   downloadDisabled?: boolean;
   hasSidebar?: boolean;
   sidebarCollapsed?: boolean;
+  canClearResults?: boolean;
+  showClearResults?: boolean;
   onDownload: () => void;
+  onClearResults?: () => void;
   onToggleSidebar?: () => void;
   onSelectionPresetChange: (preset: "all_visible" | "mine" | "others" | "none") => void;
+  onHideDownloadedVideosChange?: (value: boolean) => void;
   onQueryChange: (value: string) => void;
   onSortKeyChange: (value: VideoSortOption) => void;
   onGroupByChange: (value: GroupByOption) => void;
@@ -158,14 +163,19 @@ export function ResultsPanel({
   hasRows,
   hasQuery,
   phase,
+  canClearResults = true,
+  showClearResults = false,
+  onClearResults = () => {},
   onDownload,
   onToggleSidebar,
   onSelectionPresetChange,
+  onHideDownloadedVideosChange = () => {},
   onQueryChange,
   onSortKeyChange,
   onSetSelectedVideoIds,
   onToggleSelectedVideoId,
   query,
+  hideDownloadedVideos = false,
   rows,
   selectableRowCount,
   selectedDownloadableRowCount,
@@ -383,6 +393,12 @@ export function ResultsPanel({
               {sidebarToggleLabel}
             </Button>
           ) : null}
+          {showClearResults ? (
+            <Button disabled={!canClearResults} onClick={onClearResults} tone="secondary" type="button">
+              <Trash2 aria-hidden="true" size={16} />
+              Clear Results
+            </Button>
+          ) : null}
           <Button disabled={downloadDisabled} onClick={onDownload} type="button">
             <Download aria-hidden="true" size={16} />
             {hasZipSelection
@@ -484,6 +500,8 @@ export function ResultsPanel({
       <ResultsToolbar
         allVisibleSelected={allVisibleSelected}
         groupBy={groupBy}
+        hideDownloadedVideos={hideDownloadedVideos}
+        onHideDownloadedVideosChange={onHideDownloadedVideosChange}
         onSelectionPresetChange={onSelectionPresetChange}
         onGroupByChange={onGroupByChange}
         onQueryChange={onQueryChange}

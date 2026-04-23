@@ -4,6 +4,7 @@ import type { AppStoreState } from "types/store";
 export function selectFilteredVideoRows(state: AppStoreState): VideoRow[] {
   const query = state.session_meta.query.trim().toLowerCase();
   const excludeSessionCreatorOnly = Boolean(state.session_meta.exclude_session_creator_only);
+  const hideDownloadedVideos = Boolean(state.session_meta.hide_downloaded_videos);
   const viewerUsername = normalizeIdentity(state.session_meta.viewer_username ?? "");
   const historyIds = new Set(state.download_history_ids);
 
@@ -14,6 +15,9 @@ export function selectFilteredVideoRows(state: AppStoreState): VideoRow[] {
         if (rowCreatorUsername && rowCreatorUsername === viewerUsername) {
           return false;
         }
+      }
+      if (hideDownloadedVideos && row.video_id && historyIds.has(row.video_id)) {
+        return false;
       }
 
       if (!query) {

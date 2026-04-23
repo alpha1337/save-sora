@@ -61,6 +61,7 @@ function createState(sortKey: VideoSortOption, rows: VideoRow[]): AppStoreState 
       query: "",
       sort_key: sortKey,
       group_by: "none",
+      hide_downloaded_videos: false,
       date_range_preset: "all",
       custom_date_start: "",
       custom_date_end: "",
@@ -237,6 +238,18 @@ describe("selectors", () => {
     state.session_meta.exclude_session_creator_only = true;
 
     expect(selectFilteredVideoRows(state).map((row) => row.video_id)).toEqual(["s_other"]);
+  });
+
+  it("hides downloaded rows when hide-downloaded filter is enabled", () => {
+    const rows = [
+      createRow({ row_id: "profile:s_downloaded", video_id: "s_downloaded", title: "Downloaded" }),
+      createRow({ row_id: "profile:s_new", video_id: "s_new", title: "New" })
+    ];
+    const state = createState("title_asc", rows);
+    state.download_history_ids = ["s_downloaded"];
+    state.session_meta.hide_downloaded_videos = true;
+
+    expect(selectFilteredVideoRows(state).map((row) => row.video_id)).toEqual(["s_new"]);
   });
 
   it("deduplicates creator self-cast overlaps and prefers creatorPublished rows", () => {

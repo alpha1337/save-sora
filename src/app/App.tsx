@@ -1,5 +1,5 @@
 import * as Dialog from "@radix-ui/react-dialog";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Heart, RefreshCcw, Settings, Trash2 } from "lucide-react";
 import DatePicker from "react-datepicker";
 import { useAppStore } from "@app/store/use-app-store";
@@ -16,12 +16,27 @@ import { Panel } from "@components/atoms/panel";
 import { SourceMultiSelectDropdown } from "@components/molecules/source-multi-select-dropdown";
 import { ResultsPanel } from "@components/organisms/results-panel";
 import { DownloadTakeover } from "@components/organisms/download-takeover";
+import { SessionBootstrapTakeover } from "@components/organisms/session-bootstrap-takeover";
 import { AppShellTemplate } from "@components/templates/app-shell-template";
 import { createLogger } from "@lib/logging/logger";
-import { cancelActiveFetch, fetchSelectedSources, loadCharacterAccountsIntoState, resolveAndAddCreatorProfile } from "@features/fetch/fetch-controller";
+import { cancelActiveFetch, fetchSelectedSources, resolveAndAddCreatorProfile } from "@features/fetch/fetch-controller";
 import { saveSessionState } from "@lib/db/session-db";
+import { formatBytes, formatCount } from "@lib/utils/format-utils";
 import { getUserFacingErrorMessage } from "@lib/utils/user-facing-errors";
-import type { AppSettings, DateRangePreset, TopLevelSourceType } from "types/domain";
+import type { DateRangePreset, TopLevelSourceType } from "types/domain";
+import {
+  extractCharacterAccountIdsFromRawPayload,
+  formatDateInput,
+  isFetchRangeConfigured,
+  isZipReadyRow,
+  normalizeCharacterLabel,
+  normalizeIdentity,
+  normalizeRememberedDatePreset,
+  parseDateInput,
+  waitForFetchToStop
+} from "@app/utils/app-helpers";
+import takeoverBackgroundVideo from "../../assets/update-takeover-bg.mp4";
+import takeoverIcon from "../../assets/icon-48.png";
 import "./settings-modal.css";
 
 const logger = createLogger("app");
@@ -139,7 +154,9 @@ export function App() {
 
     const overrides: Record<string, number> = {};
     for (const [accountId, rowIds] of rowsByAccountId) {
-      overrides[accountId] = rowIds.size;
+      if (rowIds.size > 0) {
+        overrides[accountId] = rowIds.size;
+      }
     }
     return overrides;
   }, [state.character_accounts, state.video_rows]);
@@ -164,22 +181,41 @@ export function App() {
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
   const [settingsDraft, setSettingsDraft] = useState(state.settings);
   const [isStateHydrated, setIsStateHydrated] = useState(false);
+  const [bootstrapStatusText, setBootstrapStatusText] = useState("Loading user data…");
+  const [bootstrapErrorMessage, setBootstrapErrorMessage] = useState("");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const autoSelectAllDownloadableRef = useRef(true);
-  const autoLoadCharacterAccountsRef = useRef(false);
   const autoSelectCharacterAccountsRef = useRef(false);
+  const bootstrapInFlightRef = useRef(false);
+
+  const runSessionBootstrap = useCallback(async () => {
+    if (bootstrapInFlightRef.current) {
+      return;
+    }
+    bootstrapInFlightRef.current = true;
+    setBootstrapErrorMessage("");
+    setBootstrapStatusText("Loading user data…");
+    try {
+      await bootstrapAppState((statusText) => setBootstrapStatusText(statusText));
+      setIsStateHydrated(true);
+      setBootstrapStatusText("Loaded.");
+      useAppStore.getState().setErrorMessage("");
+      useAppStore.getState().setPhase("idle");
+    } catch (error) {
+      logger.error("bootstrap failed", error);
+      const message = getUserFacingErrorMessage(error);
+      setBootstrapErrorMessage(message);
+      setBootstrapStatusText("Session check failed.");
+      useAppStore.getState().setPhase("error");
+      useAppStore.getState().setErrorMessage(message);
+    } finally {
+      bootstrapInFlightRef.current = false;
+    }
+  }, []);
 
   useEffect(() => {
-    void bootstrapAppState()
-      .then(() => {
-        setIsStateHydrated(true);
-      })
-      .catch((error) => {
-        logger.error("bootstrap failed", error);
-        useAppStore.getState().setPhase("error");
-        useAppStore.getState().setErrorMessage(getUserFacingErrorMessage(error));
-      });
-  }, []);
+    void runSessionBootstrap();
+  }, [runSessionBootstrap]);
 
   useEffect(() => {
     if (!isStateHydrated) {
@@ -227,13 +263,18 @@ export function App() {
       return;
     }
 
-    const hasUnselectedDownloadableRows = [...downloadableVideoIdSet].some((videoId) => !state.selected_video_ids.includes(videoId));
+    const defaultSelectionIds = downloadableVideoIds.filter((videoId) => !state.download_history_ids.includes(videoId));
+    if (defaultSelectionIds.length === 0) {
+      return;
+    }
+
+    const hasUnselectedDownloadableRows = defaultSelectionIds.some((videoId) => !state.selected_video_ids.includes(videoId));
     if (!hasUnselectedDownloadableRows) {
       return;
     }
 
-    state.setSelectedVideoIds([...new Set([...state.selected_video_ids, ...downloadableVideoIdSet])]);
-  }, [downloadableRowsCount, downloadableVideoIdSet, state, state.selected_video_ids, state.video_rows.length]);
+    state.setSelectedVideoIds([...new Set([...state.selected_video_ids, ...defaultSelectionIds])]);
+  }, [downloadableRowsCount, downloadableVideoIdSet, downloadableVideoIds, state, state.download_history_ids, state.selected_video_ids, state.video_rows.length]);
 
   async function handleFetch(): Promise<void> {
     try {
@@ -261,8 +302,9 @@ export function App() {
 
   async function handleDownload(): Promise<void> {
     try {
-      if (selectedDownloadableRowCount === 0 && downloadableVideoIds.length > 0) {
-        state.setSelectedVideoIds([...new Set([...state.selected_video_ids, ...downloadableVideoIds])]);
+      const defaultSelectionIds = downloadableVideoIds.filter((videoId) => !state.download_history_ids.includes(videoId));
+      if (selectedDownloadableRowCount === 0 && defaultSelectionIds.length > 0) {
+        state.setSelectedVideoIds([...new Set([...state.selected_video_ids, ...defaultSelectionIds])]);
       }
       await downloadSelectedRows();
     } catch (error) {
@@ -454,7 +496,7 @@ export function App() {
   }
 
   const showCreatorSidebar = true;
-  const showCharacterSidebar = state.session_meta.active_sources.characterAccounts;
+  const showCharacterSidebar = state.character_accounts.length > 0;
   const hasSidebar = showCreatorSidebar || showCharacterSidebar;
   const rememberedDatePreset = normalizeRememberedDatePreset(state.settings);
   const rememberedCustomDateStart = state.settings.remembered_custom_date_start ?? "";
@@ -470,21 +512,7 @@ export function App() {
   }, [hasSidebar, sidebarCollapsed]);
 
   useEffect(() => {
-    if (autoLoadCharacterAccountsRef.current || state.character_accounts.length > 0) {
-      return;
-    }
-    if (state.phase === "fetching" || state.phase === "downloading") {
-      return;
-    }
-
-    autoLoadCharacterAccountsRef.current = true;
-    void loadCharacterAccountsIntoState().catch((error) => {
-      setAppError(error);
-    });
-  }, [state.character_accounts.length, state.phase]);
-
-  useEffect(() => {
-    if (!showCharacterSidebar || state.character_accounts.length === 0) {
+    if (state.character_accounts.length === 0) {
       return;
     }
     if (autoSelectCharacterAccountsRef.current) {
@@ -505,10 +533,25 @@ export function App() {
 
     state.setSelectedCharacterAccountIds(accountIds);
     autoSelectCharacterAccountsRef.current = true;
-  }, [showCharacterSidebar, state, state.character_accounts, state.session_meta.selected_character_account_ids]);
+  }, [state, state.character_accounts, state.session_meta.selected_character_account_ids]);
 
   const sidebar = hasSidebar ? (
     <Panel className="ss-stack">
+      <div>
+        <h3>Session Controls</h3>
+        <div className="ss-sidebar-actions">
+          <SourceMultiSelectDropdown
+            disabled={state.phase === "fetching" || state.phase === "downloading"}
+            onToggleSource={handleToggleSource}
+            showCameos={state.session_meta.viewer_can_cameo !== false}
+            sourceSelections={state.session_meta.active_sources}
+          />
+          <Button disabled={isDownloading} onClick={() => void handleFetchAction()} tone={isFetching ? "warning" : "default"} type="button">
+            <RefreshCcw size={16} />
+            {fetchActionLabel}
+          </Button>
+        </div>
+      </div>
       {showCreatorSidebar ? (
         <div>
           <h3>Saved Creators</h3>
@@ -562,7 +605,7 @@ export function App() {
       sidebar={sidebar}
       header={
         <div className="ss-header-grid">
-          <div>
+          <div className="ss-header-identity">
             <h1>{`Save Sora v${APP_VERSION}`}</h1>
             <div className="ss-header-session ss-muted">
               {viewerProfilePictureUrl ? (
@@ -575,31 +618,26 @@ export function App() {
               <span>{`Logged in as ${viewerUsername}`}</span>
             </div>
           </div>
+          <div aria-label="Selection summary" className="ss-header-metrics">
+            <div className="ss-header-metric">
+              <span className="ss-header-metric-label">Selected</span>
+              <strong className="ss-header-metric-value">
+                {`${formatCount(selectedDownloadableRowCount)} of ${formatCount(downloadableRowsCount)}`}
+              </strong>
+              <span className="ss-header-metric-hint">Ready videos selected for ZIP</span>
+            </div>
+            <div className="ss-header-metric">
+              <span className="ss-header-metric-label">Selected Size</span>
+              <strong className="ss-header-metric-value">{formatBytes(selectedBytes)}</strong>
+              <span className="ss-header-metric-hint">Combined estimated size of selected rows</span>
+            </div>
+          </div>
           <div className="ss-inline-actions">
-            <SourceMultiSelectDropdown
-              disabled={state.phase === "fetching" || state.phase === "downloading"}
-              onToggleSource={handleToggleSource}
-              showCameos={state.session_meta.viewer_can_cameo !== false}
-              sourceSelections={state.session_meta.active_sources}
-            />
             <Button asChild tone="secondary">
               <a href="https://ko-fi.com/savesora" rel="noreferrer noopener" target="_blank">
                 <Heart size={16} />
                 Donate
               </a>
-            </Button>
-            <Button disabled={state.phase === "fetching" || state.phase === "downloading"} onClick={() => void handleClearSessionResults()} tone="secondary" type="button">
-              <Trash2 size={16} />
-              Clear Results
-            </Button>
-            <Button
-              disabled={isDownloading}
-              onClick={() => void handleFetchAction()}
-              tone={isFetching ? "warning" : "default"}
-              type="button"
-            >
-              <RefreshCcw size={16} />
-              {fetchActionLabel}
             </Button>
             <Button
               disabled={state.phase === "fetching" || state.phase === "downloading"}
@@ -626,12 +664,16 @@ export function App() {
           hasRows={downloadableRowsCount > 0}
           hasQuery={state.session_meta.query.trim().length > 0}
           phase={state.phase}
+          canClearResults={state.phase !== "fetching" && state.phase !== "downloading"}
           onDownload={() => void handleDownload()}
+          onClearResults={() => void handleClearSessionResults()}
           onToggleSidebar={() => setSidebarCollapsed((current) => !current)}
           onSelectionPresetChange={handleSelectionPresetChange}
           onQueryChange={(value) => state.setFilters({ query: value })}
+          onHideDownloadedVideosChange={(value) => state.setFilters({ hide_downloaded_videos: value })}
           onSortKeyChange={(value) => state.setFilters({ sort_key: value })}
           onGroupByChange={(value) => state.setFilters({ group_by: value })}
+          hideDownloadedVideos={state.session_meta.hide_downloaded_videos === true}
           onSetSelectedVideoIds={handleSetSelectedVideoIds}
           onToggleSelectedVideoId={handleToggleSelectedVideoId}
           groupBy={state.session_meta.group_by ?? "none"}
@@ -645,6 +687,7 @@ export function App() {
           sidebarCollapsed={sidebarCollapsed}
           sortKey={state.session_meta.sort_key}
           totalRowCount={downloadableRowsCount}
+          showClearResults={filteredDownloadableRows.length > 0}
         />
       </div>
       <Dialog.Root onOpenChange={setFetchDateModalOpen} open={fetchDateModalOpen}>
@@ -737,151 +780,170 @@ export function App() {
       </Dialog.Root>
       <Dialog.Root onOpenChange={setSettingsModalOpen} open={settingsModalOpen}>
         <Dialog.Portal>
-          <Dialog.Overlay className="ss-dialog-overlay" />
-          <Dialog.Content className="ss-dialog-content">
-            <Dialog.Title className="ss-settings-modal-title">Settings</Dialog.Title>
-            <Dialog.Description>
-              What would you like your zip file to be named?
-            </Dialog.Description>
-            <div className="ss-stack">
-              <label className="ss-stack">
-                <span className="ss-settings-name-label">ZIP file name</span>
-                <Input
-                  onChange={(event) =>
-                    setSettingsDraft((current) => ({
-                      ...current,
-                      archive_name_template: event.target.value
-                    }))
-                  }
-                  value={settingsDraft.archive_name_template}
-                />
-              </label>
-              <div className="ss-settings-toggle-card">
-                <div className="ss-settings-toggle-row">
-                  <div className="ss-settings-toggle-copy">
-                    <span className="ss-settings-toggle-label">Enable Database?</span>
-                    <span
-                      className="ss-settings-toggle-status"
-                      data-state={settingsDraft.enable_fetch_resume === true ? "enabled" : "disabled"}
-                    >
-                      {settingsDraft.enable_fetch_resume === true ? "Enabled" : "Disabled"}
-                    </span>
-                  </div>
-                  <Switch
-                    ariaLabel="Enable database cache and resume checkpoints"
-                    checked={settingsDraft.enable_fetch_resume === true}
-                    id="settings-enable-fetch-resume"
-                    onCheckedChange={(checked) =>
-                      setSettingsDraft((current) => ({
-                        ...current,
-                        enable_fetch_resume: checked
-                      }))
-                    }
-                  />
+          <Dialog.Overlay className="ss-dialog-overlay ss-settings-takeover-overlay" />
+          <Dialog.Content className="ss-dialog-content ss-settings-takeover-content">
+            <div className="ss-settings-takeover-backdrop" aria-hidden="true">
+              <video
+                autoPlay
+                className="ss-settings-takeover-video"
+                loop
+                muted
+                playsInline
+                preload="auto"
+                src={takeoverBackgroundVideo}
+              />
+              <div className="ss-settings-takeover-video-overlay" />
+            </div>
+            <div className="ss-settings-takeover-panel">
+              <div className="ss-settings-takeover-header">
+                <img alt="" aria-hidden="true" className="ss-settings-takeover-icon" src={takeoverIcon} />
+                <div className="ss-settings-takeover-title-wrap">
+                  <Dialog.Title className="ss-settings-modal-title">Settings</Dialog.Title>
+                  <Dialog.Description className="ss-settings-modal-description">
+                    What would you like your zip file to be named?
+                  </Dialog.Description>
                 </div>
-                <p className="ss-muted">Loads saved rows and resumes checkpoints.</p>
               </div>
-              <div className="ss-settings-toggle-card">
-                <div className="ss-settings-toggle-row">
-                  <div className="ss-settings-toggle-copy">
-                    <span className="ss-settings-toggle-label">Remember fetch date?</span>
-                    <span
-                      className="ss-settings-toggle-status"
-                      data-state={settingsDraft.remember_fetch_date_choice === true ? "enabled" : "disabled"}
-                    >
-                      {settingsDraft.remember_fetch_date_choice === true ? "Enabled" : "Disabled"}
-                    </span>
-                  </div>
-                  <Switch
-                    ariaLabel="Remember selected fetch date range and skip date prompt"
-                    checked={settingsDraft.remember_fetch_date_choice === true}
-                    id="settings-remember-fetch-date-choice"
-                    onCheckedChange={(checked) =>
+              <div className="ss-stack">
+                <label className="ss-stack">
+                  <span className="ss-settings-name-label">ZIP file name</span>
+                  <Input
+                    onChange={(event) =>
                       setSettingsDraft((current) => ({
                         ...current,
-                        remember_fetch_date_choice: checked
+                        archive_name_template: event.target.value
                       }))
                     }
+                    value={settingsDraft.archive_name_template}
                   />
-                </div>
-                <p className="ss-muted">Select the saved range used when the fetch date prompt is skipped.</p>
-                <div className="ss-date-preset-grid" aria-label="Remembered fetch date range" role="radiogroup">
-                  {[
-                    { label: "Today", value: "24h" },
-                    { label: "This week", value: "7d" },
-                    { label: "Last 30 days", value: "1m" },
-                    { label: "Last 3 months", value: "3m" },
-                    { label: "All time", value: "all" },
-                    { label: "Custom", value: "custom" }
-                  ].map((option) => (
-                    <button
-                      aria-checked={settingsRememberedDatePreset === option.value}
-                      className="ss-date-preset-button"
-                      data-selected={settingsRememberedDatePreset === option.value}
-                      key={`settings-${option.value}`}
-                      onClick={() =>
+                </label>
+                <div className="ss-settings-toggle-card">
+                  <div className="ss-settings-toggle-row">
+                    <div className="ss-settings-toggle-copy">
+                      <span className="ss-settings-toggle-label">Enable Database?</span>
+                      <span
+                        className="ss-settings-toggle-status"
+                        data-state={settingsDraft.enable_fetch_resume === true ? "enabled" : "disabled"}
+                      >
+                        {settingsDraft.enable_fetch_resume === true ? "Enabled" : "Disabled"}
+                      </span>
+                    </div>
+                    <Switch
+                      ariaLabel="Enable database cache and resume checkpoints"
+                      checked={settingsDraft.enable_fetch_resume === true}
+                      id="settings-enable-fetch-resume"
+                      onCheckedChange={(checked) =>
                         setSettingsDraft((current) => ({
                           ...current,
-                          remembered_date_range_preset: option.value as DateRangePreset
+                          enable_fetch_resume: checked
                         }))
                       }
-                      role="radio"
-                      type="button"
-                    >
-                      {option.label}
-                    </button>
-                  ))}
-                </div>
-                {settingsRememberedDatePreset === "custom" ? (
-                  <div className="ss-date-picker-row">
-                    <DatePicker
-                      calendarClassName="ss-react-datepicker"
-                      className="ss-input"
-                      dateFormat="yyyy-MM-dd"
-                      onChange={(value: Date | null) =>
-                        setSettingsDraft((current) => ({
-                          ...current,
-                          remembered_custom_date_start: formatDateInput(value)
-                        }))
-                      }
-                      placeholderText="Start date"
-                      selected={parseDateInput(settingsRememberedCustomDateStart)}
-                    />
-                    <DatePicker
-                      calendarClassName="ss-react-datepicker"
-                      className="ss-input"
-                      dateFormat="yyyy-MM-dd"
-                      minDate={parseDateInput(settingsRememberedCustomDateStart)}
-                      onChange={(value: Date | null) =>
-                        setSettingsDraft((current) => ({
-                          ...current,
-                          remembered_custom_date_end: formatDateInput(value)
-                        }))
-                      }
-                      placeholderText="End date"
-                      selected={parseDateInput(settingsRememberedCustomDateEnd)}
                     />
                   </div>
-                ) : null}
+                  <p className="ss-muted">Loads saved rows and resumes checkpoints.</p>
+                </div>
+                <div className="ss-settings-toggle-card">
+                  <div className="ss-settings-toggle-row">
+                    <div className="ss-settings-toggle-copy">
+                      <span className="ss-settings-toggle-label">Remember fetch date?</span>
+                      <span
+                        className="ss-settings-toggle-status"
+                        data-state={settingsDraft.remember_fetch_date_choice === true ? "enabled" : "disabled"}
+                      >
+                        {settingsDraft.remember_fetch_date_choice === true ? "Enabled" : "Disabled"}
+                      </span>
+                    </div>
+                    <Switch
+                      ariaLabel="Remember selected fetch date range and skip date prompt"
+                      checked={settingsDraft.remember_fetch_date_choice === true}
+                      id="settings-remember-fetch-date-choice"
+                      onCheckedChange={(checked) =>
+                        setSettingsDraft((current) => ({
+                          ...current,
+                          remember_fetch_date_choice: checked
+                        }))
+                      }
+                    />
+                  </div>
+                  <p className="ss-muted">Select the saved range used when the fetch date prompt is skipped.</p>
+                  <div className="ss-date-preset-grid" aria-label="Remembered fetch date range" role="radiogroup">
+                    {[
+                      { label: "Today", value: "24h" },
+                      { label: "This week", value: "7d" },
+                      { label: "Last 30 days", value: "1m" },
+                      { label: "Last 3 months", value: "3m" },
+                      { label: "All time", value: "all" },
+                      { label: "Custom", value: "custom" }
+                    ].map((option) => (
+                      <button
+                        aria-checked={settingsRememberedDatePreset === option.value}
+                        className="ss-date-preset-button"
+                        data-selected={settingsRememberedDatePreset === option.value}
+                        key={`settings-${option.value}`}
+                        onClick={() =>
+                          setSettingsDraft((current) => ({
+                            ...current,
+                            remembered_date_range_preset: option.value as DateRangePreset
+                          }))
+                        }
+                        role="radio"
+                        type="button"
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                  {settingsRememberedDatePreset === "custom" ? (
+                    <div className="ss-date-picker-row">
+                      <DatePicker
+                        calendarClassName="ss-react-datepicker"
+                        className="ss-input"
+                        dateFormat="yyyy-MM-dd"
+                        onChange={(value: Date | null) =>
+                          setSettingsDraft((current) => ({
+                            ...current,
+                            remembered_custom_date_start: formatDateInput(value)
+                          }))
+                        }
+                        placeholderText="Start date"
+                        selected={parseDateInput(settingsRememberedCustomDateStart)}
+                      />
+                      <DatePicker
+                        calendarClassName="ss-react-datepicker"
+                        className="ss-input"
+                        dateFormat="yyyy-MM-dd"
+                        minDate={parseDateInput(settingsRememberedCustomDateStart)}
+                        onChange={(value: Date | null) =>
+                          setSettingsDraft((current) => ({
+                            ...current,
+                            remembered_custom_date_end: formatDateInput(value)
+                          }))
+                        }
+                        placeholderText="End date"
+                        selected={parseDateInput(settingsRememberedCustomDateEnd)}
+                      />
+                    </div>
+                  ) : null}
+                </div>
+                <div className="ss-settings-actions-row">
+                  <Button onClick={() => void handleClearFetchDatabase()} tone="warning" type="button">
+                    <Trash2 size={16} />
+                    Clear Fetch Database
+                  </Button>
+                  <Button onClick={() => void handleClearDownloadHistory()} tone="danger" type="button">
+                    <Trash2 size={16} />
+                    Clear Download History
+                  </Button>
+                </div>
               </div>
               <div className="ss-settings-actions-row">
-                <Button onClick={() => void handleClearFetchDatabase()} tone="warning" type="button">
-                  <Trash2 size={16} />
-                  Clear Fetch Database
-                </Button>
-                <Button onClick={() => void handleClearDownloadHistory()} tone="danger" type="button">
-                  <Trash2 size={16} />
-                  Clear Download History
+                <Dialog.Close asChild>
+                  <Button tone="secondary" type="button">Cancel</Button>
+                </Dialog.Close>
+                <Button onClick={() => void handleSaveSettings()} type="button">
+                  Save Settings
                 </Button>
               </div>
-            </div>
-            <div className="ss-settings-actions-row">
-              <Dialog.Close asChild>
-                <Button tone="secondary" type="button">Cancel</Button>
-              </Dialog.Close>
-              <Button onClick={() => void handleSaveSettings()} type="button">
-                Save Settings
-              </Button>
             </div>
           </Dialog.Content>
         </Dialog.Portal>
@@ -892,87 +954,15 @@ export function App() {
         selectedBytes={selectedBytes}
         visible={state.phase === "downloading"}
       />
+      <SessionBootstrapTakeover
+        errorMessage={bootstrapErrorMessage}
+        onRetry={() => {
+          setBootstrapStatusText("Retrying session check…");
+          void runSessionBootstrap();
+        }}
+        statusText={bootstrapStatusText}
+        visible={!isStateHydrated}
+      />
     </>
   );
-}
-
-function normalizeCharacterLabel(value: string): string {
-  return value.trim().replace(/^@+/, "").toLowerCase();
-}
-
-function extractCharacterAccountIdsFromRawPayload(rawPayloadJson: string): Set<string> {
-  if (!rawPayloadJson.trim()) {
-    return new Set<string>();
-  }
-
-  const normalizedIds = new Set<string>();
-  const idMatches = rawPayloadJson.match(/ch_[A-Za-z0-9]+/g) ?? [];
-  for (const idMatch of idMatches) {
-    normalizedIds.add(idMatch.toLowerCase());
-  }
-  return normalizedIds;
-}
-
-function isZipReadyRow(row: { is_downloadable: boolean; video_id: string }): boolean {
-  return Boolean(row.is_downloadable && row.video_id);
-}
-
-function isFetchRangeConfigured(dateRangePreset: DateRangePreset, customDateStart: string, customDateEnd: string): boolean {
-  if (dateRangePreset !== "custom") {
-    return true;
-  }
-  const parsedStart = parseDateInput(customDateStart);
-  const parsedEnd = parseDateInput(customDateEnd);
-  if (!parsedStart || !parsedEnd) {
-    return false;
-  }
-  return parsedStart.getTime() <= parsedEnd.getTime();
-}
-
-function normalizeRememberedDatePreset(settings: AppSettings): DateRangePreset {
-  const preset = settings.remembered_date_range_preset;
-  if (
-    preset === "24h" ||
-    preset === "7d" ||
-    preset === "1m" ||
-    preset === "3m" ||
-    preset === "all" ||
-    preset === "custom"
-  ) {
-    return preset;
-  }
-  return "all";
-}
-
-function parseDateInput(value: string): Date | null {
-  if (!value.trim()) {
-    return null;
-  }
-  const parsed = new Date(`${value}T00:00:00`);
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
-}
-
-function formatDateInput(value: Date | null): string {
-  if (!value) {
-    return "";
-  }
-  const year = value.getFullYear();
-  const month = String(value.getMonth() + 1).padStart(2, "0");
-  const day = String(value.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
-function normalizeIdentity(value: string): string {
-  return value.trim().toLowerCase();
-}
-
-async function waitForFetchToStop(timeoutMs = 10000): Promise<boolean> {
-  const startedAtMs = Date.now();
-  while (Date.now() - startedAtMs < timeoutMs) {
-    if (useAppStore.getState().phase !== "fetching") {
-      return true;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  return useAppStore.getState().phase !== "fetching";
 }

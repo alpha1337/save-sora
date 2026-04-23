@@ -24,6 +24,7 @@ const defaultSessionMeta: SessionMeta = {
   active_sources: defaultSourceSelectionState,
   query: "",
   exclude_session_creator_only: false,
+  hide_downloaded_videos: false,
   fetch_range_confirmed: false,
   resume_fetch_available: false,
   sort_key: "published_newest",
@@ -104,6 +105,8 @@ export const useAppStore = create<AppStore>((set) => ({
         query: filters.query ?? state.session_meta.query,
         exclude_session_creator_only:
           filters.exclude_session_creator_only ?? state.session_meta.exclude_session_creator_only ?? false,
+        hide_downloaded_videos:
+          filters.hide_downloaded_videos ?? state.session_meta.hide_downloaded_videos ?? false,
         sort_key: filters.sort_key ?? state.session_meta.sort_key,
         group_by: filters.group_by ?? state.session_meta.group_by ?? "none",
         date_range_preset: filters.date_range_preset ?? state.session_meta.date_range_preset,
@@ -156,6 +159,7 @@ export const useAppStore = create<AppStore>((set) => ({
         ...state.session_meta,
         query: "",
         exclude_session_creator_only: false,
+        hide_downloaded_videos: false,
         fetch_range_confirmed: false,
         resume_fetch_available: false,
         sort_key: "published_newest",

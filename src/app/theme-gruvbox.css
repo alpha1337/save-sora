@@ -155,6 +155,24 @@ body {
   color: #d5c4a1;
 }
 
+.ss-toolbar-toggle-status {
+  color: #fbf1c7;
+}
+
+.ss-header-metric {
+  background: linear-gradient(180deg, #3c3836, #282828);
+  border-color: #7c6f64;
+}
+
+.ss-header-metric-label,
+.ss-header-metric-hint {
+  color: #d5c4a1;
+}
+
+.ss-header-metric-value {
+  color: #fbf1c7;
+}
+
 .ss-select-content,
 .ss-source-dropdown-menu,
 .ss-dialog-content {

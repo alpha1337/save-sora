@@ -84,6 +84,7 @@ export interface SessionMeta {
   active_sources: SourceSelectionState;
   query: string;
   exclude_session_creator_only?: boolean;
+  hide_downloaded_videos?: boolean;
   fetch_range_confirmed?: boolean;
   resume_fetch_available?: boolean;
   sort_key: VideoSortOption;
@@ -252,6 +253,7 @@ export type VideoSortOption =
 export interface VideoFilterState {
   query: string;
   exclude_session_creator_only: boolean;
+  hide_downloaded_videos: boolean;
   date_range_preset: DateRangePreset;
   custom_date_start: string;
   custom_date_end: string;

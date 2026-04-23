@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { GroupByOption, VideoSortOption } from "types/domain";
 import { Input } from "@components/atoms/input";
 import { Select } from "@components/atoms/select";
+import { Switch } from "@components/atoms/switch";
 
 type SortField = "published" | "created" | "title" | "views" | "likes" | "remixes";
 type SortDirection = "asc" | "desc";
@@ -11,9 +12,11 @@ interface ResultsToolbarProps {
   selectableRowCount: number;
   selectedVisibleRowCount: number;
   query: string;
+  hideDownloadedVideos: boolean;
   sortKey: VideoSortOption;
   groupBy: GroupByOption;
   onSelectionPresetChange: (preset: "all_visible" | "mine" | "others" | "none") => void;
+  onHideDownloadedVideosChange: (value: boolean) => void;
   onQueryChange: (value: string) => void;
   onSortKeyChange: (value: VideoSortOption) => void;
   onGroupByChange: (value: GroupByOption) => void;
@@ -26,9 +29,11 @@ export function ResultsToolbar({
   allVisibleSelected,
   onQueryChange,
   onSelectionPresetChange,
+  onHideDownloadedVideosChange,
   onSortKeyChange,
   onGroupByChange,
   query,
+  hideDownloadedVideos,
   selectableRowCount,
   selectedVisibleRowCount,
   sortKey,
@@ -111,6 +116,18 @@ export function ResultsToolbar({
           ]}
           value={groupBy}
         />
+      </div>
+      <div className="ss-toolbar-control ss-toolbar-control--toggle">
+        <span className="ss-toolbar-control-label">Hide downloaded videos?</span>
+        <div className="ss-toolbar-toggle-row">
+          <span className="ss-toolbar-toggle-status">{hideDownloadedVideos ? "True" : "False"}</span>
+          <Switch
+            ariaLabel="Hide downloaded videos"
+            checked={hideDownloadedVideos}
+            id="results-hide-downloaded-toggle"
+            onCheckedChange={onHideDownloadedVideosChange}
+          />
+        </div>
       </div>
       <Input
         aria-label="Search Session Results"

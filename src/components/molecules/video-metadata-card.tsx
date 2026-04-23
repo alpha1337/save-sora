@@ -3,6 +3,7 @@ import { Clock3, ExternalLink, Eye, Heart, MoreHorizontal, Pause, Play, Repeat2,
 import type { VideoRow } from "types/domain";
 import { Badge } from "@components/atoms/badge";
 import { Checkbox } from "@components/atoms/checkbox";
+import { useAppStore } from "@app/store/use-app-store";
 import { formatBytes, formatCount, formatDuration } from "@lib/utils/format-utils";
 import { resolveHoverGifUrl, resolvePreviewPlaybackUrl } from "@lib/utils/video-playback";
 
@@ -28,6 +29,7 @@ export function VideoMetadataCard({
 }: VideoMetadataCardProps) {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [gifLoadFailed, setGifLoadFailed] = useState(false);
+  const isDownloaded = useAppStore((state) => Boolean(row.video_id && state.download_history_ids.includes(row.video_id)));
 
   const canSelect = Boolean(row.is_downloadable && row.video_id);
   const previewUrl = resolvePreviewPlaybackUrl(row);
@@ -37,7 +39,7 @@ export function VideoMetadataCard({
   const activeThumbnailUrl = row.thumbnail_url;
   const characterLine = row.character_names.join(", ") || row.character_name || "";
   const cardTitle = resolveCardTitle(row);
-  const draftStatusBadge = resolveDraftStatusBadge(row);
+  const primaryStatusBadge = resolvePrimaryStatusBadge(row, isDownloaded);
   const summaryDate = formatShortDate(row.published_at);
   const relativePostedTime = formatRelativePostedTime(row.published_at);
   const fileSizeLabel = resolveFileSizeLabel(row);
@@ -99,9 +101,9 @@ export function VideoMetadataCard({
           >
             <MoreHorizontal aria-hidden="true" size={16} />
           </button>
-          {draftStatusBadge ? (
+          {primaryStatusBadge ? (
             <div className="ss-results-thumb-status">
-              <Badge tone={draftStatusBadge.tone}>{draftStatusBadge.label}</Badge>
+              <Badge tone={primaryStatusBadge.tone}>{primaryStatusBadge.label}</Badge>
             </div>
           ) : null}
           {previewActive && canPlay ? (
@@ -273,7 +275,14 @@ function resolveNarrativeBlocks(row: VideoRow): Array<{ label: "Caption" | "Prom
   return sections;
 }
 
-function resolveDraftStatusBadge(row: VideoRow): { label: "Draft" | "Shared"; tone: "warning" | "success" } | null {
+function resolvePrimaryStatusBadge(
+  row: VideoRow,
+  isDownloaded: boolean
+): { label: "Draft" | "Shared" | "Downloaded"; tone: "warning" | "success" } | null {
+  if (isDownloaded) {
+    return { label: "Downloaded", tone: "success" };
+  }
+
   if (!isDraftLikeSource(row.source_type)) {
     return null;
   }
