@@ -11,26 +11,18 @@ Save Sora is a fullscreen-only MV3 extension.
 
 ## Data model
 
-Save Sora uses two IndexedDB databases.
+Save Sora uses one flattened IndexedDB database:
 
-### Session DB
-
-Resettable working-session data:
-
-- `settings`
-- `session_meta`
-- `video_rows`
-- `download_queue`
-- `draft_resolution_cache`
-
-### Download History DB
-
-Permanent append-only history:
-
-- store: `download_history`
-- key: `video_id`
-
-`download_history` is intentionally isolated so normal reset flows cannot clear it. Only the settings clear-history CTA calls the destructive helper.
+- db: `save-sora-v3`
+- stores:
+  - `download_history`
+  - `settings`
+  - `saved_accounts`
+    - indexes: `creators`, `side_characters`
+  - `cursor_checkpoints`
+  - `job_rows`
+    - indexes: `by_job_id`, `by_row_id`, `by_updated_at`
+  - `rows`
 
 ## UI rules
 
@@ -56,7 +48,7 @@ Confirmed performance decisions:
 - hidden-tab pool size: `3`
 - in-tab cursor batching before returning control to the extension
 - incremental IndexedDB commits after each normalized batch
-- draft `gen_* -> s_*` resolution during normalization, never during download
+- draft `gen_* -> s_*` resolution during download handoff
 - bounded detail fallback concurrency: `4`
 
 ## Download model

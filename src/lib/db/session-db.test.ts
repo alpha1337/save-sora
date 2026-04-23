@@ -11,7 +11,7 @@ describe("session-db", () => {
   beforeEach(async () => {
     const database = await openSessionDb();
     await database.clear("settings");
-    await database.clear("session_state");
+    await database.clear("saved_accounts");
   });
 
   it("persists settings", async () => {
@@ -73,6 +73,36 @@ describe("session-db", () => {
         }
       ],
       selected_character_account_ids: ["ch_123"]
+    });
+  });
+
+  it("persists user session metadata in saved_accounts.user", async () => {
+    await saveSessionState({
+      creator_profiles: [],
+      selected_character_account_ids: [],
+      user: [
+        {
+          user_id: "user-1",
+          username: "whatreallyhappened",
+          profile_picture_url: "https://example.com/avatar.png",
+          plan_type: "plus",
+          permalink: "https://sora.chatgpt.com/profile/whatreallyhappened",
+          can_cameo: true,
+          created_at: "1760411457.623549",
+          character_count: 6,
+          display_name: "What Really Happened",
+          last_seen_at: "2026-04-23T00:00:00.000Z"
+        }
+      ]
+    });
+
+    const loaded = await loadSessionState();
+    expect(loaded?.user).toHaveLength(1);
+    expect(loaded?.user?.[0]).toMatchObject({
+      user_id: "user-1",
+      username: "whatreallyhappened",
+      plan_type: "plus",
+      character_count: 6
     });
   });
 

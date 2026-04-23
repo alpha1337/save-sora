@@ -1,6 +1,7 @@
 .ss-settings-takeover-overlay {
   background: rgba(7, 14, 22, 0.78);
   backdrop-filter: blur(6px);
+  z-index: 1100;
 }
 
 .ss-settings-takeover-content {
@@ -9,8 +10,9 @@
   border: 0;
   box-shadow: none;
   display: flex;
-  inset: 0;
+  inset: 0 !important;
   justify-content: center;
+  left: 0 !important;
   margin: 0;
   max-height: none;
   max-width: none;
@@ -18,7 +20,10 @@
   overflow: auto;
   padding: clamp(0.9rem, 3vw, 1.6rem);
   position: fixed;
+  top: 0 !important;
+  transform: none !important;
   width: 100vw;
+  z-index: 1101;
 }
 
 .ss-settings-takeover-backdrop {

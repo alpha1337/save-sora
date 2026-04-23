@@ -24,7 +24,7 @@ const defaultSessionMeta: SessionMeta = {
   active_sources: defaultSourceSelectionState,
   query: "",
   exclude_session_creator_only: false,
-  hide_downloaded_videos: false,
+  hide_downloaded_videos: true,
   fetch_range_confirmed: false,
   resume_fetch_available: false,
   sort_key: "published_newest",
@@ -35,7 +35,12 @@ const defaultSessionMeta: SessionMeta = {
   selected_character_account_ids: [],
   viewer_user_id: "",
   viewer_username: "",
+  viewer_display_name: "",
   viewer_profile_picture_url: "",
+  viewer_plan_type: null,
+  viewer_permalink: "",
+  viewer_created_at: "",
+  viewer_character_count: null,
   viewer_can_cameo: true,
   last_fetch_at: null
 };
@@ -106,7 +111,7 @@ export const useAppStore = create<AppStore>((set) => ({
         exclude_session_creator_only:
           filters.exclude_session_creator_only ?? state.session_meta.exclude_session_creator_only ?? false,
         hide_downloaded_videos:
-          filters.hide_downloaded_videos ?? state.session_meta.hide_downloaded_videos ?? false,
+          filters.hide_downloaded_videos ?? state.session_meta.hide_downloaded_videos ?? true,
         sort_key: filters.sort_key ?? state.session_meta.sort_key,
         group_by: filters.group_by ?? state.session_meta.group_by ?? "none",
         date_range_preset: filters.date_range_preset ?? state.session_meta.date_range_preset,
@@ -159,7 +164,7 @@ export const useAppStore = create<AppStore>((set) => ({
         ...state.session_meta,
         query: "",
         exclude_session_creator_only: false,
-        hide_downloaded_videos: false,
+        hide_downloaded_videos: true,
         fetch_range_confirmed: false,
         resume_fetch_available: false,
         sort_key: "published_newest",

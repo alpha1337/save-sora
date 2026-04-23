@@ -171,6 +171,8 @@ export function App() {
   const canResumeFetch = state.settings.enable_fetch_resume === true && state.session_meta.resume_fetch_available === true;
   const fetchActionLabel = isFetching ? "Stop Fetch" : canResumeFetch ? "Resume Fetch" : "Fetch Videos";
   const viewerUsername = state.session_meta.viewer_username?.trim() || "unknown";
+  const viewerDisplayName = state.session_meta.viewer_display_name?.trim() || viewerUsername;
+  const viewerPlanTypeBadge = (state.session_meta.viewer_plan_type?.trim() || "FREE").toUpperCase();
   const viewerProfilePictureUrl = state.session_meta.viewer_profile_picture_url?.trim() || "";
   const [creatorRouteInput, setCreatorRouteInput] = useState("");
   const [fetchDateModalOpen, setFetchDateModalOpen] = useState(false);
@@ -221,13 +223,45 @@ export function App() {
     if (!isStateHydrated) {
       return;
     }
+    const viewerUserId = state.session_meta.viewer_user_id?.trim() || "";
+    const viewerUsername = state.session_meta.viewer_username?.trim() || "";
+    const userSessions = viewerUserId && viewerUsername
+      ? [
+        {
+          user_id: viewerUserId,
+          username: viewerUsername,
+          profile_picture_url: state.session_meta.viewer_profile_picture_url ?? null,
+          plan_type: state.session_meta.viewer_plan_type ?? null,
+          permalink: state.session_meta.viewer_permalink?.trim() || "",
+          can_cameo: state.session_meta.viewer_can_cameo !== false,
+          created_at: state.session_meta.viewer_created_at?.trim() || "",
+          character_count: state.session_meta.viewer_character_count ?? null,
+          display_name: state.session_meta.viewer_display_name?.trim() || viewerUsername,
+          last_seen_at: new Date().toISOString()
+        }
+      ]
+      : [];
     void saveSessionState({
       creator_profiles: state.creator_profiles,
-      selected_character_account_ids: state.session_meta.selected_character_account_ids
+      selected_character_account_ids: state.session_meta.selected_character_account_ids,
+      user: userSessions
     }).catch((error) => {
       logger.warn("session state save failed", error);
     });
-  }, [isStateHydrated, state.creator_profiles, state.session_meta.selected_character_account_ids]);
+  }, [
+    isStateHydrated,
+    state.creator_profiles,
+    state.session_meta.selected_character_account_ids,
+    state.session_meta.viewer_can_cameo,
+    state.session_meta.viewer_character_count,
+    state.session_meta.viewer_created_at,
+    state.session_meta.viewer_display_name,
+    state.session_meta.viewer_permalink,
+    state.session_meta.viewer_plan_type,
+    state.session_meta.viewer_profile_picture_url,
+    state.session_meta.viewer_user_id,
+    state.session_meta.viewer_username
+  ]);
 
   useEffect(() => {
     if (!settingsModalOpen) {
@@ -415,13 +449,15 @@ export function App() {
     }
 
     try {
-      await updateSettings({
+      const nextSettings = {
         ...state.settings,
         remember_fetch_date_choice: rememberFetchChoiceDraft,
         remembered_date_range_preset: fetchDatePresetDraft,
         remembered_custom_date_start: fetchDateStartDraft,
         remembered_custom_date_end: fetchDateEndDraft
-      });
+      };
+      await updateSettings(nextSettings);
+      setSettingsDraft(nextSettings);
       applyFetchRangeToSession(fetchDatePresetDraft, fetchDateStartDraft, fetchDateEndDraft);
       setFetchDateModalOpen(false);
       await handleFetch();
@@ -431,7 +467,7 @@ export function App() {
   }
 
   function openSettingsModal(): void {
-    setSettingsDraft(state.settings);
+    setSettingsDraft(useAppStore.getState().settings);
     setSettingsModalOpen(true);
   }
 
@@ -601,57 +637,63 @@ export function App() {
   return (
     <>
       <AppShellTemplate
-      sidebarCollapsed={sidebarCollapsed}
-      sidebar={sidebar}
-      header={
-        <div className="ss-header-grid">
-          <div className="ss-header-identity">
-            <h1>{`Save Sora v${APP_VERSION}`}</h1>
-            <div className="ss-header-session ss-muted">
-              {viewerProfilePictureUrl ? (
-                <img
-                  alt={`${viewerUsername} profile`}
-                  className="ss-header-session-avatar"
-                  src={viewerProfilePictureUrl}
-                />
-              ) : null}
-              <span>{`Logged in as ${viewerUsername}`}</span>
+        sidebarCollapsed={sidebarCollapsed}
+        sidebar={sidebar}
+        header={
+          <div className="ss-header-grid">
+            <div className="ss-header-identity">
+              <div className="ss-header-title-row">
+                <h1>Save Sora</h1>
+                <span aria-label={`Version ${APP_VERSION}`} className="ss-header-version">{`v${APP_VERSION}`}</span>
+              </div>
+              <div className="ss-header-session ss-muted">
+                {viewerProfilePictureUrl ? (
+                  <img
+                    alt={`${viewerUsername} profile`}
+                    className="ss-header-session-avatar"
+                    src={viewerProfilePictureUrl}
+                  />
+                ) : null}
+                <div className="ss-header-session-meta">
+                  <span>{`Logged in as ${viewerUsername} (${viewerDisplayName})`}</span>
+                  <span className="ss-badge ss-badge--default ss-header-plan-badge">{viewerPlanTypeBadge}</span>
+                </div>
+              </div>
+            </div>
+            <div aria-label="Selection summary" className="ss-header-metrics">
+              <div className="ss-header-metric">
+                <span className="ss-header-metric-label">Selected</span>
+                <strong className="ss-header-metric-value">
+                  {`${formatCount(selectedDownloadableRowCount)} of ${formatCount(downloadableRowsCount)}`}
+                </strong>
+                <span className="ss-header-metric-hint">Ready videos selected for ZIP</span>
+              </div>
+              <div className="ss-header-metric">
+                <span className="ss-header-metric-label">Selected Size</span>
+                <strong className="ss-header-metric-value">{formatBytes(selectedBytes)}</strong>
+                <span className="ss-header-metric-hint">Combined estimated size of selected rows</span>
+              </div>
+            </div>
+            <div className="ss-inline-actions ss-header-actions">
+              <Button asChild tone="info">
+                <a href="https://ko-fi.com/savesora" rel="noreferrer noopener" target="_blank">
+                  <Heart size={16} />
+                  Donate
+                </a>
+              </Button>
+              <Button
+                disabled={state.phase === "fetching" || state.phase === "downloading"}
+                onClick={openSettingsModal}
+                tone="secondary"
+                type="button"
+              >
+                <Settings size={16} />
+                Settings
+              </Button>
             </div>
           </div>
-          <div aria-label="Selection summary" className="ss-header-metrics">
-            <div className="ss-header-metric">
-              <span className="ss-header-metric-label">Selected</span>
-              <strong className="ss-header-metric-value">
-                {`${formatCount(selectedDownloadableRowCount)} of ${formatCount(downloadableRowsCount)}`}
-              </strong>
-              <span className="ss-header-metric-hint">Ready videos selected for ZIP</span>
-            </div>
-            <div className="ss-header-metric">
-              <span className="ss-header-metric-label">Selected Size</span>
-              <strong className="ss-header-metric-value">{formatBytes(selectedBytes)}</strong>
-              <span className="ss-header-metric-hint">Combined estimated size of selected rows</span>
-            </div>
-          </div>
-          <div className="ss-inline-actions">
-            <Button asChild tone="secondary">
-              <a href="https://ko-fi.com/savesora" rel="noreferrer noopener" target="_blank">
-                <Heart size={16} />
-                Donate
-              </a>
-            </Button>
-            <Button
-              disabled={state.phase === "fetching" || state.phase === "downloading"}
-              onClick={openSettingsModal}
-              tone="secondary"
-              type="button"
-            >
-              <Settings size={16} />
-              Settings
-            </Button>
-          </div>
-        </div>
-      }
-    >
+        }
+      >
       <div className="ss-stack ss-stack--stretch">
         {state.error_message ? <Panel className="ss-error-panel">{state.error_message}</Panel> : null}
         <ResultsPanel

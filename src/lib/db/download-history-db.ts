@@ -1,31 +1,22 @@
-import { openDB } from "idb";
-
-const DOWNLOAD_HISTORY_DB_NAME = "save-sora-v2-download-history";
-const DOWNLOAD_HISTORY_DB_VERSION = 1;
+import { DOWNLOAD_HISTORY_STORE, openSaveSoraV3Db } from "./save-sora-v3-db";
 
 /**
- * Permanent append-only history store keyed by final resolved `s_*` ids.
+ * Permanent append-only history store keyed by downloaded video ids.
  */
 export async function openDownloadHistoryDb() {
-  return openDB(DOWNLOAD_HISTORY_DB_NAME, DOWNLOAD_HISTORY_DB_VERSION, {
-    upgrade(database) {
-      if (!database.objectStoreNames.contains("download_history")) {
-        database.createObjectStore("download_history", { keyPath: "video_id" });
-      }
-    }
-  });
+  return openSaveSoraV3Db();
 }
 
 export async function listDownloadHistoryIds(): Promise<string[]> {
   const database = await openDownloadHistoryDb();
-  const rows = await database.getAll("download_history");
+  const rows = await database.getAll(DOWNLOAD_HISTORY_STORE);
   return rows.map((row) => row.video_id);
 }
 
 export async function appendDownloadHistoryId(videoId: string): Promise<void> {
   const database = await openDownloadHistoryDb();
   try {
-    await database.add("download_history", { video_id: videoId });
+    await database.add(DOWNLOAD_HISTORY_STORE, { video_id: videoId });
   } catch (error) {
     if (error instanceof DOMException && error.name === "ConstraintError") {
       return;
@@ -36,5 +27,5 @@ export async function appendDownloadHistoryId(videoId: string): Promise<void> {
 
 export async function clearDownloadHistory(): Promise<void> {
   const database = await openDownloadHistoryDb();
-  await database.clear("download_history");
+  await database.clear(DOWNLOAD_HISTORY_STORE);
 }

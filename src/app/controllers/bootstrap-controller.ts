@@ -83,13 +83,19 @@ export async function bootstrapAppState(reportStatus?: BootstrapStatusReporter):
     active_sources: activeSources,
     viewer_user_id: viewerIdentity?.user_id ?? existingSessionMeta.viewer_user_id ?? "",
     viewer_username: viewerIdentity?.username ?? existingSessionMeta.viewer_username ?? "",
+    viewer_display_name: viewerIdentity?.display_name ?? existingSessionMeta.viewer_display_name ?? "",
     viewer_profile_picture_url:
       viewerIdentity?.profile_picture_url ??
       existingSessionMeta.viewer_profile_picture_url ??
       "",
+    viewer_plan_type: viewerIdentity?.plan_type ?? existingSessionMeta.viewer_plan_type ?? null,
+    viewer_permalink: viewerIdentity?.permalink ?? existingSessionMeta.viewer_permalink ?? "",
+    viewer_created_at: viewerIdentity?.created_at ?? existingSessionMeta.viewer_created_at ?? "",
+    viewer_character_count:
+      viewerIdentity?.character_count ?? existingSessionMeta.viewer_character_count ?? null,
     viewer_can_cameo: viewerCanCameo,
     exclude_session_creator_only: existingSessionMeta.exclude_session_creator_only ?? false,
-    hide_downloaded_videos: existingSessionMeta.hide_downloaded_videos ?? false,
+    hide_downloaded_videos: existingSessionMeta.hide_downloaded_videos ?? true,
     fetch_range_confirmed: existingSessionMeta.fetch_range_confirmed ?? false,
     resume_fetch_available: hasResumableFetch,
     group_by: existingSessionMeta.group_by ?? "none",

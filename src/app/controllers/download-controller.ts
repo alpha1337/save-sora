@@ -1,5 +1,5 @@
 import { useAppStore } from "@app/store/use-app-store";
-import { appendDownloadHistoryId } from "@lib/db/download-history-db";
+import { appendDownloadHistoryId, listDownloadHistoryIds } from "@lib/db/download-history-db";
 import { buildArchiveWorkPlan } from "@lib/archive-organizer/build-archive-work-plan";
 import { downloadBlob, downloadTextFile } from "@lib/utils/download-utils";
 import { selectSelectedVideoRows } from "@app/store/selectors";
@@ -38,7 +38,7 @@ interface ZipWorkerErrorMessage {
 
 /**
  * Builds one or more ZIP parts in page-owned workers, downloads each part, and
- * then appends resolved ids to permanent download history.
+ * then hydrates permanent download history so status badges update immediately.
  */
 export async function downloadSelectedRows(): Promise<void> {
   const state = useAppStore.getState();
@@ -116,12 +116,32 @@ export async function downloadSelectedRows(): Promise<void> {
     downloadExtractionHelpersForSplitArchive(rootWorkPlan.archive_name);
   }
 
+  const downloadedVideoIds = new Set<string>();
   for (const row of rootWorkPlan.rows) {
-    if (!row.video_id.startsWith("s_")) {
+    const normalizedVideoId = row.video_id.trim();
+    if (!normalizedVideoId) {
       continue;
     }
-    await appendDownloadHistoryId(row.video_id);
-    state.appendDownloadHistoryId(row.video_id);
+    downloadedVideoIds.add(normalizedVideoId);
+  }
+
+  for (const videoId of downloadedVideoIds) {
+    await appendDownloadHistoryId(videoId);
+    state.appendDownloadHistoryId(videoId);
+  }
+
+  try {
+    const hydratedDownloadHistoryIds = await listDownloadHistoryIds();
+    const hydratedDownloadHistorySet = new Set(hydratedDownloadHistoryIds);
+    const latestState = useAppStore.getState();
+    latestState.replaceDownloadHistoryIds(hydratedDownloadHistoryIds);
+    latestState.setSelectedVideoIds(
+      latestState.selected_video_ids.filter((videoId) => !hydratedDownloadHistorySet.has(videoId))
+    );
+  } catch (error) {
+    logger.warn("download history hydration after archive build failed", {
+      error: getUnknownErrorMessage(error)
+    });
   }
 
   state.setPhase("ready");

@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import type { GroupByOption, VideoSortOption } from "types/domain";
 import { Input } from "@components/atoms/input";
 import { Select } from "@components/atoms/select";
-import { Switch } from "@components/atoms/switch";
 
 type SortField = "published" | "created" | "title" | "views" | "likes" | "remixes";
 type SortDirection = "asc" | "desc";
@@ -117,17 +116,17 @@ export function ResultsToolbar({
           value={groupBy}
         />
       </div>
-      <div className="ss-toolbar-control ss-toolbar-control--toggle">
+      <div className="ss-toolbar-control">
         <span className="ss-toolbar-control-label">Hide downloaded videos?</span>
-        <div className="ss-toolbar-toggle-row">
-          <span className="ss-toolbar-toggle-status">{hideDownloadedVideos ? "True" : "False"}</span>
-          <Switch
-            ariaLabel="Hide downloaded videos"
-            checked={hideDownloadedVideos}
-            id="results-hide-downloaded-toggle"
-            onCheckedChange={onHideDownloadedVideosChange}
-          />
-        </div>
+        <Select
+          aria-label="Hide downloaded videos"
+          onValueChange={(value) => onHideDownloadedVideosChange(value === "true")}
+          options={[
+            { label: "True", value: "true" },
+            { label: "False", value: "false" }
+          ]}
+          value={hideDownloadedVideos ? "true" : "false"}
+        />
       </div>
       <Input
         aria-label="Search Session Results"

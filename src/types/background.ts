@@ -68,6 +68,10 @@ export interface ResolveViewerIdentityResponse {
     display_name: string;
     can_cameo: boolean;
     profile_picture_url: string | null;
+    plan_type: string | null;
+    permalink: string;
+    created_at: string;
+    character_count: number | null;
   };
 }
 

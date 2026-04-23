@@ -532,6 +532,10 @@ async function resolveViewerIdentity() {
   let displayName = "";
   let canCameo = true;
   let profilePictureUrl = "";
+  let planType: string | null = null;
+  let permalink = "";
+  let createdAt = "";
+  let characterCount: number | null = null;
   try {
     const payload = (await fetchJson("/backend/project_y/v2/me")) as Record<string, unknown>;
     const profileRecord = payload.profile && typeof payload.profile === "object"
@@ -565,6 +569,34 @@ async function resolveViewerIdentity() {
       payload.avatarUrl,
       profilePictureUrl
     ]);
+    planType = pickFirstString([
+      profileRecord?.plan_type,
+      profileRecord?.planType,
+      payload.plan_type,
+      payload.planType,
+      planType
+    ]) || null;
+    permalink = pickFirstString([
+      profileRecord?.permalink,
+      profileRecord?.url,
+      payload.permalink,
+      payload.url,
+      permalink
+    ]);
+    createdAt = pickFirstTimestamp([
+      profileRecord?.created_at,
+      profileRecord?.createdAt,
+      payload.created_at,
+      payload.createdAt,
+      createdAt
+    ]);
+    characterCount = pickFirstNumber([
+      profileRecord?.character_count,
+      profileRecord?.characterCount,
+      payload.character_count,
+      payload.characterCount,
+      characterCount
+    ]);
     const canCameoValue = profileRecord?.can_cameo ?? profileRecord?.canCameo ?? payload.can_cameo ?? payload.canCameo;
     if (typeof canCameoValue === "boolean") {
       canCameo = canCameoValue;
@@ -584,6 +616,14 @@ async function resolveViewerIdentity() {
         payload.avatarUrl,
         profilePictureUrl
       ]);
+      planType = pickFirstString([payload.plan_type, payload.planType, planType]) || null;
+      permalink = pickFirstString([payload.permalink, payload.url, permalink]);
+      createdAt = pickFirstTimestamp([payload.created_at, payload.createdAt, createdAt]);
+      characterCount = pickFirstNumber([payload.character_count, payload.characterCount, characterCount]);
+      const canCameoValue = payload.can_cameo ?? payload.canCameo;
+      if (typeof canCameoValue === "boolean") {
+        canCameo = canCameoValue;
+      }
     }
   } catch (_error) {
     // fall through to feed probing
@@ -607,19 +647,68 @@ async function resolveViewerIdentity() {
             profileRecord.avatarUrl,
             profilePictureUrl
           ]);
+          planType = pickFirstString([profileRecord.plan_type, profileRecord.planType, planType]) || null;
+          permalink = pickFirstString([profileRecord.permalink, profileRecord.url, permalink]);
+          createdAt = pickFirstTimestamp([profileRecord.created_at, profileRecord.createdAt, createdAt]);
+          characterCount = pickFirstNumber([
+            profileRecord.character_count,
+            profileRecord.characterCount,
+            characterCount
+          ]);
+          const canCameoValue = profileRecord.can_cameo ?? profileRecord.canCameo;
+          if (typeof canCameoValue === "boolean") {
+            canCameo = canCameoValue;
+          }
         }
       }
     } catch (_error) {
       // keep empty fallback values
     }
   }
+  if (!displayName) {
+    displayName = username;
+  }
+  if (!permalink && username) {
+    permalink = `${SORA_ORIGIN}/profile/${encodeURIComponent(username)}`;
+  }
   return {
     user_id: viewerUserId,
     username,
     display_name: displayName,
     can_cameo: canCameo,
-    profile_picture_url: profilePictureUrl || null
+    profile_picture_url: profilePictureUrl || null,
+    plan_type: planType,
+    permalink,
+    created_at: createdAt,
+    character_count: characterCount
   };
+}
+
+function pickFirstNumber(values: unknown[]): number | null {
+  for (const value of values) {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+    if (typeof value === "string") {
+      const parsedValue = Number(value.trim());
+      if (Number.isFinite(parsedValue)) {
+        return parsedValue;
+      }
+    }
+  }
+  return null;
+}
+
+function pickFirstTimestamp(values: unknown[]): string {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim().length > 0) {
+      return value.trim();
+    }
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return String(value);
+    }
+  }
+  return "";
 }
 async function resolveCreatorTarget(
   explicitCreatorId: string,

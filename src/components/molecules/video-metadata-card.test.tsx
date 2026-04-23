@@ -1,6 +1,7 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { VideoRow } from "types/domain";
+import { useAppStore } from "@app/store/use-app-store";
 import { VideoMetadataCard } from "./video-metadata-card";
 
 const baseRow: VideoRow = {
@@ -42,6 +43,9 @@ const baseRow: VideoRow = {
 describe("VideoMetadataCard", () => {
   afterEach(() => {
     vi.useRealTimers();
+    act(() => {
+      useAppStore.setState({ download_history_ids: [] });
+    });
   });
 
   it("uses video id as the default card title", () => {
@@ -151,6 +155,60 @@ describe("VideoMetadataCard", () => {
     );
 
     expect(screen.getByText("Shared")).toBeInTheDocument();
+    expect(screen.queryByText("Draft")).not.toBeInTheDocument();
+  });
+
+  it("shows Shared/Draft metadata in video details for draft rows", () => {
+    render(
+      <VideoMetadataCard
+        onPreviewToggle={vi.fn()}
+        onToggleSelectedVideoId={vi.fn()}
+        previewActive={false}
+        row={{
+          ...baseRow,
+          source_type: "drafts",
+          source_bucket: "drafts",
+          video_id: "gen_alpha123"
+        }}
+        selected={false}
+        skipReasonLabel=""
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Open details" }));
+
+    const detailMetaList = document.querySelector(".ss-results-card-meta--overlay");
+    expect(detailMetaList).not.toBeNull();
+    const sharedRow = within(detailMetaList as HTMLElement).getByText("Shared").closest("div");
+    const draftRow = within(detailMetaList as HTMLElement).getByText("Draft").closest("div");
+    expect(sharedRow).not.toBeNull();
+    expect(draftRow).not.toBeNull();
+    expect(sharedRow?.querySelector("dd")?.textContent).toBe("No");
+    expect(draftRow?.querySelector("dd")?.textContent).toBe("Yes");
+  });
+
+  it("replaces Draft with Downloaded when a draft gen_* id exists in download history", () => {
+    act(() => {
+      useAppStore.setState({ download_history_ids: ["gen_alpha123"] });
+    });
+
+    render(
+      <VideoMetadataCard
+        onPreviewToggle={vi.fn()}
+        onToggleSelectedVideoId={vi.fn()}
+        previewActive={false}
+        row={{
+          ...baseRow,
+          source_type: "drafts",
+          source_bucket: "drafts",
+          video_id: "gen_alpha123"
+        }}
+        selected={false}
+        skipReasonLabel=""
+      />
+    );
+
+    expect(screen.getByText("Downloaded")).toBeInTheDocument();
     expect(screen.queryByText("Draft")).not.toBeInTheDocument();
   });
 
@@ -365,6 +423,10 @@ describe("VideoMetadataCard", () => {
     expect(screen.getByText("Caption text")).toBeInTheDocument();
     expect(screen.getByText("File Size")).toBeInTheDocument();
     expect(screen.getByText("-")).toBeInTheDocument();
+    const sharedMetaRow = screen.getByText("Shared").closest("div");
+    const draftMetaRow = screen.getByText("Draft").closest("div");
+    expect(sharedMetaRow?.querySelector("dd")?.textContent).toBe("Yes");
+    expect(draftMetaRow?.querySelector("dd")?.textContent).toBe("No");
     expect(screen.queryByText("Source")).not.toBeInTheDocument();
     expect(screen.queryByText("Duration")).not.toBeInTheDocument();
 

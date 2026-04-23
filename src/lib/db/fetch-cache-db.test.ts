@@ -74,7 +74,7 @@ describe("fetch-cache-db", () => {
     const database = await openFetchCacheDb();
     await database.clear("rows");
     await database.clear("job_rows");
-    await database.clear("checkpoints");
+    await database.clear("cursor_checkpoints");
   });
 
   it("persists rows and checkpoints per job", async () => {

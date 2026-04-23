@@ -30,7 +30,7 @@ body {
 
 .ss-shell-header,
 .ss-panel,
-.ss-dialog-content,
+.ss-dialog-content:not(.ss-settings-takeover-content),
 .ss-button,
 .ss-input,
 .ss-select-trigger,
@@ -54,7 +54,7 @@ body {
 
 .ss-select-content,
 .ss-source-dropdown-menu,
-.ss-dialog-content,
+.ss-dialog-content:not(.ss-settings-takeover-content),
 .react-datepicker-popper .react-datepicker {
   border-radius: 0 !important;
 }
@@ -103,6 +103,12 @@ body {
   background: linear-gradient(180deg, #d79921, #b57614);
   border-color: #b57614;
   color: #1d2021;
+}
+
+.ss-button--info {
+  background: linear-gradient(180deg, #458588, #076678);
+  border-color: #076678;
+  color: #fbf1c7;
 }
 
 .ss-input,
@@ -155,13 +161,27 @@ body {
   color: #d5c4a1;
 }
 
-.ss-toolbar-toggle-status {
-  color: #fbf1c7;
-}
-
 .ss-header-metric {
   background: linear-gradient(180deg, #3c3836, #282828);
   border-color: #7c6f64;
+}
+
+.ss-header-identity,
+.ss-header-actions {
+  background: linear-gradient(180deg, #3c3836, #282828);
+  border-color: #7c6f64;
+}
+
+.ss-header-title-row h1,
+.ss-header-session,
+.ss-header-session span {
+  color: #f9f5d7;
+}
+
+.ss-header-version {
+  background: rgba(131, 165, 152, 0.22);
+  border-color: #83a598;
+  color: #fbf1c7;
 }
 
 .ss-header-metric-label,
@@ -175,7 +195,7 @@ body {
 
 .ss-select-content,
 .ss-source-dropdown-menu,
-.ss-dialog-content {
+.ss-dialog-content:not(.ss-settings-takeover-content) {
   background: linear-gradient(180deg, #3c3836, #282828);
   border: 1px solid #7c6f64;
   box-shadow: 0 20px 48px rgba(0, 0, 0, 0.5);
@@ -260,7 +280,7 @@ body {
   overflow-y: auto;
 }
 
-.ss-dialog-content {
+.ss-dialog-content:not(.ss-settings-takeover-content) {
   max-height: calc(100vh - 2rem);
   overflow-y: auto;
 }

@@ -95,7 +95,12 @@ export interface SessionMeta {
   selected_character_account_ids: string[];
   viewer_user_id?: string;
   viewer_username?: string;
+  viewer_display_name?: string;
   viewer_profile_picture_url?: string | null;
+  viewer_plan_type?: string | null;
+  viewer_permalink?: string;
+  viewer_created_at?: string;
+  viewer_character_count?: number | null;
   viewer_can_cameo?: boolean;
   last_fetch_at: string | null;
 }

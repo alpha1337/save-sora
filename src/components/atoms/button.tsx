@@ -4,7 +4,7 @@ import type { ButtonHTMLAttributes, PropsWithChildren } from "react";
 
 interface ButtonProps extends PropsWithChildren<ButtonHTMLAttributes<HTMLButtonElement>> {
   asChild?: boolean;
-  tone?: "default" | "ghost" | "danger" | "secondary" | "warning";
+  tone?: "default" | "ghost" | "danger" | "secondary" | "warning" | "info";
 }
 
 /**

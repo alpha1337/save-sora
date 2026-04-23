@@ -394,7 +394,7 @@ export function ResultsPanel({
             </Button>
           ) : null}
           {showClearResults ? (
-            <Button disabled={!canClearResults} onClick={onClearResults} tone="secondary" type="button">
+            <Button disabled={!canClearResults} onClick={onClearResults} tone="danger" type="button">
               <Trash2 aria-hidden="true" size={16} />
               Clear Results
             </Button>

@@ -1,14 +1,15 @@
-import { openDB } from "idb";
 import type { FetchJobCheckpoint, VideoRow } from "types/domain";
+import {
+  CURSOR_CHECKPOINTS_STORE,
+  JOB_ROWS_BY_JOB_ID_INDEX,
+  JOB_ROWS_BY_ROW_ID_INDEX,
+  JOB_ROWS_BY_UPDATED_AT_INDEX,
+  JOB_ROWS_STORE,
+  ROWS_STORE,
+  openSaveSoraV3Db
+} from "./save-sora-v3-db";
 
-const FETCH_CACHE_DB_NAME = "save-sora-v2-fetch-cache";
-const FETCH_CACHE_DB_VERSION = 2;
-const ROWS_STORE = "rows";
-const JOB_ROWS_STORE = "job_rows";
-const CHECKPOINTS_STORE = "checkpoints";
-const JOB_ROWS_BY_JOB_ID_INDEX = "by_job_id";
-const JOB_ROWS_BY_ROW_ID_INDEX = "by_row_id";
-const JOB_ROWS_BY_UPDATED_AT_INDEX = "by_updated_at";
+const CHECKPOINTS_STORE = CURSOR_CHECKPOINTS_STORE;
 const CHECKPOINT_MAX_AGE_MS = 1000 * 60 * 60 * 24 * 3;
 const CACHE_ROW_MAX_AGE_MS = 1000 * 60 * 60 * 24 * 3;
 const CACHE_PRUNE_INTERVAL_MS = 1000 * 60;
@@ -23,28 +24,7 @@ interface JobRowRecord {
 }
 
 export async function openFetchCacheDb() {
-  return openDB(FETCH_CACHE_DB_NAME, FETCH_CACHE_DB_VERSION, {
-    upgrade(database, _oldVersion, _newVersion, transaction) {
-      if (!database.objectStoreNames.contains(ROWS_STORE)) {
-        database.createObjectStore(ROWS_STORE, { keyPath: "row_id" });
-      }
-      const jobRowsStore = database.objectStoreNames.contains(JOB_ROWS_STORE)
-        ? transaction.objectStore(JOB_ROWS_STORE)
-        : database.createObjectStore(JOB_ROWS_STORE, { keyPath: "id" });
-      if (!jobRowsStore.indexNames.contains(JOB_ROWS_BY_JOB_ID_INDEX)) {
-        jobRowsStore.createIndex(JOB_ROWS_BY_JOB_ID_INDEX, "job_id", { unique: false });
-      }
-      if (!jobRowsStore.indexNames.contains(JOB_ROWS_BY_ROW_ID_INDEX)) {
-        jobRowsStore.createIndex(JOB_ROWS_BY_ROW_ID_INDEX, "row_id", { unique: false });
-      }
-      if (!jobRowsStore.indexNames.contains(JOB_ROWS_BY_UPDATED_AT_INDEX)) {
-        jobRowsStore.createIndex(JOB_ROWS_BY_UPDATED_AT_INDEX, "updated_at", { unique: false });
-      }
-      if (!database.objectStoreNames.contains(CHECKPOINTS_STORE)) {
-        database.createObjectStore(CHECKPOINTS_STORE, { keyPath: "job_id" });
-      }
-    }
-  });
+  return openSaveSoraV3Db();
 }
 
 export async function loadFetchRowsForJobs(jobIds: string[]): Promise<VideoRow[]> {

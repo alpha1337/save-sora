@@ -43,9 +43,13 @@ export function VideoMetadataCard({
   const summaryDate = formatShortDate(row.published_at);
   const relativePostedTime = formatRelativePostedTime(row.published_at);
   const fileSizeLabel = resolveFileSizeLabel(row);
+  const isShared = resolveIsSharedRow(row);
+  const isDraft = resolveIsDraftRow(row);
   const detailNarrativeBlocks = resolveNarrativeBlocks(row);
   const detailMetaBlocks = [
     { label: "File Size", value: fileSizeLabel || "-" },
+    { label: "Shared", value: isShared ? "Yes" : "No" },
+    { label: "Draft", value: isDraft ? "Yes" : "No" },
     ...(characterLine ? [{ label: "Character", value: characterLine }] : [])
   ];
   const durationThumbStat =
@@ -295,6 +299,17 @@ function resolvePrimaryStatusBadge(
   }
 
   return null;
+}
+
+function resolveIsSharedRow(row: VideoRow): boolean {
+  return /^s_[A-Za-z0-9_-]+$/i.test(row.video_id.trim());
+}
+
+function resolveIsDraftRow(row: VideoRow): boolean {
+  if (isDraftLikeSource(row.source_type)) {
+    return true;
+  }
+  return /^gen_[A-Za-z0-9_-]+$/i.test(row.video_id.trim());
 }
 
 function isDraftLikeSource(source: string): boolean {
