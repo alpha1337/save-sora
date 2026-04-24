@@ -275,6 +275,7 @@ export interface FetchJobCheckpoint {
 
 export interface DownloadProgressState {
   active_label: string;
+  active_subtitle: string;
   completed_items: number;
   preflight_completed_items: number;
   preflight_stage: DownloadPreflightStage;

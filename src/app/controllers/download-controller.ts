@@ -46,6 +46,7 @@ export async function downloadSelectedRows(): Promise<void> {
   state.setPhase("downloading");
   state.setDownloadProgress({
     active_label: "Preparing download handoff…",
+    active_subtitle: "Building a queue from selected videos.",
     completed_items: 0,
     preflight_completed_items: 0,
     preflight_stage: "building_queue",
@@ -89,6 +90,7 @@ export async function downloadSelectedRows(): Promise<void> {
 
   state.setDownloadProgress({
     active_label: totalParts > 1 ? `Preparing ZIP part 1/${totalParts}…` : "Preparing Archive…",
+    active_subtitle: "Passing resolved sources to the ZIP worker.",
     completed_items: 0,
     preflight_stage: "zipping",
     preflight_stage_label: "ZIP Worker",
@@ -162,6 +164,7 @@ export async function downloadSelectedRows(): Promise<void> {
 
   state.setDownloadProgress({
     active_label: "Archive Ready",
+    active_subtitle: "Downloads are packaged and ready to review.",
     completed_items: rootWorkPlan.rows.length,
     preflight_stage: "completed",
     preflight_stage_label: "Summary",
@@ -210,6 +213,7 @@ async function buildZipPart(
         state.setDownloadProgress({
           ...partProgress,
           active_label: `${partPrefix}${partProgress.active_label || "Building archive"}`.trim(),
+          active_subtitle: partProgress.active_subtitle || "Bundling the current video.",
           completed_items: Math.max(currentProgress.completed_items, aggregateCompletedItems),
           preflight_completed_items: currentProgress.preflight_completed_items,
           preflight_stage: "zipping",

@@ -6,6 +6,7 @@ import { DownloadTakeover } from "./download-takeover";
 function createProgress(overrides: Partial<DownloadProgressState> = {}): DownloadProgressState {
   return {
     active_label: "Archive Ready",
+    active_subtitle: "Downloads are packaged and ready to review.",
     completed_items: 2,
     preflight_completed_items: 2,
     preflight_stage: "completed",
@@ -79,6 +80,24 @@ describe("DownloadTakeover", () => {
 
     expect(screen.getAllByText("Failed Draft").length).toBeGreaterThan(0);
     expect(screen.getAllByText("could_not_share_video").length).toBeGreaterThan(0);
+  });
+
+  it("renders a concise current-video action subtitle", () => {
+    render(
+      <DownloadTakeover
+        downloadProgress={createProgress({
+          active_label: "Current Queue Video",
+          active_subtitle: "Resolving the best available source URL."
+        })}
+        onCloseSummary={vi.fn()}
+        onStartOver={vi.fn()}
+        selectedBytes={1024}
+        visible
+      />
+    );
+
+    expect(screen.getByRole("heading", { name: "Current Queue Video" })).toBeInTheDocument();
+    expect(screen.getByText("Resolving the best available source URL.")).toHaveClass("ss-download-takeover-subtitle");
   });
 
   it("truncates long takeover titles to 50 characters", () => {

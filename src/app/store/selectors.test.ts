@@ -84,6 +84,7 @@ function createState(sortKey: VideoSortOption, rows: VideoRow[]): AppStoreState 
     },
     download_progress: {
       active_label: "",
+      active_subtitle: "",
       completed_items: 0,
       preflight_completed_items: 0,
       preflight_stage: "idle",

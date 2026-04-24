@@ -85,6 +85,7 @@ export function DownloadTakeover({
   const isComplete = downloadProgress.zip_completed;
   const stageLabel = downloadProgress.preflight_stage_label || (isComplete ? "Summary" : "Archive");
   const takeoverTitle = downloadProgress.active_label || "Preparing archive workflow…";
+  const takeoverSubtitle = downloadProgress.active_subtitle?.trim() ?? "";
 
   if (!visible) {
     return null;
@@ -103,6 +104,9 @@ export function DownloadTakeover({
               <h2 className="ss-download-takeover-title" title={takeoverTitle}>
                 {truncateText(takeoverTitle, MAX_TAKEOVER_TITLE_LENGTH)}
               </h2>
+              {takeoverSubtitle ? (
+                <p className="ss-download-takeover-subtitle">{takeoverSubtitle}</p>
+              ) : null}
             </div>
           </div>
           <div className="ss-download-takeover-stage">

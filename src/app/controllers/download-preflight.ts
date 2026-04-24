@@ -75,18 +75,19 @@ export async function runDownloadPreflight(
   const publish = (
     stage: DownloadPreflightStage,
     stageLabel: string,
-    activeLabel: string
+    activeLabel: string,
+    activeSubtitle: string
   ) => {
-    options.onProgress?.(buildPreflightProgress(entries, rejections, stage, stageLabel, activeLabel));
+    options.onProgress?.(buildPreflightProgress(entries, rejections, stage, stageLabel, activeLabel, activeSubtitle));
   };
 
-  publish("building_queue", "Building Queue", "Building preflight queue");
+  publish("building_queue", "Building Queue", "Building preflight queue", "Preparing selected videos for preflight.");
   await dependencies.replaceQueue(toQueueItems(entries));
 
   await processDraftEntries(entries, rejections, selectedIdRemap, publish, dependencies);
   await processSharedEntries(entries, rejections, publish, dependencies);
 
-  publish("zip_handoff", "Zip Handoff", "Queue ready for ZIP handoff");
+  publish("zip_handoff", "Zip Handoff", "Queue ready for ZIP handoff", "Passing resolved sources to the ZIP worker.");
   return {
     rows: entries.map((entry) => entry.row),
     queue: toQueueItems(entries),
@@ -140,7 +141,7 @@ async function processDraftEntries(
   entries: PreflightQueueEntry[],
   rejections: DownloadQueueRejectionEntry[],
   selectedIdRemap: Map<string, string>,
-  publish: (stage: DownloadPreflightStage, stageLabel: string, activeLabel: string) => void,
+  publish: (stage: DownloadPreflightStage, stageLabel: string, activeLabel: string, activeSubtitle: string) => void,
   dependencies: Required<Pick<DownloadPreflightOptions, "patchQueue" | "resolveDraftRow" | "sleep">>
 ): Promise<void> {
   const draftEntries = entries.filter((entry) => entry.lane === "drafts");
@@ -149,23 +150,23 @@ async function processDraftEntries(
     const nonSharedEntries = batch.filter((entry) => !entry.shared_post_id);
 
     for (const entry of batch) {
-      publish("sharing_drafts", "Sharing Drafts", `Checking ${entry.title}`);
+      publish("sharing_drafts", "Sharing Drafts", entry.title, "Checking whether this draft is already shared.");
       if (entry.shared_post_id) {
         patches.push(markEntryShared(entry, entry.shared_post_id, selectedIdRemap));
-        publish("sharing_drafts", "Sharing Drafts", `Shared ${entry.current_id}`);
+        publish("sharing_drafts", "Sharing Drafts", entry.title, "Moving shared video to source resolution.");
         continue;
       }
 
       const resolvedRow = await dependencies.resolveDraftRow(entry.row);
       if (resolvedRow && isSharedVideoId(resolvedRow.video_id)) {
         patches.push(markEntryShared(entry, resolvedRow.video_id, selectedIdRemap, resolvedRow));
-        publish("sharing_drafts", "Sharing Drafts", `Shared ${entry.current_id}`);
+        publish("sharing_drafts", "Sharing Drafts", entry.title, "Shared draft and refreshed download URLs.");
       } else {
         const rejectionPatch = markEntryRejected(entry, "could_not_share_video", rejections);
         if (rejectionPatch) {
           patches.push(rejectionPatch);
         }
-        publish("sharing_drafts", "Sharing Drafts", `Watermark fallback for ${entry.current_id}`);
+        publish("sharing_drafts", "Sharing Drafts", entry.title, "Using watermarked fallback because sharing failed.");
       }
 
       if (!entry.shared_post_id && nonSharedEntries.indexOf(entry) < nonSharedEntries.length - 1) {
@@ -182,7 +183,7 @@ async function processDraftEntries(
 async function processSharedEntries(
   entries: PreflightQueueEntry[],
   rejections: DownloadQueueRejectionEntry[],
-  publish: (stage: DownloadPreflightStage, stageLabel: string, activeLabel: string) => void,
+  publish: (stage: DownloadPreflightStage, stageLabel: string, activeLabel: string, activeSubtitle: string) => void,
   dependencies: Required<Pick<DownloadPreflightOptions, "getJitterMs" | "patchQueue" | "removeWatermark" | "sleep">>
 ): Promise<void> {
   const sharedEntries = entries.filter((entry) => entry.lane === "shared" && isSharedVideoId(entry.current_id));
@@ -190,11 +191,11 @@ async function processSharedEntries(
     const patches: DownloadQueuePatch[] = [];
     await runWithConcurrency(batch, WATERMARK_CONCURRENCY, async (entry) => {
       entry.lane = "processing";
-      publish("resolving_sources", "Resolving Sources", `Resolving ${entry.title}`);
+      publish("resolving_sources", "Resolving Sources", entry.title, "Resolving the best available source URL.");
 
       if (entry.no_watermark) {
         entry.lane = "watermark_removed";
-        publish("resolving_sources", "Resolving Sources", `No-watermark ready for ${entry.current_id}`);
+        publish("resolving_sources", "Resolving Sources", entry.title, "Using existing no-watermark source.");
         return;
       }
 
@@ -212,12 +213,12 @@ async function processSharedEntries(
           no_watermark: resolvedUrl
         });
         entry.lane = "watermark_removed";
-        publish("resolving_sources", "Resolving Sources", `No-watermark ready for ${entry.current_id}`);
+        publish("resolving_sources", "Resolving Sources", entry.title, "No-watermark source resolved.");
         return;
       }
 
       markEntryRejected(entry, "access_restricted", rejections);
-      publish("resolving_sources", "Resolving Sources", `Watermark fallback for ${entry.current_id}`);
+      publish("resolving_sources", "Resolving Sources", entry.title, "Using watermarked fallback because access is restricted.");
     });
 
     if (patches.length > 0) {
@@ -289,10 +290,12 @@ function buildPreflightProgress(
   rejections: DownloadQueueRejectionEntry[],
   stage: DownloadPreflightStage,
   stageLabel: string,
-  activeLabel: string
+  activeLabel: string,
+  activeSubtitle: string
 ): Partial<DownloadProgressState> {
   return {
     active_label: activeLabel,
+    active_subtitle: activeSubtitle,
     preflight_completed_items: entries.filter((entry) => isZipHandoffLane(entry.lane)).length,
     preflight_stage: stage,
     preflight_stage_label: stageLabel,

@@ -74,6 +74,15 @@
   letter-spacing: 0;
 }
 
+.ss-download-takeover-subtitle {
+  margin: 0.18rem 0 0;
+  color: rgba(205, 225, 238, 0.86);
+  font-size: 0.92rem;
+  font-weight: 600;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
 .ss-download-takeover-stage {
   min-width: 7.5rem;
   display: grid;

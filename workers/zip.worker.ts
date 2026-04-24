@@ -65,6 +65,7 @@ async function buildArchive(workPlan: ArchiveWorkPlan): Promise<void> {
   let completedItems = 0;
   let successfulItems = 0;
   let activeLabel = "Preparing archive";
+  let activeSubtitle = "Preparing archive work plan.";
 
   let settleZipPromise: ((value: Blob) => void) | null = null;
   let rejectZipPromise: ((reason?: unknown) => void) | null = null;
@@ -91,6 +92,7 @@ async function buildArchive(workPlan: ArchiveWorkPlan): Promise<void> {
   const publishProgress = () => {
     const payload: DownloadProgressState = {
       active_label: activeLabel,
+      active_subtitle: activeSubtitle,
       completed_items: completedItems,
       preflight_completed_items: 0,
       preflight_stage: "zipping",
@@ -115,6 +117,7 @@ async function buildArchive(workPlan: ArchiveWorkPlan): Promise<void> {
 
   if (workPlan.supplemental_entries.length > 0) {
     activeLabel = "Writing archive instructions";
+    activeSubtitle = "Adding helper files before video downloads.";
     publishProgress();
     await appendSupplementalEntries(zip, workPlan.supplemental_entries);
   }
@@ -134,15 +137,18 @@ async function buildArchive(workPlan: ArchiveWorkPlan): Promise<void> {
       });
       worker.status = "running";
       worker.active_item_label = "Preparing download";
-      activeLabel = `Bundling ${itemLabel}`;
+      activeLabel = itemLabel;
+      activeSubtitle = "Preparing video download.";
       publishProgress();
       try {
         const result = await fetchPreferredVideoBytes(row, (statusLabel) => {
           worker.active_item_label = statusLabel;
-          activeLabel = `${itemLabel} · ${statusLabel}`;
+          activeLabel = itemLabel;
+          activeSubtitle = statusLabel;
           publishProgress();
         });
         worker.active_item_label = "Download ready";
+        activeSubtitle = "Adding video to archive.";
         publishProgress();
         const entry = new ZipPassThrough(buildArchiveEntryName(row, result.extension));
         zip.add(entry);
@@ -156,6 +162,7 @@ async function buildArchive(workPlan: ArchiveWorkPlan): Promise<void> {
         });
       } catch (_error) {
         worker.last_completed_item_label = "Skipped: download unavailable";
+        activeSubtitle = "Skipping video because download was unavailable.";
         logZipStep("row:skipped", {
           worker: worker.worker_id,
           video_id: row.video_id
@@ -180,6 +187,7 @@ async function buildArchive(workPlan: ArchiveWorkPlan): Promise<void> {
   }
 
   activeLabel = "Finalizing archive";
+  activeSubtitle = "Writing final ZIP output.";
   publishProgress();
   logZipStep("build-archive:finalizing", {
     completed_items: completedItems,
@@ -262,7 +270,7 @@ async function fetchPreferredVideoBytes(
 ): Promise<DownloadResult> {
   const downloadUrl = row.archive_download_url || row.download_url || row.playback_url;
   if (downloadUrl) {
-    onStatusLabel?.(`Downloading: ${downloadUrl}`);
+    onStatusLabel?.("Downloading source video.");
     logZipStep("source-flow:direct-download", {
       video_id: row.video_id,
       archive_path: row.archive_path,

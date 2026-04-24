@@ -63,6 +63,7 @@ function createDefaultFetchProgress() {
 function createDefaultDownloadProgress() {
   return {
     active_label: "",
+    active_subtitle: "",
     completed_items: 0,
     preflight_completed_items: 0,
     preflight_stage: "idle" as const,
