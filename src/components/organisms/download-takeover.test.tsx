@@ -101,6 +101,30 @@ describe("DownloadTakeover", () => {
     expect(screen.getByText("Phase 3 of 5: Resolving the best available source URL.")).toHaveClass("ss-download-takeover-subtitle");
   });
 
+  it("shows active ZIP progress before the first file completes", () => {
+    const { container } = render(
+      <DownloadTakeover
+        downloadProgress={createProgress({
+          active_label: "Preparing ZIP part 1/3...",
+          active_subtitle: "Starting ZIP worker for part 1/3.",
+          completed_items: 0,
+          preflight_stage: "zipping",
+          preflight_stage_label: "ZIP Worker",
+          total_items: 495,
+          zip_completed: false
+        })}
+        onCloseSummary={vi.fn()}
+        onStartOver={vi.fn()}
+        selectedBytes={1024}
+        visible
+      />
+    );
+
+    expect(container.querySelector(".ss-download-takeover-stage strong")).toHaveTextContent("1%");
+    expect(container.querySelector(".ss-download-takeover-progress-fill")).toHaveStyle({ width: "1%" });
+    expect(screen.getByText("Phase 5 of 5: Starting ZIP worker for part 1/3.")).toBeInTheDocument();
+  });
+
   it("truncates long takeover titles to 40 characters", () => {
     const longTitle = "Archive Ready".repeat(6);
     const expectedTitle = `${longTitle.slice(0, 37)}...`;

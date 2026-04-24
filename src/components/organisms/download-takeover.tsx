@@ -24,6 +24,7 @@ const TAKEOVER_MESSAGES = [
 const MAX_TAKEOVER_TITLE_LENGTH = 40;
 const MAX_REJECTION_TEXT_LENGTH = 100;
 const TOTAL_TAKEOVER_PHASES = 5;
+const ACTIVE_ZIP_PROGRESS_FLOOR = 1;
 const TAKEOVER_PHASE_BY_STAGE: Record<DownloadPreflightStage, number> = {
   idle: 1,
   building_queue: 1,
@@ -82,7 +83,15 @@ export function DownloadTakeover({
     if (totalItems <= 0) {
       return 0;
     }
-    return Math.min(100, Math.max(0, Math.round((completedItems / totalItems) * 100)));
+    const rawPercent = Math.round((completedItems / totalItems) * 100);
+    if (
+      rawPercent === 0 &&
+      downloadProgress.preflight_stage === "zipping" &&
+      !downloadProgress.zip_completed
+    ) {
+      return ACTIVE_ZIP_PROGRESS_FLOOR;
+    }
+    return Math.min(100, Math.max(0, rawPercent));
   }, [
     downloadProgress.completed_items,
     downloadProgress.preflight_completed_items,

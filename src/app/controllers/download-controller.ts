@@ -90,7 +90,7 @@ export async function downloadSelectedRows(): Promise<void> {
 
   state.setDownloadProgress({
     active_label: totalParts > 1 ? `Preparing ZIP part 1/${totalParts}…` : "Preparing Archive…",
-    active_subtitle: "Passing resolved sources to the ZIP worker.",
+    active_subtitle: totalParts > 1 ? `Starting ZIP worker for part 1/${totalParts}.` : "Starting ZIP worker.",
     completed_items: 0,
     preflight_stage: "zipping",
     preflight_stage_label: "ZIP Worker",
