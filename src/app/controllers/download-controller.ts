@@ -1,5 +1,5 @@
 import { useAppStore } from "@app/store/use-app-store";
-import { appendDownloadHistoryId, listDownloadHistoryIds } from "@lib/db/download-history-db";
+import { appendDownloadHistoryRecord, listDownloadHistoryIds } from "@lib/db/download-history-db";
 import { buildArchiveWorkPlan, buildZipWorkerWorkPlan } from "@lib/archive-organizer/build-archive-work-plan";
 import { downloadBlob, downloadTextFile } from "@lib/utils/download-utils";
 import { selectSelectedVideoRows } from "@app/store/selectors";
@@ -159,16 +159,20 @@ export async function downloadSelectedRows(): Promise<void> {
   }
 
   const downloadedVideoIds = new Set<string>();
+  const noWatermarkUrlByVideoId = new Map<string, string>();
   for (const row of rootWorkPlan.rows) {
     const normalizedVideoId = row.video_id.trim();
     if (!normalizedVideoId) {
       continue;
     }
     downloadedVideoIds.add(normalizedVideoId);
+    if (row.archive_variant === "no-watermark" && row.archive_download_url.trim()) {
+      noWatermarkUrlByVideoId.set(normalizedVideoId, row.archive_download_url.trim());
+    }
   }
 
   for (const videoId of downloadedVideoIds) {
-    await appendDownloadHistoryId(videoId);
+    await appendDownloadHistoryRecord(videoId, noWatermarkUrlByVideoId.get(videoId) ?? null);
     state.appendDownloadHistoryId(videoId);
   }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { DownloadQueueItem, VideoRow } from "types/domain";
+import type { DownloadHistoryRecord, DownloadQueueItem, VideoRow } from "types/domain";
 import { runDownloadPreflight } from "./download-preflight";
 
 function createRow(overrides: Partial<VideoRow> = {}): VideoRow {
@@ -44,6 +44,7 @@ function createRow(overrides: Partial<VideoRow> = {}): VideoRow {
 
 function createPersistence() {
   let queue: DownloadQueueItem[] = [];
+  const listDownloadHistoryRecords = vi.fn(async (): Promise<DownloadHistoryRecord[]> => []);
   const replaceQueue = vi.fn(async (items: DownloadQueueItem[]) => {
     queue = items;
     return queue;
@@ -62,7 +63,7 @@ function createPersistence() {
     });
     return queue;
   });
-  return { patchQueue, replaceQueue };
+  return { listDownloadHistoryRecords, patchQueue, replaceQueue };
 }
 
 describe("download preflight", () => {
@@ -146,6 +147,36 @@ describe("download preflight", () => {
 
     expect(removeWatermark).not.toHaveBeenCalled();
     expect(result.queue[0]?.no_watermark).toBe("https://videos.openai.com/no-watermark-existing.mp4");
+    expect(result.rejections).toEqual([]);
+  });
+
+  it("bypasses the utility when download history has a no-watermark URL", async () => {
+    const persistence = createPersistence();
+    persistence.listDownloadHistoryRecords.mockResolvedValue([
+      {
+        video_id: "s_history",
+        no_watermark: "https://videos.openai.com/no-watermark-history.mp4"
+      }
+    ]);
+    const removeWatermark = vi.fn();
+    const result = await runDownloadPreflight([
+      createRow({
+        row_id: "profile:s_history",
+        video_id: "s_history",
+        source_type: "profile",
+        source_bucket: "published",
+        title: "History Source"
+      })
+    ], {
+      ...persistence,
+      removeWatermark,
+      resolveDraftRow: vi.fn(),
+      sleep: async () => undefined
+    });
+
+    expect(removeWatermark).not.toHaveBeenCalled();
+    expect(result.queue[0]?.no_watermark).toBe("https://videos.openai.com/no-watermark-history.mp4");
+    expect(result.rows[0]?.download_url).toBe("https://videos.openai.com/no-watermark-history.mp4");
     expect(result.rejections).toEqual([]);
   });
 

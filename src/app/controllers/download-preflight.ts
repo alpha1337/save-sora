@@ -1,5 +1,6 @@
 import { resolveVideoVariantUrls } from "@lib/archive-organizer/build-archive-work-plan";
 import { sendBackgroundRequest } from "@lib/background/client";
+import { listDownloadHistoryRecords as defaultListDownloadHistoryRecords } from "@lib/db/download-history-db";
 import { patchDownloadQueue, replaceDownloadQueue, type DownloadQueuePatch } from "@lib/db/session-db";
 import { createLogger } from "@lib/logging/logger";
 import { getDraftGenerationId } from "@lib/normalize/shared";
@@ -14,6 +15,7 @@ import type {
   DownloadQueueSwimlane,
   DownloadQueueSwimlaneItem,
   DownloadPreflightStage,
+  DownloadHistoryRecord,
   VideoRow
 } from "types/domain";
 
@@ -48,6 +50,7 @@ export interface DownloadPreflightResult {
 
 interface DownloadPreflightOptions {
   getJitterMs?: () => number;
+  listDownloadHistoryRecords?: () => Promise<DownloadHistoryRecord[]>;
   onProgress?: (progress: Partial<DownloadProgressState>) => void;
   patchQueue?: (patches: DownloadQueuePatch[]) => Promise<DownloadQueueItem[]>;
   removeWatermark?: (videoId: string) => Promise<string | null>;
@@ -63,6 +66,7 @@ export async function runDownloadPreflight(
   const sleep = options.sleep ?? sleepFor;
   const dependencies = {
     getJitterMs: options.getJitterMs ?? (() => Math.floor(Math.random() * 180)),
+    listDownloadHistoryRecords: options.listDownloadHistoryRecords ?? defaultListDownloadHistoryRecords,
     patchQueue: options.patchQueue ?? patchDownloadQueue,
     removeWatermark: options.removeWatermark ?? defaultRemoveWatermark,
     replaceQueue: options.replaceQueue ?? replaceDownloadQueue,
@@ -70,6 +74,10 @@ export async function runDownloadPreflight(
     sleep
   };
   const entries = buildPreflightEntries(rows);
+  const historyNoWatermarkById = buildHistoryNoWatermarkMap(await dependencies.listDownloadHistoryRecords());
+  for (const entry of entries) {
+    applyHistoryNoWatermark(entry, historyNoWatermarkById);
+  }
   const rejections: DownloadQueueRejectionEntry[] = [];
   const selectedIdRemap = new Map<string, string>();
   const publish = (
@@ -84,7 +92,7 @@ export async function runDownloadPreflight(
   publish("building_queue", "Building Queue", "Building preflight queue", "Preparing selected videos for preflight.");
   await dependencies.replaceQueue(toQueueItems(entries));
 
-  await processDraftEntries(entries, rejections, selectedIdRemap, publish, dependencies);
+  await processDraftEntries(entries, rejections, selectedIdRemap, historyNoWatermarkById, publish, dependencies);
   await processSharedEntries(entries, rejections, publish, dependencies);
 
   publish("zip_handoff", "Zip Handoff", "Queue ready for ZIP handoff", "Passing resolved sources to the ZIP worker.");
@@ -141,6 +149,7 @@ async function processDraftEntries(
   entries: PreflightQueueEntry[],
   rejections: DownloadQueueRejectionEntry[],
   selectedIdRemap: Map<string, string>,
+  historyNoWatermarkById: Map<string, string>,
   publish: (stage: DownloadPreflightStage, stageLabel: string, activeLabel: string, activeSubtitle: string) => void,
   dependencies: Required<Pick<DownloadPreflightOptions, "patchQueue" | "resolveDraftRow" | "sleep">>
 ): Promise<void> {
@@ -152,14 +161,14 @@ async function processDraftEntries(
     for (const entry of batch) {
       publish("sharing_drafts", "Sharing Drafts", entry.title, "Checking whether this draft is already shared.");
       if (entry.shared_post_id) {
-        patches.push(markEntryShared(entry, entry.shared_post_id, selectedIdRemap));
+        patches.push(markEntryShared(entry, entry.shared_post_id, selectedIdRemap, historyNoWatermarkById));
         publish("sharing_drafts", "Sharing Drafts", entry.title, "Moving shared video to source resolution.");
         continue;
       }
 
       const resolvedRow = await dependencies.resolveDraftRow(entry.row);
       if (resolvedRow && isSharedVideoId(resolvedRow.video_id)) {
-        patches.push(markEntryShared(entry, resolvedRow.video_id, selectedIdRemap, resolvedRow));
+        patches.push(markEntryShared(entry, resolvedRow.video_id, selectedIdRemap, historyNoWatermarkById, resolvedRow));
         publish("sharing_drafts", "Sharing Drafts", entry.title, "Shared draft and refreshed download URLs.");
       } else {
         const rejectionPatch = markEntryRejected(entry, "could_not_share_video", rejections);
@@ -231,6 +240,7 @@ function markEntryShared(
   entry: PreflightQueueEntry,
   sharedVideoId: string,
   selectedIdRemap: Map<string, string>,
+  historyNoWatermarkById: Map<string, string>,
   resolvedRow?: VideoRow
 ): DownloadQueuePatch {
   const previousId = entry.current_id;
@@ -251,6 +261,7 @@ function markEntryShared(
   entry.row = nextRow;
   entry.watermark = queueUrls.watermark || entry.watermark;
   entry.no_watermark = queueUrls.no_watermark ?? entry.no_watermark;
+  applyHistoryNoWatermark(entry, historyNoWatermarkById);
   if (previousId !== sharedVideoId) {
     selectedIdRemap.set(previousId, sharedVideoId);
   }
@@ -283,6 +294,42 @@ function markEntryRejected(
         no_watermark: null
       }
     : null;
+}
+
+function buildHistoryNoWatermarkMap(records: DownloadHistoryRecord[]): Map<string, string> {
+  const historyNoWatermarkById = new Map<string, string>();
+  for (const record of records) {
+    const videoId = record.video_id.trim();
+    const noWatermarkUrl = record.no_watermark?.trim() ?? "";
+    if (videoId && noWatermarkUrl) {
+      historyNoWatermarkById.set(videoId, noWatermarkUrl);
+    }
+  }
+  return historyNoWatermarkById;
+}
+
+function applyHistoryNoWatermark(
+  entry: PreflightQueueEntry,
+  historyNoWatermarkById: Map<string, string>
+): boolean {
+  const historyUrl = pickFirstTrimmed([
+    historyNoWatermarkById.get(entry.current_id),
+    historyNoWatermarkById.get(entry.effective_id),
+    historyNoWatermarkById.get(entry.shared_post_id),
+    historyNoWatermarkById.get(entry.original_id)
+  ]);
+  if (!historyUrl) {
+    return false;
+  }
+
+  entry.no_watermark = historyUrl;
+  entry.row = {
+    ...entry.row,
+    download_url: historyUrl,
+    is_downloadable: true,
+    skip_reason: ""
+  };
+  return true;
 }
 
 function buildPreflightProgress(

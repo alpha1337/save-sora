@@ -152,6 +152,7 @@ export interface DraftResolutionRecord {
 
 export interface DownloadHistoryRecord {
   video_id: string;
+  no_watermark: string | null;
 }
 
 export interface ArchiveOrganizerRow {
