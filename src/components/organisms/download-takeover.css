@@ -6,7 +6,7 @@
   align-items: center;
   justify-content: center;
   padding: clamp(1rem, 4vw, 2.75rem);
-  overflow: auto;
+  overflow: hidden;
   background: rgba(8, 14, 23, 0.96);
 }
 
@@ -30,7 +30,7 @@
   position: relative;
   width: min(1180px, 100%);
   max-height: calc(100vh - clamp(2rem, 8vw, 5.5rem));
-  overflow: auto;
+  overflow: hidden;
   border: 1px solid rgba(125, 173, 201, 0.28);
   border-radius: 24px;
   background:
@@ -241,6 +241,8 @@
   border-radius: 8px;
   background: rgba(45, 25, 20, 0.48);
   padding: 0.7rem;
+  max-height: min(20vh, 12rem);
+  overflow-y: auto;
   display: grid;
   gap: 0.45rem;
 }
@@ -252,9 +254,6 @@
 .ss-download-takeover-rejection-list {
   display: grid;
   gap: 0.45rem;
-  max-height: min(20vh, 12rem);
-  overflow-y: auto;
-  padding-right: 0.25rem;
 }
 
 .ss-download-takeover-rejection {

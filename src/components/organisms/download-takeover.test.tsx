@@ -81,6 +81,33 @@ describe("DownloadTakeover", () => {
     expect(screen.getAllByText("could_not_share_video").length).toBeGreaterThan(0);
   });
 
+  it("truncates long rejection text to 100 characters", () => {
+    const longTitle = "Failed Draft".repeat(10);
+    const expectedTitle = `${longTitle.slice(0, 97)}...`;
+
+    render(
+      <DownloadTakeover
+        downloadProgress={createProgress({
+          rejection_entries: [
+            {
+              id: "gen_failed",
+              title: longTitle,
+              reason: "could_not_share_video"
+            }
+          ]
+        })}
+        onCloseSummary={vi.fn()}
+        onStartOver={vi.fn()}
+        selectedBytes={1024}
+        visible
+      />
+    );
+
+    expect(screen.getAllByText(expectedTitle).length).toBeGreaterThan(0);
+    expect(screen.queryByText(longTitle)).not.toBeInTheDocument();
+    expect(screen.getAllByTitle(longTitle).length).toBeGreaterThan(0);
+  });
+
   it("calls close and start-over actions", () => {
     const onCloseSummary = vi.fn();
     const onStartOver = vi.fn();

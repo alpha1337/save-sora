@@ -21,6 +21,8 @@ const TAKEOVER_MESSAGES = [
   "Finalizing archives for reliable extraction"
 ] as const;
 
+const MAX_REJECTION_TEXT_LENGTH = 100;
+
 export function DownloadTakeover({
   downloadProgress,
   onCloseSummary,
@@ -148,8 +150,8 @@ export function DownloadTakeover({
             <div className="ss-download-takeover-rejection-list" role="list">
               {downloadProgress.rejection_entries.map((entry) => (
                 <div className="ss-download-takeover-rejection" key={`${entry.id}:${entry.reason}`} role="listitem">
-                  <span>{entry.title}</span>
-                  <code>{entry.reason}</code>
+                  <span title={entry.title}>{truncateRejectionText(entry.title)}</span>
+                  <code title={entry.reason}>{truncateRejectionText(entry.reason)}</code>
                 </div>
               ))}
             </div>
@@ -193,8 +195,8 @@ export function DownloadTakeover({
             )}
             {downloadProgress.rejection_entries.map((entry) => (
               <div className="ss-download-takeover-worker" key={`detail:${entry.id}:${entry.reason}`}>
-                <strong>{entry.title}</strong>
-                <span>{`${entry.id} · ${entry.reason}`}</span>
+                <strong title={entry.title}>{truncateRejectionText(entry.title)}</strong>
+                <span title={`${entry.id} · ${entry.reason}`}>{truncateRejectionText(`${entry.id} · ${entry.reason}`)}</span>
               </div>
             ))}
           </div>
@@ -202,4 +204,12 @@ export function DownloadTakeover({
       </div>
     </div>
   );
+}
+
+function truncateRejectionText(value: string): string {
+  if (value.length <= MAX_REJECTION_TEXT_LENGTH) {
+    return value;
+  }
+
+  return `${value.slice(0, MAX_REJECTION_TEXT_LENGTH - 3)}...`;
 }
