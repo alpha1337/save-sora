@@ -75,6 +75,10 @@ function createDefaultDownloadProgress() {
     total_items: 0,
     total_workers: 0,
     worker_progress: [],
+    zip_part_completed_items: 0,
+    zip_part_number: 0,
+    zip_part_total_items: 0,
+    zip_total_parts: 0,
     zip_completed: false
   };
 }

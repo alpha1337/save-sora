@@ -1,4 +1,11 @@
-import type { ArchiveVariant, ArchiveWorkPlan, ArchiveWorkPlanRow, DownloadQueueItem, VideoRow } from "types/domain";
+import type {
+  ArchiveVariant,
+  ArchiveWorkPlan,
+  ArchiveWorkPlanRow,
+  DownloadQueueItem,
+  VideoRow,
+  ZipWorkerWorkPlan
+} from "types/domain";
 import { sanitizeFileNamePart } from "@lib/utils/string-utils";
 
 /**
@@ -22,6 +29,22 @@ export function buildArchiveWorkPlan(
     organizer_rows: [],
     supplemental_entries: [],
     archive_name: archiveRootFolder
+  };
+}
+
+export function buildZipWorkerWorkPlan(
+  workPlan: Pick<ArchiveWorkPlan, "archive_name" | "rows" | "supplemental_entries">
+): ZipWorkerWorkPlan {
+  return {
+    archive_name: workPlan.archive_name,
+    supplemental_entries: workPlan.supplemental_entries,
+    rows: workPlan.rows.map((row) => ({
+      video_id: row.video_id,
+      title: row.title,
+      source_bucket: row.source_bucket,
+      archive_path: row.archive_path,
+      archive_download_url: row.archive_download_url
+    }))
   };
 }
 

@@ -1,12 +1,12 @@
 import { useAppStore } from "@app/store/use-app-store";
 import { appendDownloadHistoryId, listDownloadHistoryIds } from "@lib/db/download-history-db";
-import { buildArchiveWorkPlan } from "@lib/archive-organizer/build-archive-work-plan";
+import { buildArchiveWorkPlan, buildZipWorkerWorkPlan } from "@lib/archive-organizer/build-archive-work-plan";
 import { downloadBlob, downloadTextFile } from "@lib/utils/download-utils";
 import { selectSelectedVideoRows } from "@app/store/selectors";
 import { createLogger } from "@lib/logging/logger";
 import { clearDownloadQueue } from "@lib/db/session-db";
 import { runDownloadPreflight } from "./download-preflight";
-import type { ArchiveSupplementalEntry, DownloadProgressState } from "types/domain";
+import type { ArchiveSupplementalEntry, ArchiveWorkPlan, DownloadProgressState } from "types/domain";
 
 const logger = createLogger("download-controller");
 const MAX_PART_FILE_COUNT = 4000;
@@ -58,6 +58,10 @@ export async function downloadSelectedRows(): Promise<void> {
     total_items: targetCandidateRows.length,
     total_workers: 0,
     worker_progress: [],
+    zip_part_completed_items: 0,
+    zip_part_number: 0,
+    zip_part_total_items: 0,
+    zip_total_parts: 0,
     zip_completed: false
   });
 
@@ -88,6 +92,7 @@ export async function downloadSelectedRows(): Promise<void> {
     parts: totalParts
   });
 
+  const finalZipPartRows = zipParts[zipParts.length - 1] ?? rootWorkPlan.rows;
   state.setDownloadProgress({
     active_label: totalParts > 1 ? `Preparing ZIP part 1/${totalParts}…` : "Preparing Archive…",
     active_subtitle: totalParts > 1 ? `Starting ZIP worker for part 1/${totalParts}.` : "Starting ZIP worker.",
@@ -97,14 +102,33 @@ export async function downloadSelectedRows(): Promise<void> {
     running_workers: 0,
     total_items: rootWorkPlan.rows.length,
     total_workers: 0,
-    worker_progress: []
+    worker_progress: [],
+    zip_part_completed_items: 0,
+    zip_part_number: totalParts > 0 ? 1 : 0,
+    zip_part_total_items: zipParts[0]?.length ?? 0,
+    zip_total_parts: totalParts
   });
 
   let completedRowsAcrossParts = 0;
   for (let index = 0; index < zipParts.length; index += 1) {
     const partRows = zipParts[index];
     const partNumber = index + 1;
-    const partWorkPlan = buildArchiveWorkPlan(partRows, rootWorkPlan.archive_name, preflightResult.queue);
+    state.setDownloadProgress({
+      active_label: totalParts > 1 ? `Preparing ZIP part ${partNumber}/${totalParts}…` : "Preparing Archive…",
+      active_subtitle: totalParts > 1 ? `Starting ZIP worker for part ${partNumber}/${totalParts}.` : "Starting ZIP worker.",
+      completed_items: completedRowsAcrossParts,
+      preflight_stage: "zipping",
+      preflight_stage_label: "ZIP Worker",
+      running_workers: 0,
+      total_items: rootWorkPlan.rows.length,
+      total_workers: 0,
+      worker_progress: [],
+      zip_part_completed_items: 0,
+      zip_part_number: partNumber,
+      zip_part_total_items: partRows.length,
+      zip_total_parts: totalParts
+    });
+    const partWorkPlan = buildArchivePartWorkPlan(rootWorkPlan, partRows);
     if (totalParts > 1) {
       partWorkPlan.supplemental_entries = [
         ...partWorkPlan.supplemental_entries,
@@ -171,6 +195,10 @@ export async function downloadSelectedRows(): Promise<void> {
     running_workers: 0,
     total_items: rootWorkPlan.rows.length,
     worker_progress: [],
+    zip_part_completed_items: finalZipPartRows.length,
+    zip_part_number: totalParts,
+    zip_part_total_items: finalZipPartRows.length,
+    zip_total_parts: totalParts,
     zip_completed: true
   });
   logger.info("archive built", {
@@ -221,7 +249,11 @@ async function buildZipPart(
           preflight_total_items: currentProgress.preflight_total_items,
           rejection_entries: currentProgress.rejection_entries,
           swimlanes: currentProgress.swimlanes,
-          total_items: options.totalRows
+          total_items: options.totalRows,
+          zip_part_completed_items: partCompletedItems,
+          zip_part_number: options.partNumber,
+          zip_part_total_items: partWorkPlan.rows.length,
+          zip_total_parts: options.totalParts
         });
         const nextActiveLabel = partProgress.active_label.trim();
         if (nextActiveLabel && nextActiveLabel !== lastLoggedActiveLabel) {
@@ -265,9 +297,21 @@ async function buildZipPart(
 
     worker.postMessage({
       type: "build-archive",
-      payload: partWorkPlan
+      payload: buildZipWorkerWorkPlan(partWorkPlan)
     });
   }).finally(() => worker.terminate());
+}
+
+function buildArchivePartWorkPlan(
+  rootWorkPlan: ArchiveWorkPlan,
+  rows: ArchiveWorkPlan["rows"]
+): ArchiveWorkPlan {
+  return {
+    archive_name: rootWorkPlan.archive_name,
+    organizer_rows: [],
+    rows,
+    supplemental_entries: []
+  };
 }
 
 function splitRowsIntoZipParts(

@@ -74,11 +74,18 @@ export function DownloadTakeover({
     const isPreflightStage = !downloadProgress.zip_completed &&
       downloadProgress.preflight_stage !== "zipping" &&
       downloadProgress.preflight_total_items > 0;
+    const isZipStage = !downloadProgress.zip_completed &&
+      downloadProgress.preflight_stage === "zipping" &&
+      downloadProgress.zip_part_total_items > 0;
     const completedItems = isPreflightStage
       ? downloadProgress.preflight_completed_items
+      : isZipStage
+        ? downloadProgress.zip_part_completed_items
       : downloadProgress.completed_items;
     const totalItems = isPreflightStage
       ? downloadProgress.preflight_total_items
+      : isZipStage
+        ? downloadProgress.zip_part_total_items
       : downloadProgress.total_items;
     if (totalItems <= 0) {
       return 0;
@@ -98,7 +105,9 @@ export function DownloadTakeover({
     downloadProgress.preflight_stage,
     downloadProgress.preflight_total_items,
     downloadProgress.total_items,
-    downloadProgress.zip_completed
+    downloadProgress.zip_completed,
+    downloadProgress.zip_part_completed_items,
+    downloadProgress.zip_part_total_items
   ]);
 
   const isComplete = downloadProgress.zip_completed;
@@ -108,6 +117,7 @@ export function DownloadTakeover({
     downloadProgress.preflight_stage,
     downloadProgress.active_subtitle
   );
+  const isZipStage = downloadProgress.preflight_stage === "zipping" && !downloadProgress.zip_completed;
 
   if (!visible) {
     return null;
@@ -141,11 +151,19 @@ export function DownloadTakeover({
           <div className="ss-download-takeover-progress-fill" style={{ width: `${progressPercent}%` }} />
         </div>
 
-        <div className="ss-download-takeover-meta">
-          <span>{`${formatCount(downloadProgress.completed_items)} / ${formatCount(downloadProgress.total_items)} files`}</span>
-          <span>{`${formatCount(downloadProgress.preflight_completed_items)} / ${formatCount(downloadProgress.preflight_total_items)} preflight`}</span>
-          <span>{`Estimated selected size: ${formatBytes(selectedBytes)}`}</span>
-        </div>
+        {isZipStage ? (
+          <div className="ss-download-takeover-meta">
+            <span>{`${formatZipPartLabel(downloadProgress)}: ${formatCount(downloadProgress.zip_part_completed_items)} / ${formatCount(downloadProgress.zip_part_total_items)} files`}</span>
+            <span>{`${formatCount(downloadProgress.completed_items)} / ${formatCount(downloadProgress.total_items)} total packaged`}</span>
+            <span>{`Estimated selected size: ${formatBytes(selectedBytes)}`}</span>
+          </div>
+        ) : (
+          <div className="ss-download-takeover-meta">
+            <span>{`${formatCount(downloadProgress.completed_items)} / ${formatCount(downloadProgress.total_items)} files`}</span>
+            <span>{`${formatCount(downloadProgress.preflight_completed_items)} / ${formatCount(downloadProgress.preflight_total_items)} preflight`}</span>
+            <span>{`Estimated selected size: ${formatBytes(selectedBytes)}`}</span>
+          </div>
+        )}
 
         <div className="ss-download-takeover-message" key={messageIndex}>
           {TAKEOVER_MESSAGES[messageIndex]}
@@ -251,4 +269,12 @@ function formatTakeoverSubtitle(stage: DownloadPreflightStage, subtitle: string)
   }
 
   return `Phase ${TAKEOVER_PHASE_BY_STAGE[stage]} of ${TOTAL_TAKEOVER_PHASES}: ${normalizedSubtitle}`;
+}
+
+function formatZipPartLabel(downloadProgress: DownloadProgressState): string {
+  if (downloadProgress.zip_total_parts > 1) {
+    return `Part ${formatCount(downloadProgress.zip_part_number)} / ${formatCount(downloadProgress.zip_total_parts)}`;
+  }
+
+  return "ZIP";
 }

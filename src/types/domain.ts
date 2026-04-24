@@ -191,6 +191,20 @@ export interface ArchiveWorkPlan {
   archive_name: string;
 }
 
+export interface ZipWorkerRow {
+  video_id: string;
+  title: string;
+  source_bucket: SourceBucket;
+  archive_path: string;
+  archive_download_url: string;
+}
+
+export interface ZipWorkerWorkPlan {
+  rows: ZipWorkerRow[];
+  supplemental_entries: ArchiveSupplementalEntry[];
+  archive_name: string;
+}
+
 export type ProgressStatus = "pending" | "running" | "completed";
 
 export interface FetchJobProgress {
@@ -287,6 +301,10 @@ export interface DownloadProgressState {
   total_workers: number;
   total_items: number;
   worker_progress: DownloadWorkerProgress[];
+  zip_part_completed_items: number;
+  zip_part_number: number;
+  zip_part_total_items: number;
+  zip_total_parts: number;
   zip_completed: boolean;
 }
 

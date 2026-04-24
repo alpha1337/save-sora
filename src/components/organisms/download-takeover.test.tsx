@@ -24,6 +24,10 @@ function createProgress(overrides: Partial<DownloadProgressState> = {}): Downloa
     total_items: 2,
     total_workers: 0,
     worker_progress: [],
+    zip_part_completed_items: 2,
+    zip_part_number: 1,
+    zip_part_total_items: 2,
+    zip_total_parts: 1,
     zip_completed: true,
     ...overrides
   };
@@ -111,6 +115,10 @@ describe("DownloadTakeover", () => {
           preflight_stage: "zipping",
           preflight_stage_label: "ZIP Worker",
           total_items: 495,
+          zip_part_completed_items: 0,
+          zip_part_number: 1,
+          zip_part_total_items: 165,
+          zip_total_parts: 3,
           zip_completed: false
         })}
         onCloseSummary={vi.fn()}
@@ -122,6 +130,8 @@ describe("DownloadTakeover", () => {
 
     expect(container.querySelector(".ss-download-takeover-stage strong")).toHaveTextContent("1%");
     expect(container.querySelector(".ss-download-takeover-progress-fill")).toHaveStyle({ width: "1%" });
+    expect(screen.getByText("Part 1 / 3: 0 / 165 files")).toBeInTheDocument();
+    expect(screen.getByText("0 / 495 total packaged")).toBeInTheDocument();
     expect(screen.getByText("Phase 5 of 5: Starting ZIP worker for part 1/3.")).toBeInTheDocument();
   });
 

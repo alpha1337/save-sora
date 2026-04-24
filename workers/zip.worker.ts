@@ -1,10 +1,10 @@
 /// <reference lib="webworker" />
 import { Zip, ZipPassThrough } from "fflate";
-import type { ArchiveWorkPlan, DownloadProgressState, DownloadWorkerProgress } from "../src/types/domain";
+import type { DownloadProgressState, DownloadWorkerProgress, ZipWorkerRow, ZipWorkerWorkPlan } from "../src/types/domain";
 
 interface BuildArchiveMessage {
   type: "build-archive";
-  payload: ArchiveWorkPlan;
+  payload: ZipWorkerWorkPlan;
 }
 
 interface DownloadResult {
@@ -49,7 +49,7 @@ self.addEventListener("message", (event: MessageEvent<BuildArchiveMessage>) => {
   });
 });
 
-async function buildArchive(workPlan: ArchiveWorkPlan): Promise<void> {
+async function buildArchive(workPlan: ZipWorkerWorkPlan): Promise<void> {
   if (workPlan.rows.length === 0) {
     throw new Error("No downloadable rows selected for ZIP.");
   }
@@ -104,6 +104,10 @@ async function buildArchive(workPlan: ArchiveWorkPlan): Promise<void> {
       total_items: workPlan.rows.length,
       total_workers: workerProgress.length,
       worker_progress: workerProgress.map((worker) => ({ ...worker })),
+      zip_part_completed_items: completedItems,
+      zip_part_number: 1,
+      zip_part_total_items: workPlan.rows.length,
+      zip_total_parts: 1,
       zip_completed: false
     };
 
@@ -133,7 +137,7 @@ async function buildArchive(workPlan: ArchiveWorkPlan): Promise<void> {
         worker: worker.worker_id,
         video_id: row.video_id,
         source_bucket: row.source_bucket,
-        has_playback_url: Boolean(row.playback_url)
+        has_archive_download_url: Boolean(row.archive_download_url)
       });
       worker.status = "running";
       worker.active_item_label = "Preparing download";
@@ -209,7 +213,7 @@ async function buildArchive(workPlan: ArchiveWorkPlan): Promise<void> {
 
 async function appendSupplementalEntries(
   zip: Zip,
-  supplementalEntries: ArchiveWorkPlan["supplemental_entries"]
+  supplementalEntries: ZipWorkerWorkPlan["supplemental_entries"]
 ): Promise<void> {
   for (const entry of supplementalEntries) {
     const archivePath = normalizeArchivePath(entry.archive_path || "README.txt");
@@ -265,17 +269,15 @@ async function runWithConcurrency<T>(
 }
 
 async function fetchPreferredVideoBytes(
-  row: ArchiveWorkPlan["rows"][number],
+  row: ZipWorkerRow,
   onStatusLabel?: (statusLabel: string) => void
 ): Promise<DownloadResult> {
-  const downloadUrl = row.archive_download_url || row.download_url || row.playback_url;
+  const downloadUrl = row.archive_download_url;
   if (downloadUrl) {
     onStatusLabel?.("Downloading source video.");
     logZipStep("source-flow:direct-download", {
       video_id: row.video_id,
       archive_path: row.archive_path,
-      playback_url: row.playback_url,
-      download_url: row.download_url,
       archive_download_url: row.archive_download_url
     });
     return fetchDirectVideoBytes(downloadUrl, { video_id: row.video_id, reason: "source_download" });
@@ -319,7 +321,7 @@ async function fetchDirectVideoBytes(url: string, context?: { video_id?: string;
   return { bytes, extension };
 }
 
-function buildArchiveEntryName(row: ArchiveWorkPlan["rows"][number], extension: string): string {
+function buildArchiveEntryName(row: ZipWorkerRow, extension: string): string {
   const safePath = normalizeArchivePath(row.archive_path || row.video_id || "video");
   return `${safePath}.${normalizeVideoExtension(extension)}`;
 }

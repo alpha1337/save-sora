@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { VideoRow } from "types/domain";
-import { buildArchiveWorkPlan } from "./build-archive-work-plan";
+import { buildArchiveWorkPlan, buildZipWorkerWorkPlan } from "./build-archive-work-plan";
 
 function createRow(overrides: Partial<VideoRow> = {}): VideoRow {
   return {
@@ -186,5 +186,28 @@ describe("buildArchiveWorkPlan", () => {
     const plan = buildArchiveWorkPlan([sideCharacterRow], "Sora");
     expect(plan.rows).toHaveLength(1);
     expect(plan.rows[0]?.archive_path).toBe("Sora/side-characters/Crystal Sparkle/watermark/s_side123");
+  });
+
+  it("builds a compact ZIP worker plan without full row metadata", () => {
+    const plan = buildArchiveWorkPlan([
+      createRow({
+        raw_payload_json: JSON.stringify({
+          heavy: "metadata-that-should-not-cross-worker-boundary"
+        })
+      })
+    ], "Sora");
+
+    const workerPlan = buildZipWorkerWorkPlan(plan);
+
+    expect(workerPlan.rows).toEqual([
+      {
+        video_id: "s_alpha123",
+        title: "Nebula Run",
+        source_bucket: "published",
+        archive_path: "Sora/me/published/posts/watermark/s_alpha123",
+        archive_download_url: "https://videos.openai.com/raw.mp4"
+      }
+    ]);
+    expect(JSON.stringify(workerPlan)).not.toContain("metadata-that-should-not-cross-worker-boundary");
   });
 });
