@@ -17,7 +17,7 @@ describe("remove-watermark utility", () => {
     vi.unstubAllGlobals();
   });
 
-  it("asks the background worker for the KontenAI mp4_wm_source", async () => {
+  it("asks the background worker for the KontenAI mp4_source", async () => {
     const videoId = "s_69e81416de6c8191a0fd3ee91461499c";
     const expectedUrl = "https://videos.openai.com/az/files/00000000-539c-7284-80ec-07117587445a%2Fraw?se=2026-04-30T03%3A00%3A00Z";
 
@@ -54,7 +54,7 @@ describe("remove-watermark utility", () => {
     });
   });
 
-  it("returns null when the background worker has no KontenAI mp4_wm_source", async () => {
+  it("returns null when the background worker has no KontenAI mp4_source", async () => {
     vi.mocked(sendBackgroundRequest).mockResolvedValueOnce({ ok: true, payload: null });
 
     await expect(getKontenAiMp4WatermarkSource("s_missing_source")).resolves.toBeNull();

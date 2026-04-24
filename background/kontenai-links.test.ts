@@ -6,12 +6,13 @@ describe("KontenAI links resolver", () => {
     vi.unstubAllGlobals();
   });
 
-  it("returns links.mp4_wm_source from the background endpoint request", async () => {
+  it("returns links.mp4_source from the background endpoint request", async () => {
     const videoId = "s_69e81416de6c8191a0fd3ee91461499c";
     const expectedUrl = "https://videos.openai.com/az/files/00000000-539c-7284-80ec-07117587445a%2Fraw?se=2026-04-30T03%3A00%3A00Z";
     const fetchMock = vi.fn(() => Promise.resolve(new Response(JSON.stringify({
       links: {
-        mp4_wm_source: expectedUrl
+        mp4_source: expectedUrl,
+        mp4_wm_source: "https://videos.openai.com/az/files/watermarked%2Fraw"
       }
     }), {
       headers: { "content-type": "application/json" },
@@ -31,6 +32,20 @@ describe("KontenAI links resolver", () => {
         }
       }
     );
+  });
+
+  it("does not treat mp4_wm_source as a no-watermark URL", async () => {
+    const fetchMock = vi.fn(() => Promise.resolve(new Response(JSON.stringify({
+      links: {
+        mp4_wm_source: "https://videos.openai.com/az/files/watermarked%2Fraw"
+      }
+    }), {
+      headers: { "content-type": "application/json" },
+      status: 200
+    })));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(resolveKontenAiLinks("s_watermarked_only")).resolves.toBeNull();
   });
 
   it("returns null for terminal miss statuses", async () => {

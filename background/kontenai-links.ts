@@ -6,6 +6,7 @@ const KONTENAI_LINKS_ENDPOINT_PREFIX = "https://api.dyysy.com/links20260207/";
 
 interface KontenAiLinksResponse {
   links?: {
+    mp4_source?: unknown;
     mp4_wm_source?: unknown;
   };
 }
@@ -32,7 +33,7 @@ export async function resolveKontenAiLinks(video_id: string): Promise<ResolveKon
   }
 
   const payload = (await response.json()) as KontenAiLinksResponse;
-  return normalizeOpenAiVideoUrl(payload.links?.mp4_wm_source);
+  return normalizeOpenAiVideoUrl(payload.links?.mp4_source);
 }
 
 function isTerminalKontenAiStatus(status: number): boolean {
