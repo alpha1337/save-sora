@@ -96,8 +96,7 @@ export function DownloadTakeover({
           <div className="ss-download-takeover-title-wrap">
             <span className="ss-download-takeover-icon"><HardDriveDownload size={20} /></span>
             <div>
-              <h2 className="ss-download-takeover-title">Building Your Archive</h2>
-              <p className="ss-download-takeover-subtitle">{downloadProgress.active_label || "Preparing archive workflow…"}</p>
+              <h2 className="ss-download-takeover-title">{downloadProgress.active_label || "Preparing archive workflow…"}</h2>
             </div>
           </div>
           <div className="ss-download-takeover-stage">
@@ -146,12 +145,14 @@ export function DownloadTakeover({
         {downloadProgress.rejection_entries.length > 0 ? (
           <div className="ss-download-takeover-rejections" aria-label="Rejection summary">
             <strong>Rejection Summary</strong>
-            {downloadProgress.rejection_entries.map((entry) => (
-              <div className="ss-download-takeover-rejection" key={`${entry.id}:${entry.reason}`}>
-                <span>{entry.title}</span>
-                <code>{entry.reason}</code>
-              </div>
-            ))}
+            <div className="ss-download-takeover-rejection-list" role="list">
+              {downloadProgress.rejection_entries.map((entry) => (
+                <div className="ss-download-takeover-rejection" key={`${entry.id}:${entry.reason}`} role="listitem">
+                  <span>{entry.title}</span>
+                  <code>{entry.reason}</code>
+                </div>
+              ))}
+            </div>
           </div>
         ) : null}
 

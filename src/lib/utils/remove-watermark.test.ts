@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { sendBackgroundRequest } from "@lib/background/client";
 import {
+  getKontenAiMp4WatermarkSource,
   getSoraWatermarkFreeVideo,
   getSoraWatermarkTask,
   removeWatermark
@@ -13,18 +14,48 @@ vi.mock("@lib/background/client", () => ({
 describe("remove-watermark utility", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.unstubAllGlobals();
   });
 
-  it("chains getSoraWatermarkTask -> getSoraWatermarkFreeVideo and returns the source URL", async () => {
+  it("uses the KontenAI links endpoint and returns links.mp4_wm_source", async () => {
+    const videoId = "s_69e81416de6c8191a0fd3ee91461499c";
+    const expectedUrl = "https://videos.openai.com/az/files/00000000-539c-7284-80ec-07117587445a%2Fraw?se=2026-04-30T03%3A00%3A00Z";
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      links: {
+        mp4_wm_source: expectedUrl,
+        mp4: "https://videos-us3.ss2.life/az/files/no-watermark/raw"
+      }
+    }), {
+      headers: { "content-type": "application/json" },
+      status: 200
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await removeWatermark(videoId);
+
+    expect(result).toBe(expectedUrl);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.dyysy.com/links20260207/https%3A%2F%2Fsora.chatgpt.com%2Fp%2Fs_69e81416de6c8191a0fd3ee91461499c",
+      {
+        cache: "no-store",
+        headers: {
+          accept: "application/json"
+        }
+      }
+    );
+    expect(sendBackgroundRequest).not.toHaveBeenCalled();
+  });
+
+  it("keeps legacy getSoraWatermarkTask -> getSoraWatermarkFreeVideo contract available", async () => {
     const videoId = "s_69e81416de6c8191a0fd3ee91461499c";
     const taskId = "f17ba846-0d21-4978-90f9-113311b7e095";
-    const expectedUrl = "https://videos.openai.com/az/files/00000000-3318-7283-9725-360f90b6651e%2Fraw?se=2026-04-25T00%3A00%3A00Z&sp=r&sv=2026-02-06&sr=b&skoid=5e5fc900-07cf-43e7-ab5b-314c0d877bb0&sktid=a48cca56-e6da-484e-a814-9c849652bcb3&skt=2026-04-23T16%3A18%3A52Z&ske=2026-04-30T16%3A23%3A52Z&sks=b&skv=2026-02-06&sig=juodZCIw6eP6QB3E/d0sqqPCn2Jcl/EQlueZFVG5X7Q%3D&ac=oaisdsorprwestus2";
+    const expectedUrl = "https://videos.openai.com/az/files/00000000-3318-7283-9725-360f90b6651e%2Fraw?se=2026-04-25T00%3A00%3A00Z";
 
     vi.mocked(sendBackgroundRequest)
       .mockResolvedValueOnce({ ok: true, payload: taskId })
       .mockResolvedValueOnce({ ok: true, payload: expectedUrl });
 
-    const result = await removeWatermark(videoId);
+    const result = await getSoraWatermarkFreeVideo(await getSoraWatermarkTask(videoId));
 
     expect(result).toBe(expectedUrl);
     expect(sendBackgroundRequest).toHaveBeenNthCalledWith(1, {
@@ -35,6 +66,19 @@ describe("remove-watermark utility", () => {
       type: "get-sora-watermark-free-video",
       task_id: taskId
     });
+  });
+
+  it("returns null when the KontenAI endpoint has no mp4_wm_source", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      links: {
+        mp4: "https://videos-us3.ss2.life/az/files/no-watermark/raw"
+      }
+    }), {
+      headers: { "content-type": "application/json" },
+      status: 200
+    })));
+
+    await expect(getKontenAiMp4WatermarkSource("s_missing_source")).resolves.toBeNull();
   });
 
   it("returns null when queryTask has not produced a URL yet", async () => {

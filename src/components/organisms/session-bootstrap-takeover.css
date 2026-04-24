@@ -79,6 +79,13 @@
   padding: 0.7rem 0.85rem;
 }
 
+.ss-session-takeover-note {
+  color: rgba(216, 230, 243, 0.88);
+  font-size: 0.94rem;
+  line-height: 1.45;
+  margin: -0.2rem 0 0;
+}
+
 .ss-session-takeover-spinner {
   animation: ss-session-takeover-spin 1s linear infinite;
 }

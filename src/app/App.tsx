@@ -188,6 +188,7 @@ export function App() {
   const [settingsDraft, setSettingsDraft] = useState(state.settings);
   const [onboardingOpen, setOnboardingOpen] = useState(false);
   const [onboardingEnableDatabaseDraft, setOnboardingEnableDatabaseDraft] = useState(false);
+  const [hasJustCompletedOnboarding, setHasJustCompletedOnboarding] = useState(false);
   const [isStateHydrated, setIsStateHydrated] = useState(false);
   const [bootstrapStatusText, setBootstrapStatusText] = useState("Loading user data…");
   const [bootstrapErrorMessage, setBootstrapErrorMessage] = useState("");
@@ -195,6 +196,9 @@ export function App() {
   const autoSelectAllDownloadableRef = useRef(true);
   const autoSelectCharacterAccountsRef = useRef(false);
   const bootstrapInFlightRef = useRef(false);
+  const viewerSessionMessage = hasJustCompletedOnboarding
+    ? `Thank you for trying "Save Sora", ${viewerUsername}`
+    : `Welcome back, ${viewerUsername}`;
 
   const runSessionBootstrap = useCallback(async () => {
     if (bootstrapInFlightRef.current) {
@@ -545,6 +549,7 @@ export function App() {
         ...current,
         enable_fetch_resume: onboardingEnableDatabaseDraft
       }));
+      setHasJustCompletedOnboarding(true);
       setOnboardingOpen(false);
     } catch (error) {
       setAppError(error);
@@ -700,8 +705,8 @@ export function App() {
             onOpenSettings={openSettingsModal}
             selectedBytes={selectedBytes}
             selectedCount={selectedDownloadableRowCount}
+            sessionMessage={viewerSessionMessage}
             totalCount={downloadableRowsCount}
-            viewerDisplayName={viewerDisplayName}
             viewerPlanTypeBadge={viewerPlanTypeBadge}
             viewerProfilePictureUrl={viewerProfilePictureUrl}
             viewerUsername={viewerUsername}

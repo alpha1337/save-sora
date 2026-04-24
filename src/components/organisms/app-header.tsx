@@ -8,8 +8,8 @@ interface AppHeaderProps {
   onOpenSettings: () => void;
   selectedBytes: number;
   selectedCount: number;
+  sessionMessage: string;
   totalCount: number;
-  viewerDisplayName: string;
   viewerPlanTypeBadge: string;
   viewerProfilePictureUrl: string;
   viewerUsername: string;
@@ -24,8 +24,8 @@ export function AppHeader({
   onOpenSettings,
   selectedBytes,
   selectedCount,
+  sessionMessage,
   totalCount,
-  viewerDisplayName,
   viewerPlanTypeBadge,
   viewerProfilePictureUrl,
   viewerUsername
@@ -42,7 +42,7 @@ export function AppHeader({
             <img alt={`${viewerUsername} profile`} className="ss-header-session-avatar" src={viewerProfilePictureUrl} />
           ) : null}
           <div className="ss-header-session-meta">
-            <span>{`Logged in as ${viewerUsername} (${viewerDisplayName})`}</span>
+            <span>{sessionMessage}</span>
             <span className="ss-badge ss-badge--default ss-header-plan-badge">{viewerPlanTypeBadge}</span>
           </div>
         </div>

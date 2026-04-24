@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import type { SourceSelectionState, TopLevelSourceType } from "types/domain";
 import { Checkbox } from "@components/atoms/checkbox";
+import "./source-multi-select-dropdown.css";
 
 interface SourceMultiSelectDropdownProps {
   disabled?: boolean;
@@ -38,8 +39,8 @@ export function SourceMultiSelectDropdown({
     () => SOURCE_OPTIONS.filter((option) => showCameos || option.source !== "characters"),
     [showCameos]
   );
-  const selectedCount = useMemo(
-    () => sourceOptions.filter((option) => sourceSelections[option.source]).length,
+  const selectedSummary = useMemo(
+    () => formatSelectedSourceSummary(sourceOptions.filter((option) => sourceSelections[option.source]).map((option) => option.label)),
     [sourceOptions, sourceSelections]
   );
 
@@ -77,7 +78,7 @@ export function SourceMultiSelectDropdown({
         onClick={() => setOpen((current) => !current)}
         type="button"
       >
-        <span>{selectedCount > 0 ? `${selectedCount} sources` : "Select sources"}</span>
+        <span className="ss-source-dropdown-summary">{selectedSummary}</span>
         <ChevronDown aria-hidden="true" size={16} />
       </button>
       {open ? (
@@ -98,4 +99,20 @@ export function SourceMultiSelectDropdown({
       ) : null}
     </div>
   );
+}
+
+function formatSelectedSourceSummary(labels: string[]): string {
+  if (labels.length === 0) {
+    return "Select sources";
+  }
+  if (labels.length === 1) {
+    return labels[0] ?? "Select sources";
+  }
+  if (labels.length === 2) {
+    return labels.join(" + ");
+  }
+
+  const visibleLabels = labels.slice(0, 3).join(", ");
+  const remainingCount = labels.length - 3;
+  return remainingCount > 0 ? `${visibleLabels} +${remainingCount} more` : visibleLabels;
 }

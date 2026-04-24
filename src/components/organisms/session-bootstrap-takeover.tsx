@@ -63,6 +63,9 @@ export function SessionBootstrapTakeover({
           <LoaderCircle className="ss-session-takeover-spinner" size={16} />
           <span>{statusText || "Starting session checks…"}</span>
         </div>
+        <p className="ss-session-takeover-note">
+          Please wait a few minutes as your data is preloaded in the background.
+        </p>
 
         {hasError ? (
           <div className="ss-session-takeover-error">

@@ -74,12 +74,6 @@
   letter-spacing: 0;
 }
 
-.ss-download-takeover-subtitle {
-  margin: 0.2rem 0 0;
-  color: rgba(216, 230, 243, 0.9);
-  font-size: clamp(0.92rem, 1.6vw, 1.03rem);
-}
-
 .ss-download-takeover-stage {
   min-width: 7.5rem;
   display: grid;
@@ -253,6 +247,14 @@
 
 .ss-download-takeover-rejections > strong {
   color: rgba(255, 229, 211, 0.96);
+}
+
+.ss-download-takeover-rejection-list {
+  display: grid;
+  gap: 0.45rem;
+  max-height: min(20vh, 12rem);
+  overflow-y: auto;
+  padding-right: 0.25rem;
 }
 
 .ss-download-takeover-rejection {

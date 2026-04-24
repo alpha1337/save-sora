@@ -41,6 +41,8 @@ describe("DownloadTakeover", () => {
     );
 
     expect(screen.getByRole("status")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Archive Ready" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Building Your Archive" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Close Summary" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Start Over" })).toBeInTheDocument();
   });
