@@ -7,19 +7,27 @@ import "./download-takeover.css";
 
 interface DownloadTakeoverProps {
   downloadProgress: DownloadProgressState;
+  onCloseSummary: () => void;
+  onStartOver: () => void;
   selectedBytes: number;
   visible: boolean;
 }
 
 const TAKEOVER_MESSAGES = [
-  "Assembling your archive parts",
+  "Resolving archive sources",
   "Validating each file before packaging",
   "Streaming files into your download set",
   "Building folders and preserving order",
   "Finalizing archives for reliable extraction"
 ] as const;
 
-export function DownloadTakeover({ downloadProgress, selectedBytes, visible }: DownloadTakeoverProps) {
+export function DownloadTakeover({
+  downloadProgress,
+  onCloseSummary,
+  onStartOver,
+  selectedBytes,
+  visible
+}: DownloadTakeoverProps) {
   const [showDetails, setShowDetails] = useState(false);
   const [messageIndex, setMessageIndex] = useState(0);
 
@@ -49,11 +57,30 @@ export function DownloadTakeover({ downloadProgress, selectedBytes, visible }: D
   }, [visible]);
 
   const progressPercent = useMemo(() => {
-    if (downloadProgress.total_items <= 0) {
+    const isPreflightStage = !downloadProgress.zip_completed &&
+      downloadProgress.preflight_stage !== "zipping" &&
+      downloadProgress.preflight_total_items > 0;
+    const completedItems = isPreflightStage
+      ? downloadProgress.preflight_completed_items
+      : downloadProgress.completed_items;
+    const totalItems = isPreflightStage
+      ? downloadProgress.preflight_total_items
+      : downloadProgress.total_items;
+    if (totalItems <= 0) {
       return 0;
     }
-    return Math.min(100, Math.max(0, Math.round((downloadProgress.completed_items / downloadProgress.total_items) * 100)));
-  }, [downloadProgress.completed_items, downloadProgress.total_items]);
+    return Math.min(100, Math.max(0, Math.round((completedItems / totalItems) * 100)));
+  }, [
+    downloadProgress.completed_items,
+    downloadProgress.preflight_completed_items,
+    downloadProgress.preflight_stage,
+    downloadProgress.preflight_total_items,
+    downloadProgress.total_items,
+    downloadProgress.zip_completed
+  ]);
+
+  const isComplete = downloadProgress.zip_completed;
+  const stageLabel = downloadProgress.preflight_stage_label || (isComplete ? "Summary" : "Archive");
 
   if (!visible) {
     return null;
@@ -62,8 +89,6 @@ export function DownloadTakeover({ downloadProgress, selectedBytes, visible }: D
   return (
     <div className="ss-download-takeover" role="status" aria-live="polite">
       <div className="ss-download-takeover-backdrop" aria-hidden="true">
-        <div className="ss-download-takeover-orb ss-download-takeover-orb--one" />
-        <div className="ss-download-takeover-orb ss-download-takeover-orb--two" />
         <div className="ss-download-takeover-grid" />
       </div>
       <div className="ss-download-takeover-panel">
@@ -75,7 +100,10 @@ export function DownloadTakeover({ downloadProgress, selectedBytes, visible }: D
               <p className="ss-download-takeover-subtitle">{downloadProgress.active_label || "Preparing archive workflow…"}</p>
             </div>
           </div>
-          <span className="ss-download-takeover-percent">{progressPercent}%</span>
+          <div className="ss-download-takeover-stage">
+            <span>{stageLabel}</span>
+            <strong>{progressPercent}%</strong>
+          </div>
         </div>
 
         <div className="ss-download-takeover-progress-track" aria-hidden="true">
@@ -84,6 +112,7 @@ export function DownloadTakeover({ downloadProgress, selectedBytes, visible }: D
 
         <div className="ss-download-takeover-meta">
           <span>{`${formatCount(downloadProgress.completed_items)} / ${formatCount(downloadProgress.total_items)} files`}</span>
+          <span>{`${formatCount(downloadProgress.preflight_completed_items)} / ${formatCount(downloadProgress.preflight_total_items)} preflight`}</span>
           <span>{`Estimated selected size: ${formatBytes(selectedBytes)}`}</span>
         </div>
 
@@ -91,11 +120,56 @@ export function DownloadTakeover({ downloadProgress, selectedBytes, visible }: D
           {TAKEOVER_MESSAGES[messageIndex]}
         </div>
 
+        {downloadProgress.swimlanes.length > 0 ? (
+          <div className="ss-download-takeover-swimlanes" aria-label="Download queue swimlanes">
+            {downloadProgress.swimlanes.map((lane) => (
+              <section className="ss-download-takeover-lane" key={lane.id}>
+                <div className="ss-download-takeover-lane-heading">
+                  <span>{lane.label}</span>
+                  <strong>{formatCount(lane.items.length)}</strong>
+                </div>
+                <div className="ss-download-takeover-lane-items">
+                  {lane.items.length > 0 ? lane.items.map((item) => (
+                    <div className="ss-download-takeover-lane-item" key={`${lane.id}:${item.id}`}>
+                      <span>{item.title}</span>
+                      <small>{item.reason ? `${item.id} · ${item.reason}` : item.id}</small>
+                    </div>
+                  )) : (
+                    <span className="ss-download-takeover-lane-empty">Empty</span>
+                  )}
+                </div>
+              </section>
+            ))}
+          </div>
+        ) : null}
+
+        {downloadProgress.rejection_entries.length > 0 ? (
+          <div className="ss-download-takeover-rejections" aria-label="Rejection summary">
+            <strong>Rejection Summary</strong>
+            {downloadProgress.rejection_entries.map((entry) => (
+              <div className="ss-download-takeover-rejection" key={`${entry.id}:${entry.reason}`}>
+                <span>{entry.title}</span>
+                <code>{entry.reason}</code>
+              </div>
+            ))}
+          </div>
+        ) : null}
+
         <div className="ss-download-takeover-actions">
           <Button onClick={() => setShowDetails((current) => !current)} tone="secondary" type="button">
             <ChevronDown className={showDetails ? "ss-download-takeover-chevron is-open" : "ss-download-takeover-chevron"} size={16} />
             {showDetails ? "Hide Build Details" : "Show Build Details"}
           </Button>
+          {isComplete ? (
+            <>
+              <Button onClick={onCloseSummary} tone="secondary" type="button">
+                Close Summary
+              </Button>
+              <Button onClick={onStartOver} tone="danger" type="button">
+                Start Over
+              </Button>
+            </>
+          ) : null}
         </div>
 
         {showDetails ? (
@@ -116,6 +190,12 @@ export function DownloadTakeover({ downloadProgress, selectedBytes, visible }: D
             ) : (
               <span className="ss-download-takeover-empty">Initializing archive workers…</span>
             )}
+            {downloadProgress.rejection_entries.map((entry) => (
+              <div className="ss-download-takeover-worker" key={`detail:${entry.id}:${entry.reason}`}>
+                <strong>{entry.title}</strong>
+                <span>{`${entry.id} · ${entry.reason}`}</span>
+              </div>
+            ))}
           </div>
         ) : null}
       </div>

@@ -6,7 +6,7 @@
   align-items: center;
   justify-content: center;
   padding: clamp(1rem, 4vw, 2.75rem);
-  overflow: hidden;
+  overflow: auto;
   background: rgba(8, 14, 23, 0.96);
 }
 
@@ -26,33 +26,11 @@
   mask-image: radial-gradient(circle at 50% 45%, rgba(0, 0, 0, 1), transparent 76%);
 }
 
-.ss-download-takeover-orb {
-  position: absolute;
-  border-radius: 9999px;
-  filter: blur(55px);
-  animation: ss-takeover-float 6.5s ease-in-out infinite;
-}
-
-.ss-download-takeover-orb--one {
-  width: min(58vw, 640px);
-  height: min(58vw, 640px);
-  top: -16%;
-  left: -10%;
-  background: radial-gradient(circle at 40% 40%, rgba(86, 196, 255, 0.42), rgba(10, 28, 53, 0));
-}
-
-.ss-download-takeover-orb--two {
-  width: min(52vw, 560px);
-  height: min(52vw, 560px);
-  right: -14%;
-  bottom: -24%;
-  background: radial-gradient(circle at 50% 50%, rgba(71, 225, 176, 0.35), rgba(8, 27, 30, 0));
-  animation-delay: 1.4s;
-}
-
 .ss-download-takeover-panel {
   position: relative;
-  width: min(920px, 100%);
+  width: min(1180px, 100%);
+  max-height: calc(100vh - clamp(2rem, 8vw, 5.5rem));
+  overflow: auto;
   border: 1px solid rgba(125, 173, 201, 0.28);
   border-radius: 24px;
   background:
@@ -93,7 +71,7 @@
 .ss-download-takeover-title {
   margin: 0;
   font-size: clamp(1.3rem, 2.4vw, 1.95rem);
-  letter-spacing: 0.01em;
+  letter-spacing: 0;
 }
 
 .ss-download-takeover-subtitle {
@@ -102,12 +80,24 @@
   font-size: clamp(0.92rem, 1.6vw, 1.03rem);
 }
 
-.ss-download-takeover-percent {
-  font-size: clamp(1.7rem, 3.8vw, 2.6rem);
-  font-weight: 800;
-  letter-spacing: -0.02em;
+.ss-download-takeover-stage {
+  min-width: 7.5rem;
+  display: grid;
+  justify-items: end;
+  gap: 0.15rem;
   color: rgba(226, 248, 255, 0.96);
   text-shadow: 0 0 18px rgba(94, 188, 255, 0.24);
+}
+
+.ss-download-takeover-stage span {
+  color: rgba(198, 219, 234, 0.86);
+  font-size: 0.82rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.ss-download-takeover-stage strong {
+  font-size: clamp(1.7rem, 3.8vw, 2.6rem);
 }
 
 .ss-download-takeover-progress-track {
@@ -156,6 +146,8 @@
 
 .ss-download-takeover-actions {
   display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
   justify-content: flex-start;
 }
 
@@ -178,6 +170,108 @@
   gap: 0.55rem;
 }
 
+.ss-download-takeover-swimlanes {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 0.7rem;
+}
+
+.ss-download-takeover-lane {
+  min-width: 0;
+  border: 1px solid rgba(132, 174, 205, 0.24);
+  border-radius: 8px;
+  background: rgba(8, 20, 30, 0.52);
+  display: grid;
+  grid-template-rows: auto minmax(7rem, 1fr);
+  overflow: hidden;
+}
+
+.ss-download-takeover-lane-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  align-items: center;
+  padding: 0.55rem 0.65rem;
+  color: rgba(232, 244, 251, 0.95);
+  font-size: 0.86rem;
+  font-weight: 800;
+  background: rgba(55, 82, 103, 0.34);
+}
+
+.ss-download-takeover-lane-heading strong {
+  color: rgba(147, 232, 193, 0.96);
+}
+
+.ss-download-takeover-lane-items {
+  min-height: 7rem;
+  max-height: 18vh;
+  overflow: auto;
+  padding: 0.5rem;
+  display: grid;
+  align-content: start;
+  gap: 0.45rem;
+}
+
+.ss-download-takeover-lane-item {
+  min-width: 0;
+  border: 1px solid rgba(127, 167, 198, 0.18);
+  border-radius: 8px;
+  background: rgba(15, 33, 47, 0.64);
+  padding: 0.45rem 0.5rem;
+  display: grid;
+  gap: 0.18rem;
+}
+
+.ss-download-takeover-lane-item span,
+.ss-download-takeover-lane-item small,
+.ss-download-takeover-rejection span,
+.ss-download-takeover-rejection code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.ss-download-takeover-lane-item span {
+  color: rgba(238, 247, 252, 0.96);
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+
+.ss-download-takeover-lane-item small,
+.ss-download-takeover-lane-empty {
+  color: rgba(197, 214, 227, 0.82);
+  font-size: 0.76rem;
+}
+
+.ss-download-takeover-rejections {
+  border: 1px solid rgba(228, 142, 95, 0.34);
+  border-radius: 8px;
+  background: rgba(45, 25, 20, 0.48);
+  padding: 0.7rem;
+  display: grid;
+  gap: 0.45rem;
+}
+
+.ss-download-takeover-rejections > strong {
+  color: rgba(255, 229, 211, 0.96);
+}
+
+.ss-download-takeover-rejection {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.7rem;
+  align-items: center;
+  color: rgba(255, 236, 224, 0.92);
+  font-size: 0.88rem;
+}
+
+.ss-download-takeover-rejection code {
+  border: 1px solid rgba(236, 153, 109, 0.34);
+  border-radius: 6px;
+  background: rgba(75, 39, 28, 0.58);
+  color: rgba(255, 216, 190, 0.96);
+  padding: 0.12rem 0.32rem;
+}
+
 .ss-download-takeover-worker {
   padding: 0.55rem 0.65rem;
   border-radius: 10px;
@@ -193,21 +287,38 @@
   font-size: 0.9rem;
 }
 
-@keyframes ss-takeover-float {
-  0%, 100% {
-    transform: translate3d(0, 0, 0) scale(1);
-  }
-  50% {
-    transform: translate3d(0, -14px, 0) scale(1.04);
-  }
-}
-
 @keyframes ss-takeover-shimmer {
   0% {
     transform: translateX(-100%);
   }
   100% {
     transform: translateX(100%);
+  }
+}
+
+@media (max-width: 900px) {
+  .ss-download-takeover-swimlanes {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 560px) {
+  .ss-download-takeover {
+    align-items: stretch;
+  }
+
+  .ss-download-takeover-heading,
+  .ss-download-takeover-rejection {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .ss-download-takeover-stage {
+    justify-items: start;
+  }
+
+  .ss-download-takeover-swimlanes {
+    grid-template-columns: 1fr;
   }
 }
 

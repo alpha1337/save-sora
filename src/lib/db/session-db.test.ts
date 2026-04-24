@@ -252,6 +252,64 @@ describe("session-db", () => {
     await expect(loadDownloadQueue()).resolves.toEqual([]);
   });
 
+  it("persists download_queue with the exact saved_accounts schema", async () => {
+    await replaceDownloadQueue([
+      {
+        id: "s_exact",
+        watermark: "https://videos.openai.com/watermark-exact.mp4",
+        no_watermark: null
+      }
+    ]);
+
+    const database = await openSessionDb();
+    const record = await database.get("saved_accounts", "download_queue") as Record<string, unknown>;
+
+    expect(Object.keys(record).sort()).toEqual(["id", "kind", "queue", "updated_at"]);
+    expect(record.id).toBe("download_queue");
+    expect(record.kind).toBe("download_queue");
+    expect(record.queue).toEqual([
+      {
+        id: "s_exact",
+        watermark: "https://videos.openai.com/watermark-exact.mp4",
+        no_watermark: null
+      }
+    ]);
+    expect(typeof record.updated_at).toBe("string");
+  });
+
+  it("applies download_queue patches in batches while preserving order", async () => {
+    await replaceDownloadQueue(Array.from({ length: 25 }, (_value, index) => ({
+      id: `s_${index}`,
+      watermark: `https://videos.openai.com/watermark-${index}.mp4`,
+      no_watermark: null
+    })));
+
+    const firstBatchPatch = Array.from({ length: 24 }, (_value, index) => ({
+      current_id: `s_${index}`,
+      no_watermark: `https://videos.openai.com/no-watermark-${index}.mp4`
+    }));
+    await patchDownloadQueue(firstBatchPatch);
+    const patchedQueue = await patchDownloadQueue([
+      {
+        current_id: "s_24",
+        id: "s_24_converted",
+        no_watermark: "https://videos.openai.com/no-watermark-24.mp4"
+      }
+    ]);
+
+    expect(patchedQueue).toHaveLength(25);
+    expect(patchedQueue[0]).toEqual({
+      id: "s_0",
+      watermark: "https://videos.openai.com/watermark-0.mp4",
+      no_watermark: "https://videos.openai.com/no-watermark-0.mp4"
+    });
+    expect(patchedQueue[24]).toEqual({
+      id: "s_24_converted",
+      watermark: "https://videos.openai.com/watermark-24.mp4",
+      no_watermark: "https://videos.openai.com/no-watermark-24.mp4"
+    });
+  });
+
   it("preserves download_queue while replacing saved session state", async () => {
     await replaceDownloadQueue([
       {

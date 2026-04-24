@@ -100,6 +100,79 @@ describe("buildArchiveWorkPlan", () => {
     expect(plan.rows[0]?.archive_path).toBe("Sora/liked/no-watermark/s_nowm");
   });
 
+  it("uses queue-resolved source URLs for deterministic archive rows", () => {
+    const row = createRow({
+      video_id: "s_queue",
+      playback_url: "https://videos.openai.com/watermark-row.mp4",
+      download_url: "https://videos.openai.com/no-watermark-row.mp4",
+      raw_payload_json: JSON.stringify({
+        download_urls: {
+          watermark: "https://videos.openai.com/watermark-row.mp4",
+          no_watermark: "https://videos.openai.com/no-watermark-row.mp4"
+        }
+      })
+    });
+
+    const plan = buildArchiveWorkPlan([row], "Sora", [
+      {
+        id: "s_queue",
+        watermark: "https://videos.openai.com/watermark-queue.mp4",
+        no_watermark: null
+      }
+    ]);
+
+    expect(plan.rows[0]?.archive_variant).toBe("watermark");
+    expect(plan.rows[0]?.archive_download_url).toBe("https://videos.openai.com/watermark-queue.mp4");
+    expect(plan.rows[0]?.archive_path).toBe("Sora/me/published/posts/watermark/s_queue");
+  });
+
+  it("places queue-resolved no-watermark variants in the no-watermark folder", () => {
+    const plan = buildArchiveWorkPlan([
+      createRow({
+        video_id: "s_queue_nowm",
+        playback_url: "https://videos.openai.com/watermark-only.mp4",
+        download_url: "https://videos.openai.com/watermark-only.mp4"
+      })
+    ], "Sora", [
+      {
+        id: "s_queue_nowm",
+        watermark: "https://videos.openai.com/watermark-only.mp4",
+        no_watermark: "https://videos.openai.com/no-watermark-queue.mp4"
+      }
+    ]);
+
+    expect(plan.rows[0]?.archive_variant).toBe("no-watermark");
+    expect(plan.rows[0]?.archive_download_url).toBe("https://videos.openai.com/no-watermark-queue.mp4");
+    expect(plan.rows[0]?.archive_path).toBe("Sora/me/published/posts/no-watermark/s_queue_nowm");
+  });
+
+  it("keeps deduping stable after draft ids are converted", () => {
+    const plan = buildArchiveWorkPlan([
+      createRow({
+        row_id: "drafts:s_converted",
+        video_id: "s_converted",
+        source_type: "drafts",
+        source_bucket: "drafts"
+      }),
+      createRow({
+        row_id: "profile:s_converted",
+        video_id: "s_converted",
+        source_type: "profile",
+        source_bucket: "published"
+      })
+    ], "Sora", [
+      {
+        id: "s_converted",
+        watermark: "https://videos.openai.com/watermark-converted.mp4",
+        no_watermark: "https://videos.openai.com/no-watermark-converted.mp4"
+      }
+    ]);
+
+    expect(plan.rows).toHaveLength(1);
+    expect(plan.rows[0]?.video_id).toBe("s_converted");
+    expect(plan.rows[0]?.archive_variant).toBe("no-watermark");
+  });
+
   it("maps side character rows into side-characters/{name}/{variant}", () => {
     const sideCharacterRow = createRow({
       source_type: "sideCharacter",

@@ -1,4 +1,4 @@
-import type { AppSettings, CreatorProfile } from "types/domain";
+import type { AppSettings, CreatorProfile, DownloadQueueItem } from "types/domain";
 import { SAVED_ACCOUNTS_STORE, SETTINGS_STORE, openSaveSoraV3Db } from "./save-sora-v3-db";
 
 const SETTINGS_KEY = "settings";
@@ -29,12 +29,6 @@ export interface SavedUserSession {
   display_name: string;
   isOnboarded: boolean;
   last_seen_at: string;
-}
-
-export interface DownloadQueueItem {
-  id: string;
-  watermark: string;
-  no_watermark: string | null;
 }
 
 export interface DownloadQueuePatch {

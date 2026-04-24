@@ -92,10 +92,17 @@ async function buildArchive(workPlan: ArchiveWorkPlan): Promise<void> {
     const payload: DownloadProgressState = {
       active_label: activeLabel,
       completed_items: completedItems,
+      preflight_completed_items: 0,
+      preflight_stage: "zipping",
+      preflight_stage_label: "ZIP Worker",
+      preflight_total_items: 0,
+      rejection_entries: [],
       running_workers: workerProgress.filter((worker) => worker.status === "running").length,
+      swimlanes: [],
       total_items: workPlan.rows.length,
       total_workers: workerProgress.length,
-      worker_progress: workerProgress.map((worker) => ({ ...worker }))
+      worker_progress: workerProgress.map((worker) => ({ ...worker })),
+      zip_completed: false
     };
 
     self.postMessage({

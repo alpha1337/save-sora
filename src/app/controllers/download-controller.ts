@@ -4,17 +4,14 @@ import { buildArchiveWorkPlan } from "@lib/archive-organizer/build-archive-work-
 import { downloadBlob, downloadTextFile } from "@lib/utils/download-utils";
 import { selectSelectedVideoRows } from "@app/store/selectors";
 import { createLogger } from "@lib/logging/logger";
-import { getDraftGenerationId } from "@lib/normalize/shared";
-import { sendBackgroundRequest } from "@lib/background/client";
-import type { ResolveDraftReferenceResponse } from "types/background";
-import type { ArchiveSupplementalEntry, DownloadProgressState, VideoRow } from "types/domain";
+import { clearDownloadQueue } from "@lib/db/session-db";
+import { runDownloadPreflight } from "./download-preflight";
+import type { ArchiveSupplementalEntry, DownloadProgressState } from "types/domain";
 
 const logger = createLogger("download-controller");
 const MAX_PART_FILE_COUNT = 4000;
 const MAX_PART_ESTIMATED_BYTES = 1_350_000_000;
 const FALLBACK_ROW_ESTIMATED_BYTES = 20_000_000;
-const DRAFT_RESOLUTION_SAFE_DELAY_MS = 900;
-const DRAFT_RESOLUTION_MAX_RETRIES = 4;
 
 interface ZipWorkerProgressMessage {
   type: "progress";
@@ -50,23 +47,40 @@ export async function downloadSelectedRows(): Promise<void> {
   state.setDownloadProgress({
     active_label: "Preparing download handoff…",
     completed_items: 0,
+    preflight_completed_items: 0,
+    preflight_stage: "building_queue",
+    preflight_stage_label: "Building Queue",
+    preflight_total_items: targetCandidateRows.length,
+    rejection_entries: [],
     running_workers: 0,
+    swimlanes: [],
     total_items: targetCandidateRows.length,
     total_workers: 0,
-    worker_progress: []
+    worker_progress: [],
+    zip_completed: false
   });
 
-  const resolvedTargetRows = await resolveDraftRowsForDownload(targetCandidateRows);
-  const targetRows = resolvedTargetRows.filter((row) => row.is_downloadable && row.video_id);
+  const preflightResult = await runDownloadPreflight(targetCandidateRows, {
+    onProgress: (progress) => {
+      useAppStore.getState().setDownloadProgress(progress);
+    }
+  });
+  if (preflightResult.rows.length > 0) {
+    useAppStore.getState().upsertVideoRows(preflightResult.rows);
+  }
+  if (preflightResult.selected_id_remap.size > 0) {
+    remapSelectedVideoIds(preflightResult.selected_id_remap);
+  }
+
+  const targetRows = preflightResult.rows.filter((row) => row.is_downloadable && row.video_id);
 
   if (targetRows.length === 0) {
     state.setPhase("ready");
     throw new Error("Select at least one downloadable row before building the ZIP.");
   }
-  const rootWorkPlan = buildArchiveWorkPlan(targetRows, state.settings.archive_name_template);
+  const rootWorkPlan = buildArchiveWorkPlan(targetRows, state.settings.archive_name_template, preflightResult.queue);
   const zipParts = splitRowsIntoZipParts(rootWorkPlan.rows);
   const totalParts = zipParts.length;
-  const carryForwardCompletedItems = useAppStore.getState().download_progress.completed_items;
   logger.info("zip build start", {
     selected_rows: rootWorkPlan.rows.length,
     archive_name: rootWorkPlan.archive_name,
@@ -75,7 +89,9 @@ export async function downloadSelectedRows(): Promise<void> {
 
   state.setDownloadProgress({
     active_label: totalParts > 1 ? `Preparing ZIP part 1/${totalParts}…` : "Preparing Archive…",
-    completed_items: Math.min(rootWorkPlan.rows.length, Math.max(0, carryForwardCompletedItems)),
+    completed_items: 0,
+    preflight_stage: "zipping",
+    preflight_stage_label: "ZIP Worker",
     running_workers: 0,
     total_items: rootWorkPlan.rows.length,
     total_workers: 0,
@@ -86,7 +102,7 @@ export async function downloadSelectedRows(): Promise<void> {
   for (let index = 0; index < zipParts.length; index += 1) {
     const partRows = zipParts[index];
     const partNumber = index + 1;
-    const partWorkPlan = buildArchiveWorkPlan(partRows, rootWorkPlan.archive_name);
+    const partWorkPlan = buildArchiveWorkPlan(partRows, rootWorkPlan.archive_name, preflightResult.queue);
     if (totalParts > 1) {
       partWorkPlan.supplemental_entries = [
         ...partWorkPlan.supplemental_entries,
@@ -144,18 +160,29 @@ export async function downloadSelectedRows(): Promise<void> {
     });
   }
 
-  state.setPhase("ready");
   state.setDownloadProgress({
     active_label: "Archive Ready",
     completed_items: rootWorkPlan.rows.length,
+    preflight_stage: "completed",
+    preflight_stage_label: "Summary",
     running_workers: 0,
     total_items: rootWorkPlan.rows.length,
-    worker_progress: []
+    worker_progress: [],
+    zip_completed: true
   });
   logger.info("archive built", {
     rowCount: rootWorkPlan.rows.length,
     parts: totalParts
   });
+}
+
+export function closeDownloadSummary(): void {
+  useAppStore.getState().setPhase("ready");
+}
+
+export async function startOverDownloadSummary(): Promise<void> {
+  await clearDownloadQueue();
+  useAppStore.getState().clearWorkingSessionState();
 }
 
 async function buildZipPart(
@@ -179,11 +206,17 @@ async function buildZipPart(
         const partProgress = event.data.payload;
         const partCompletedItems = Math.min(partWorkPlan.rows.length, partProgress.completed_items);
         const aggregateCompletedItems = Math.min(options.totalRows, options.completedRowsAcrossParts + partCompletedItems);
-        const currentCompletedItems = useAppStore.getState().download_progress.completed_items;
+        const currentProgress = useAppStore.getState().download_progress;
         state.setDownloadProgress({
           ...partProgress,
           active_label: `${partPrefix}${partProgress.active_label || "Building archive"}`.trim(),
-          completed_items: Math.max(currentCompletedItems, aggregateCompletedItems),
+          completed_items: Math.max(currentProgress.completed_items, aggregateCompletedItems),
+          preflight_completed_items: currentProgress.preflight_completed_items,
+          preflight_stage: "zipping",
+          preflight_stage_label: "ZIP Worker",
+          preflight_total_items: currentProgress.preflight_total_items,
+          rejection_entries: currentProgress.rejection_entries,
+          swimlanes: currentProgress.swimlanes,
           total_items: options.totalRows
         });
         const nextActiveLabel = partProgress.active_label.trim();
@@ -405,164 +438,6 @@ function waitForNextTick(): Promise<void> {
   });
 }
 
-async function resolveDraftRowsForDownload(rows: VideoRow[]): Promise<VideoRow[]> {
-  const dedupedRows = dedupeRowsByRowId(rows);
-  const rowsNeedingResolution = dedupedRows.filter(shouldResolveDraftReferenceForDownload);
-  if (rowsNeedingResolution.length === 0) {
-    return dedupedRows;
-  }
-
-  logger.info("download handoff resolving draft references", {
-    total_rows: dedupedRows.length,
-    rows_needing_resolution: rowsNeedingResolution.length
-  });
-  const state = useAppStore.getState();
-  const resolvedByRowId = new Map<string, VideoRow>();
-  const selectedIdRemap = new Map<string, string>();
-  const preflightProgressCap = Math.min(
-    rowsNeedingResolution.length,
-    Math.max(1, Math.round(dedupedRows.length * 0.1))
-  );
-
-  for (let index = 0; index < rowsNeedingResolution.length; index += 1) {
-    const row = rowsNeedingResolution[index];
-    const progressLabel = `Resolving draft links ${index + 1}/${rowsNeedingResolution.length}…`;
-    const preflightCompletedItems = Math.round(((index + 1) / rowsNeedingResolution.length) * preflightProgressCap);
-    const currentCompletedItems = useAppStore.getState().download_progress.completed_items;
-    state.setDownloadProgress({
-      active_label: progressLabel,
-      completed_items: Math.max(currentCompletedItems, preflightCompletedItems)
-    });
-
-    const resolvedRow = await resolveDraftRowForDownload(row);
-    if (resolvedRow) {
-      resolvedByRowId.set(row.row_id, resolvedRow);
-      if (row.video_id && row.video_id !== resolvedRow.video_id) {
-        selectedIdRemap.set(row.video_id, resolvedRow.video_id);
-      }
-    }
-
-    if (index < rowsNeedingResolution.length - 1) {
-      await sleep(DRAFT_RESOLUTION_SAFE_DELAY_MS);
-    }
-  }
-
-  if (resolvedByRowId.size > 0) {
-    const updatedRows = [...resolvedByRowId.values()];
-    useAppStore.getState().upsertVideoRows(updatedRows);
-  }
-  if (selectedIdRemap.size > 0) {
-    remapSelectedVideoIds(selectedIdRemap);
-  }
-
-  return dedupedRows.map((row) => resolvedByRowId.get(row.row_id) ?? row);
-}
-
-async function resolveDraftRowForDownload(row: VideoRow): Promise<VideoRow | null> {
-  const rowPayload = parseRowPayload(row);
-  const generationId = resolveDraftGenerationId(row, rowPayload);
-  if (!generationId) {
-    return null;
-  }
-
-  for (let attempt = 0; attempt < DRAFT_RESOLUTION_MAX_RETRIES; attempt += 1) {
-    try {
-      const response = await sendBackgroundRequest<ResolveDraftReferenceResponse>({
-        type: "resolve-draft-reference",
-        generation_id: generationId,
-        detail_url: row.detail_url || undefined,
-        row_payload: rowPayload || undefined
-      });
-      const resolvedVideoId = response.payload.video_id.trim();
-      if (!resolvedVideoId) {
-        return null;
-      }
-
-      const resolvedPlaybackUrl = response.payload.playback_url || row.playback_url;
-      const resolvedDownloadUrl = response.payload.download_url || row.download_url || resolvedPlaybackUrl;
-      return {
-        ...row,
-        video_id: resolvedVideoId,
-        detail_url: response.payload.share_url || row.detail_url,
-        thumbnail_url: response.payload.thumbnail_url || row.thumbnail_url,
-        playback_url: resolvedPlaybackUrl,
-        download_url: resolvedDownloadUrl,
-        estimated_size_bytes:
-          typeof response.payload.estimated_size_bytes === "number"
-            ? response.payload.estimated_size_bytes
-            : row.estimated_size_bytes,
-        is_downloadable: Boolean(resolvedDownloadUrl),
-        skip_reason: resolvedDownloadUrl ? "" : "missing_download_url"
-      };
-    } catch (error) {
-      const isLastAttempt = attempt >= DRAFT_RESOLUTION_MAX_RETRIES - 1;
-      if (!isRetryableDraftResolutionError(error) || isLastAttempt) {
-        logger.warn("draft reference resolution failed during download handoff", {
-          row_id: row.row_id,
-          source: row.source_type,
-          generation_id: generationId,
-          attempt: attempt + 1,
-          error: getUnknownErrorMessage(error)
-        });
-        return null;
-      }
-      await sleep(DRAFT_RESOLUTION_SAFE_DELAY_MS * (attempt + 1));
-    }
-  }
-
-  return null;
-}
-
-function shouldResolveDraftReferenceForDownload(row: VideoRow): boolean {
-  if (!isDraftSourceType(row.source_type) || !row.is_downloadable) {
-    return false;
-  }
-  return !isResolvedVideoId(row.video_id);
-}
-
-function isDraftSourceType(sourceType: string): boolean {
-  return sourceType === "drafts" || sourceType === "characterDrafts" || sourceType === "characterAccountDrafts";
-}
-
-function isResolvedVideoId(videoId: string): boolean {
-  return /^s_[A-Za-z0-9_-]+$/i.test(videoId.trim());
-}
-
-function parseRowPayload(row: Pick<VideoRow, "raw_payload_json">): Record<string, unknown> | null {
-  if (!row.raw_payload_json?.trim()) {
-    return null;
-  }
-  try {
-    const parsed = JSON.parse(row.raw_payload_json);
-    return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : null;
-  } catch {
-    return null;
-  }
-}
-
-function resolveDraftGenerationId(row: VideoRow, rowPayload: Record<string, unknown> | null): string {
-  const videoId = row.video_id.trim();
-  if (/^gen_[A-Za-z0-9_-]+$/i.test(videoId)) {
-    return videoId;
-  }
-  if (rowPayload) {
-    const payloadGenerationId = getDraftGenerationId(rowPayload);
-    if (payloadGenerationId) {
-      return payloadGenerationId;
-    }
-  }
-  const detailUrlMatch = row.detail_url.match(/\/d\/(gen_[A-Za-z0-9_-]+)/i);
-  return detailUrlMatch?.[1] ?? "";
-}
-
-function dedupeRowsByRowId(rows: VideoRow[]): VideoRow[] {
-  const rowMap = new Map<string, VideoRow>();
-  for (const row of rows) {
-    rowMap.set(row.row_id, row);
-  }
-  return [...rowMap.values()];
-}
-
 function remapSelectedVideoIds(remap: Map<string, string>): void {
   const state = useAppStore.getState();
   const normalizedIds = state.selected_video_ids.map((videoId) => remap.get(videoId) ?? videoId);
@@ -578,22 +453,6 @@ function remapSelectedVideoIds(remap: Map<string, string>): void {
   state.setSelectedVideoIds(dedupedIds);
 }
 
-function isRetryableDraftResolutionError(error: unknown): boolean {
-  const message = getUnknownErrorMessage(error).toLowerCase();
-  return (
-    message.includes("status 429") ||
-    message.includes("failed to fetch") ||
-    message.includes("message channel closed") ||
-    message.includes("message port closed") ||
-    message.includes("receiving end does not exist") ||
-    message.includes("back/forward cache") ||
-    message.includes("status 500") ||
-    message.includes("status 502") ||
-    message.includes("status 503") ||
-    message.includes("status 504")
-  );
-}
-
 function getUnknownErrorMessage(error: unknown): string {
   if (error instanceof Error && error.message) {
     return error.message;
@@ -602,10 +461,4 @@ function getUnknownErrorMessage(error: unknown): string {
     return error;
   }
   return "Unknown error";
-}
-
-async function sleep(durationMs: number): Promise<void> {
-  await new Promise<void>((resolve) => {
-    setTimeout(resolve, durationMs);
-  });
 }

@@ -170,6 +170,12 @@ export interface ArchiveSupplementalEntry {
   content: Blob | string;
 }
 
+export interface DownloadQueueItem {
+  id: string;
+  watermark: string;
+  no_watermark: string | null;
+}
+
 export type ArchiveVariant = "watermark" | "no-watermark";
 
 export interface ArchiveWorkPlanRow extends VideoRow {
@@ -207,6 +213,42 @@ export interface DownloadWorkerProgress {
   last_completed_item_label: string;
 }
 
+export type DownloadPreflightStage =
+  | "idle"
+  | "building_queue"
+  | "sharing_drafts"
+  | "resolving_sources"
+  | "zip_handoff"
+  | "zipping"
+  | "completed";
+
+export type DownloadQueueLaneId =
+  | "drafts"
+  | "shared"
+  | "processing"
+  | "watermarked"
+  | "watermark_removed";
+
+export type DownloadQueueRejectionReason = "could_not_share_video" | "access_restricted";
+
+export interface DownloadQueueSwimlaneItem {
+  id: string;
+  title: string;
+  reason?: DownloadQueueRejectionReason;
+}
+
+export interface DownloadQueueSwimlane {
+  id: DownloadQueueLaneId;
+  label: string;
+  items: DownloadQueueSwimlaneItem[];
+}
+
+export interface DownloadQueueRejectionEntry {
+  id: string;
+  title: string;
+  reason: DownloadQueueRejectionReason;
+}
+
 export interface FetchProgressState {
   active_label: string;
   completed_jobs: number;
@@ -234,10 +276,17 @@ export interface FetchJobCheckpoint {
 export interface DownloadProgressState {
   active_label: string;
   completed_items: number;
+  preflight_completed_items: number;
+  preflight_stage: DownloadPreflightStage;
+  preflight_stage_label: string;
+  preflight_total_items: number;
+  rejection_entries: DownloadQueueRejectionEntry[];
   running_workers: number;
+  swimlanes: DownloadQueueSwimlane[];
   total_workers: number;
   total_items: number;
   worker_progress: DownloadWorkerProgress[];
+  zip_completed: boolean;
 }
 
 export type GroupByOption = "none" | "creator" | "character";

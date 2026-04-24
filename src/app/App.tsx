@@ -5,7 +5,7 @@ import DatePicker from "react-datepicker";
 import { useAppStore } from "@app/store/use-app-store";
 import { selectFilteredVideoRows } from "@app/store/selectors";
 import { bootstrapAppState } from "@app/controllers/bootstrap-controller";
-import { downloadSelectedRows } from "@app/controllers/download-controller";
+import { closeDownloadSummary, downloadSelectedRows, startOverDownloadSummary } from "@app/controllers/download-controller";
 import { clearDownloadHistoryFromSettings, clearFetchCacheFromSettings, updateSettings } from "@app/controllers/settings-controller";
 import { Button } from "@components/atoms/button";
 import { Switch } from "@components/atoms/switch";
@@ -362,6 +362,14 @@ export function App() {
         state.setSelectedVideoIds([...new Set([...state.selected_video_ids, ...defaultSelectionIds])]);
       }
       await downloadSelectedRows();
+    } catch (error) {
+      setAppError(error);
+    }
+  }
+
+  async function handleStartOverDownloadSummary(): Promise<void> {
+    try {
+      await startOverDownloadSummary();
     } catch (error) {
       setAppError(error);
     }
@@ -923,6 +931,8 @@ export function App() {
       </AppShellTemplate>
       <DownloadTakeover
         downloadProgress={state.download_progress}
+        onCloseSummary={closeDownloadSummary}
+        onStartOver={() => void handleStartOverDownloadSummary()}
         selectedBytes={selectedBytes}
         visible={state.phase === "downloading"}
       />

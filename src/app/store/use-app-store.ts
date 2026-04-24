@@ -64,10 +64,17 @@ function createDefaultDownloadProgress() {
   return {
     active_label: "",
     completed_items: 0,
+    preflight_completed_items: 0,
+    preflight_stage: "idle" as const,
+    preflight_stage_label: "",
+    preflight_total_items: 0,
+    rejection_entries: [],
     running_workers: 0,
+    swimlanes: [],
     total_items: 0,
     total_workers: 0,
-    worker_progress: []
+    worker_progress: [],
+    zip_completed: false
   };
 }
 

@@ -1,14 +1,19 @@
-import type { ArchiveVariant, ArchiveWorkPlan, ArchiveWorkPlanRow, VideoRow } from "types/domain";
+import type { ArchiveVariant, ArchiveWorkPlan, ArchiveWorkPlanRow, DownloadQueueItem, VideoRow } from "types/domain";
 import { sanitizeFileNamePart } from "@lib/utils/string-utils";
 
 /**
  * Builds a ZIP work plan with deterministic folder paths.
  */
-export function buildArchiveWorkPlan(rows: VideoRow[], archiveName: string): ArchiveWorkPlan {
+export function buildArchiveWorkPlan(
+  rows: VideoRow[],
+  archiveName: string,
+  queueDecisions: DownloadQueueItem[] = []
+): ArchiveWorkPlan {
   const archiveRootFolder = sanitizePathSegment(archiveName, "save-sora-library");
+  const queueDecisionById = new Map(queueDecisions.map((item) => [item.id, item]));
   const plannedRows = rows
     .filter((row) => row.video_id && row.is_downloadable)
-    .map((row) => buildArchiveRow(row, archiveRootFolder))
+    .map((row) => buildArchiveRow(row, archiveRootFolder, queueDecisionById.get(row.video_id)))
     .filter((row): row is ArchiveWorkPlanRow => Boolean(row));
   const downloadableRows = dedupeRowsByVideoId(plannedRows);
 
@@ -20,8 +25,14 @@ export function buildArchiveWorkPlan(rows: VideoRow[], archiveName: string): Arc
   };
 }
 
-function buildArchiveRow(row: VideoRow, archiveRootFolder: string): ArchiveWorkPlanRow | null {
-  const variantUrls = resolveVariantUrls(row);
+function buildArchiveRow(
+  row: VideoRow,
+  archiveRootFolder: string,
+  queueDecision?: DownloadQueueItem
+): ArchiveWorkPlanRow | null {
+  const variantUrls = queueDecision
+    ? { noWatermark: queueDecision.no_watermark ?? "", watermark: queueDecision.watermark }
+    : resolveVideoVariantUrls(row);
   const archiveDownloadUrl = variantUrls.noWatermark || variantUrls.watermark;
   if (!archiveDownloadUrl) {
     return null;
@@ -103,7 +114,7 @@ function resolveCharacterFolderName(row: VideoRow): string {
   );
 }
 
-function resolveVariantUrls(row: VideoRow): { noWatermark: string; watermark: string } {
+export function resolveVideoVariantUrls(row: VideoRow): { noWatermark: string; watermark: string } {
   const payload = parsePayload(row.raw_payload_json);
   const payloadUrls = extractDownloadUrls(payload);
   const inferredNoWatermark = inferNoWatermarkFromRow(row);
