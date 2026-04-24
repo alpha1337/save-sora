@@ -181,6 +181,64 @@ describe("download preflight", () => {
     ]);
   });
 
+  it("stops additional draft share attempts after Sora rate-limits sharing", async () => {
+    const persistence = createPersistence();
+    const resolveDraftRow = vi.fn((row: VideoRow): Promise<VideoRow | null> => {
+      if (row.video_id === "gen_rate_limited") {
+        return Promise.reject(new Error("Draft share creation failed with status 429. Request: POST /backend/project_y/post."));
+      }
+      return Promise.resolve({
+        ...row,
+        video_id: "s_should_not_share",
+        playback_url: "https://videos.openai.com/watermark-should-not-share.mp4",
+        download_url: "https://videos.openai.com/no-watermark-should-not-share.mp4"
+      });
+    });
+    const result = await runDownloadPreflight([
+      createRow({
+        row_id: "drafts:gen_rate_limited",
+        video_id: "gen_rate_limited",
+        title: "Rate Limited"
+      }),
+      createRow({
+        row_id: "drafts:gen_after_rate_limit",
+        video_id: "gen_after_rate_limit",
+        title: "After Rate Limit"
+      })
+    ], {
+      ...persistence,
+      removeWatermark: vi.fn(),
+      resolveDraftRow,
+      sleep: sleepNow
+    });
+
+    expect(resolveDraftRow).toHaveBeenCalledTimes(1);
+    expect(result.queue).toEqual([
+      {
+        id: "gen_rate_limited",
+        watermark: "https://videos.openai.com/watermark-alpha.mp4",
+        no_watermark: null
+      },
+      {
+        id: "gen_after_rate_limit",
+        watermark: "https://videos.openai.com/watermark-alpha.mp4",
+        no_watermark: null
+      }
+    ]);
+    expect(result.rejections).toEqual([
+      {
+        id: "gen_rate_limited",
+        title: "Rate Limited",
+        reason: "could_not_share_video"
+      },
+      {
+        id: "gen_after_rate_limit",
+        title: "After Rate Limit",
+        reason: "could_not_share_video"
+      }
+    ]);
+  });
+
   it("bypasses the utility when an existing no-watermark URL is available", async () => {
     const persistence = createPersistence();
     const removeWatermark = vi.fn();

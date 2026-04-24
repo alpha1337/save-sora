@@ -262,7 +262,10 @@ function getFetchErrorMessage(error: unknown): string {
   if (error instanceof Error && error.message.trim()) {
     return error.message.trim();
   }
-  return String(error ?? "").trim();
+  if (typeof error === "string") {
+    return error.trim();
+  }
+  return "";
 }
 
 function parseRetryAfterMs(headerValue: string | null): number | null {

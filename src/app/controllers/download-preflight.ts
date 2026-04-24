@@ -22,7 +22,7 @@ import type {
 const logger = createLogger("download-preflight");
 const PREFLIGHT_BATCH_SIZE = 24;
 const WATERMARK_CONCURRENCY = 2;
-const DRAFT_RESOLUTION_SAFE_DELAY_MS = 1200;
+const DRAFT_RESOLUTION_SAFE_DELAY_MS = 4500;
 const DRAFT_RESOLUTION_MAX_RETRIES = 4;
 const WATERMARK_BACKOFF_MS = [600, 1200, 2400] as const;
 const GENERATION_ID_PATTERN = /^gen_[A-Za-z0-9_-]+$/i;
@@ -166,6 +166,7 @@ async function processDraftEntries(
   dependencies: Required<Pick<DownloadPreflightOptions, "patchQueue" | "resolveDraftRow" | "sleep">>
 ): Promise<void> {
   const draftEntries = entries.filter((entry) => entry.lane === "drafts");
+  let draftSharingRateLimited = false;
   for (const batch of chunkItems(draftEntries, PREFLIGHT_BATCH_SIZE)) {
     const patches: DownloadQueuePatch[] = [];
     const nonSharedEntries = batch.filter((entry) => !entry.shared_post_id);
@@ -178,7 +179,20 @@ async function processDraftEntries(
         continue;
       }
 
-      const resolvedRow = await resolveDraftEntry(entry, dependencies.resolveDraftRow);
+      if (draftSharingRateLimited) {
+        const rejectionPatch = markEntryRejected(entry, "could_not_share_video", rejections);
+        if (rejectionPatch) {
+          patches.push(rejectionPatch);
+        }
+        publish("sharing_drafts", "Sharing Drafts", entry.title, "Skipping draft share because Sora is rate-limiting shares.");
+        continue;
+      }
+
+      const resolution = await resolveDraftEntry(entry, dependencies.resolveDraftRow);
+      if (resolution.rate_limited) {
+        draftSharingRateLimited = true;
+      }
+      const resolvedRow = resolution.row;
       if (resolvedRow && isSharedVideoId(resolvedRow.video_id)) {
         patches.push(markEntryShared(entry, resolvedRow.video_id, selectedIdRemap, historyNoWatermarkById, resolvedRow));
         publish("sharing_drafts", "Sharing Drafts", entry.title, "Shared draft and refreshed download URLs.");
@@ -190,7 +204,7 @@ async function processDraftEntries(
         publish("sharing_drafts", "Sharing Drafts", entry.title, "Using watermarked fallback because sharing failed.");
       }
 
-      if (!entry.shared_post_id && nonSharedEntries.indexOf(entry) < nonSharedEntries.length - 1) {
+      if (!draftSharingRateLimited && !entry.shared_post_id && nonSharedEntries.indexOf(entry) < nonSharedEntries.length - 1) {
         await dependencies.sleep(DRAFT_RESOLUTION_SAFE_DELAY_MS);
       }
     }
@@ -260,15 +274,21 @@ async function processSharedEntries(
 async function resolveDraftEntry(
   entry: PreflightQueueEntry,
   resolveDraftRow: (row: VideoRow) => Promise<VideoRow | null>
-): Promise<VideoRow | null> {
+): Promise<{ rate_limited: boolean; row: VideoRow | null }> {
   try {
-    return await resolveDraftRow(entry.row);
+    return {
+      rate_limited: false,
+      row: await resolveDraftRow(entry.row)
+    };
   } catch (error) {
     logger.warn("draft sharing failed", {
       video_id: entry.current_id,
       error: getUnknownErrorMessage(error)
     });
-    return null;
+    return {
+      rate_limited: isDraftShareRateLimitError(error),
+      row: null
+    };
   }
 }
 
@@ -533,6 +553,9 @@ async function resolveDraftRowForDownload(
         detail_url: row.detail_url || undefined,
         row_payload: rowPayload || undefined
       });
+      if (response.payload.skip_reason === "share_rate_limited") {
+        throw new Error("Draft share creation failed with status 429. Request: POST /backend/project_y/post.");
+      }
       const resolvedVideoId = response.payload.video_id.trim();
       if (!resolvedVideoId) {
         return null;
@@ -556,6 +579,16 @@ async function resolveDraftRowForDownload(
       };
     } catch (error) {
       const isLastAttempt = attempt >= DRAFT_RESOLUTION_MAX_RETRIES - 1;
+      if (isDraftShareRateLimitError(error)) {
+        logger.warn("draft reference resolution rate-limited during preflight", {
+          row_id: row.row_id,
+          source: row.source_type,
+          generation_id: generationId,
+          attempt: attempt + 1,
+          error: getUnknownErrorMessage(error)
+        });
+        throw error;
+      }
       if (!isRetryableDraftResolutionError(error) || isLastAttempt) {
         logger.warn("draft reference resolution failed during preflight", {
           row_id: row.row_id,
@@ -719,6 +752,15 @@ function isRetryableDraftResolutionError(error: unknown): boolean {
     message.includes("status 502") ||
     message.includes("status 503") ||
     message.includes("status 504")
+  );
+}
+
+function isDraftShareRateLimitError(error: unknown): boolean {
+  const message = getUnknownErrorMessage(error).toLowerCase();
+  return (
+    message.includes("share_rate_limited") ||
+    (message.includes("draft share") && message.includes("status 429")) ||
+    (message.includes("post /backend/project_y/post") && message.includes("status 429"))
   );
 }
 

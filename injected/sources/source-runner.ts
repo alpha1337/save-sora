@@ -31,8 +31,9 @@ import {
   filterRowsByTimeWindow,
   reachedOlderThanSinceBoundary
 } from "./fetch-batch-filters";
-const DRAFT_SHARE_POST_BASE_RETRY_DELAY_MS = 500;
-const DRAFT_SHARE_POST_MAX_RETRY_DELAY_MS = 20000;
+const DRAFT_SHARE_POST_BASE_RETRY_DELAY_MS = 3000;
+const DRAFT_SHARE_POST_MAX_RETRY_DELAY_MS = 30000;
+const DRAFT_SHARE_POST_MAX_ATTEMPTS = 2;
 const DRAFT_RESOLUTION_LOG_PREFIX = "[Save Sora][Draft Resolve]";
 const SAVEV_API_ORIGIN = "https://crx-api.savev.co";
 const SAVEV_SORA_WATERMARK_UUID = "eaa665130fc1a1d2f3acc5c5265a1c00ddd9924fc6d20566___";
@@ -955,10 +956,10 @@ function resolveCharacterIdFromAppearanceRows(rows: unknown[], normalizedUsernam
 
     const postRecord = record.post && typeof record.post === "object" ? record.post as Record<string, unknown> : null;
     const cameoProfileEntries = [
-      ...(Array.isArray(record.cameo_profiles) ? record.cameo_profiles : []),
-      ...(Array.isArray(record.cameoProfiles) ? record.cameoProfiles : []),
-      ...(Array.isArray(postRecord?.cameo_profiles) ? postRecord?.cameo_profiles as unknown[] : []),
-      ...(Array.isArray(postRecord?.cameoProfiles) ? postRecord?.cameoProfiles as unknown[] : [])
+      ...asUnknownArray(record.cameo_profiles),
+      ...asUnknownArray(record.cameoProfiles),
+      ...asUnknownArray(postRecord?.cameo_profiles),
+      ...asUnknownArray(postRecord?.cameoProfiles)
     ];
 
     let fallbackCharacterId = "";
@@ -1209,11 +1210,25 @@ async function resolveDraftReference(request: { generation_id: string; detail_ur
       skip_reason: skipReason
     };
   }
-  const createdReference = await createSharedDraftReference(workingRow, request.generation_id).catch(() => null);
+  let createdReference: DraftShareReference | null = null;
+  let skipReason = "unresolved_draft_video_id";
+  try {
+    createdReference = await createSharedDraftReference(workingRow, request.generation_id);
+  } catch (error) {
+    const errorMessage = getUnknownErrorMessage(error);
+    skipReason = isDraftShareRateLimitErrorMessage(errorMessage)
+      ? "share_rate_limited"
+      : "unresolved_draft_video_id";
+    logDraftResolutionStep("resolve-draft-reference failed", {
+      generation_id: request.generation_id,
+      error: errorMessage,
+      skip_reason: skipReason
+    });
+  }
   logDraftResolutionStep("resolve-draft-reference completed", {
     generation_id: request.generation_id,
     resolved_video_id: createdReference?.video_id ?? "",
-    skip_reason: createdReference?.video_id ? "" : "unresolved_draft_video_id"
+    skip_reason: createdReference?.video_id ? "" : skipReason
   });
   return {
     generation_id: request.generation_id,
@@ -1223,7 +1238,7 @@ async function resolveDraftReference(request: { generation_id: string; detail_ur
     download_url: createdReference?.download_url ?? "",
     thumbnail_url: createdReference?.thumbnail_url ?? "",
     estimated_size_bytes: createdReference?.estimated_size_bytes ?? null,
-    skip_reason: createdReference?.video_id ? "" : "unresolved_draft_video_id"
+    skip_reason: createdReference?.video_id ? "" : skipReason
   };
 }
 async function buildFetchEndpointCandidates(
@@ -1491,10 +1506,15 @@ async function createSharedDraftReference(row: Record<string, unknown>, generati
     logDraftResolutionStep("Share-link POST response missing s_* id", {
       generation_id: generationId
     });
-  } catch (_error) {
+  } catch (error) {
+    const errorMessage = getUnknownErrorMessage(error);
     logDraftResolutionStep("Share-link POST failed", {
-      generation_id: generationId
+      generation_id: generationId,
+      error: errorMessage
     });
+    if (isDraftShareRateLimitErrorMessage(errorMessage)) {
+      throw error;
+    }
     // Fail closed: the fetch controller will keep retrying unresolved drafts.
   }
 
@@ -1514,8 +1534,7 @@ async function fetchJsonWithMethod(url: string, method: "POST", jsonBody: unknow
     "oai-language": auth.language,
     ...(auth.deviceId ? { "oai-device-id": auth.deviceId } : {})
   };
-  let attempt = 0;
-  for (;;) {
+  for (let attempt = 0; attempt < DRAFT_SHARE_POST_MAX_ATTEMPTS; attempt += 1) {
     logDraftResolutionStep("Share POST attempt", {
       generation_id: generationId,
       request_url: requestUrl,
@@ -1535,8 +1554,25 @@ async function fetchJsonWithMethod(url: string, method: "POST", jsonBody: unknow
       });
       return response.json();
     }
+    if (response.status === 429) {
+      logDraftResolutionStep("Share POST rate-limited", {
+        generation_id: generationId,
+        status: response.status,
+        attempt: attempt + 1
+      });
+      throw new Error(`Draft share creation failed with status ${response.status}. Request: POST /backend/project_y/post.`);
+    }
+    const isLastAttempt = attempt >= DRAFT_SHARE_POST_MAX_ATTEMPTS - 1;
     if (!isRetriableSoraStatus(response.status)) {
       logDraftResolutionStep("Share POST non-retriable failure", {
+        generation_id: generationId,
+        status: response.status,
+        attempt: attempt + 1
+      });
+      throw new Error(`Draft share creation failed with status ${response.status}. Request: POST /backend/project_y/post.`);
+    }
+    if (isLastAttempt) {
+      logDraftResolutionStep("Share POST retries exhausted", {
         generation_id: generationId,
         status: response.status,
         attempt: attempt + 1
@@ -1551,8 +1587,8 @@ async function fetchJsonWithMethod(url: string, method: "POST", jsonBody: unknow
       retry_delay_ms: retryDelayMs
     });
     await sleepWithJitter(retryDelayMs);
-    attempt += 1;
   }
+  throw new Error("Draft share creation failed after retry budget. Request: POST /backend/project_y/post.");
 }
 
 function resolveShareRequestGenerationId(jsonBody: unknown): string {
@@ -1688,6 +1724,24 @@ function resolveDraftShareRetryDelayMs(attempt: number): number {
     DRAFT_SHARE_POST_BASE_RETRY_DELAY_MS * Math.pow(2, Math.min(8, attempt))
   );
   return Math.max(DRAFT_SHARE_POST_BASE_RETRY_DELAY_MS, exponential);
+}
+function isDraftShareRateLimitErrorMessage(message: string): boolean {
+  const normalizedMessage = message.toLowerCase();
+  return normalizedMessage.includes("draft share") &&
+    normalizedMessage.includes("status 429") &&
+    normalizedMessage.includes("/backend/project_y/post");
+}
+function getUnknownErrorMessage(error: unknown): string {
+  if (error instanceof Error && error.message.trim()) {
+    return error.message.trim();
+  }
+  if (typeof error === "string" && error.trim()) {
+    return error.trim();
+  }
+  return "Unknown error";
+}
+function asUnknownArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
 }
 function isDraftSource(source: FetchBatchRequest["source"]): boolean {
   return source === "drafts" || source === "characterDrafts" || source === "characterAccountDrafts";
