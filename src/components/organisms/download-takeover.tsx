@@ -21,6 +21,7 @@ const TAKEOVER_MESSAGES = [
   "Finalizing archives for reliable extraction"
 ] as const;
 
+const MAX_TAKEOVER_TITLE_LENGTH = 50;
 const MAX_REJECTION_TEXT_LENGTH = 100;
 
 export function DownloadTakeover({
@@ -83,6 +84,7 @@ export function DownloadTakeover({
 
   const isComplete = downloadProgress.zip_completed;
   const stageLabel = downloadProgress.preflight_stage_label || (isComplete ? "Summary" : "Archive");
+  const takeoverTitle = downloadProgress.active_label || "Preparing archive workflow…";
 
   if (!visible) {
     return null;
@@ -98,7 +100,9 @@ export function DownloadTakeover({
           <div className="ss-download-takeover-title-wrap">
             <span className="ss-download-takeover-icon"><HardDriveDownload size={20} /></span>
             <div>
-              <h2 className="ss-download-takeover-title">{downloadProgress.active_label || "Preparing archive workflow…"}</h2>
+              <h2 className="ss-download-takeover-title" title={takeoverTitle}>
+                {truncateText(takeoverTitle, MAX_TAKEOVER_TITLE_LENGTH)}
+              </h2>
             </div>
           </div>
           <div className="ss-download-takeover-stage">
@@ -150,8 +154,8 @@ export function DownloadTakeover({
             <div className="ss-download-takeover-rejection-list" role="list">
               {downloadProgress.rejection_entries.map((entry) => (
                 <div className="ss-download-takeover-rejection" key={`${entry.id}:${entry.reason}`} role="listitem">
-                  <span title={entry.title}>{truncateRejectionText(entry.title)}</span>
-                  <code title={entry.reason}>{truncateRejectionText(entry.reason)}</code>
+                  <span title={entry.title}>{truncateText(entry.title, MAX_REJECTION_TEXT_LENGTH)}</span>
+                  <code title={entry.reason}>{truncateText(entry.reason, MAX_REJECTION_TEXT_LENGTH)}</code>
                 </div>
               ))}
             </div>
@@ -195,8 +199,8 @@ export function DownloadTakeover({
             )}
             {downloadProgress.rejection_entries.map((entry) => (
               <div className="ss-download-takeover-worker" key={`detail:${entry.id}:${entry.reason}`}>
-                <strong title={entry.title}>{truncateRejectionText(entry.title)}</strong>
-                <span title={`${entry.id} · ${entry.reason}`}>{truncateRejectionText(`${entry.id} · ${entry.reason}`)}</span>
+                <strong title={entry.title}>{truncateText(entry.title, MAX_REJECTION_TEXT_LENGTH)}</strong>
+                <span title={`${entry.id} · ${entry.reason}`}>{truncateText(`${entry.id} · ${entry.reason}`, MAX_REJECTION_TEXT_LENGTH)}</span>
               </div>
             ))}
           </div>
@@ -206,10 +210,10 @@ export function DownloadTakeover({
   );
 }
 
-function truncateRejectionText(value: string): string {
-  if (value.length <= MAX_REJECTION_TEXT_LENGTH) {
+function truncateText(value: string, maxLength: number): string {
+  if (value.length <= maxLength) {
     return value;
   }
 
-  return `${value.slice(0, MAX_REJECTION_TEXT_LENGTH - 3)}...`;
+  return `${value.slice(0, maxLength - 3)}...`;
 }

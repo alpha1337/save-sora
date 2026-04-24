@@ -81,6 +81,25 @@ describe("DownloadTakeover", () => {
     expect(screen.getAllByText("could_not_share_video").length).toBeGreaterThan(0);
   });
 
+  it("truncates long takeover titles to 50 characters", () => {
+    const longTitle = "Archive Ready".repeat(6);
+    const expectedTitle = `${longTitle.slice(0, 47)}...`;
+
+    render(
+      <DownloadTakeover
+        downloadProgress={createProgress({ active_label: longTitle })}
+        onCloseSummary={vi.fn()}
+        onStartOver={vi.fn()}
+        selectedBytes={1024}
+        visible
+      />
+    );
+
+    expect(screen.getByRole("heading", { name: expectedTitle })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: longTitle })).not.toBeInTheDocument();
+    expect(screen.getByTitle(longTitle)).toBeInTheDocument();
+  });
+
   it("truncates long rejection text to 100 characters", () => {
     const longTitle = "Failed Draft".repeat(10);
     const expectedTitle = `${longTitle.slice(0, 97)}...`;
