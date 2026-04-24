@@ -173,6 +173,39 @@ describe("ResultsPanel", () => {
     expect(toolbar?.lastElementChild).toHaveAttribute("name", "results-search");
   });
 
+  it("shows a custom selection label when only some visible rows are selected", () => {
+    render(
+      <ResultsPanel
+        allVisibleSelected={false}
+        downloadableRowCount={2}
+        downloadProgress={emptyDownloadProgress}
+        fetchProgress={emptyFetchProgress}
+        hasQuery={false}
+        groupBy="none"
+        phase="ready"
+        onDownload={vi.fn()}
+        onSelectionPresetChange={vi.fn()}
+        onGroupByChange={vi.fn()}
+        onQueryChange={vi.fn()}
+        onSetSelectedVideoIds={vi.fn()}
+        onSortKeyChange={vi.fn()}
+        onToggleSelectedVideoId={vi.fn()}
+        query=""
+        rows={[baseRow]}
+        selectableRowCount={2}
+        selectedDownloadableRowCount={1}
+        selectedBytes={1024}
+        selectedVideoIds={["s_123"]}
+        selectedVisibleRowCount={1}
+        sortKey="published_newest"
+        totalRowCount={2}
+      />
+    );
+
+    expect(screen.getByText("Custom selection")).toBeInTheDocument();
+    expect(screen.queryByText("Select all videos")).not.toBeInTheDocument();
+  });
+
   it("surfaces total session counts separately from filtered results", () => {
     render(
       <ResultsPanel

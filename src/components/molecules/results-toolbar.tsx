@@ -5,6 +5,8 @@ import { Select } from "@components/atoms/select";
 
 type SortField = "published" | "created" | "title" | "views" | "likes" | "remixes";
 type SortDirection = "asc" | "desc";
+type SelectionPreset = "all_visible" | "mine" | "others" | "none";
+type SelectionDisplayValue = SelectionPreset | "custom";
 
 interface ResultsToolbarProps {
   allVisibleSelected: boolean;
@@ -14,7 +16,7 @@ interface ResultsToolbarProps {
   hideDownloadedVideos: boolean;
   sortKey: VideoSortOption;
   groupBy: GroupByOption;
-  onSelectionPresetChange: (preset: "all_visible" | "mine" | "others" | "none") => void;
+  onSelectionPresetChange: (preset: SelectionPreset) => void;
   onHideDownloadedVideosChange: (value: boolean) => void;
   onQueryChange: (value: string) => void;
   onSortKeyChange: (value: VideoSortOption) => void;
@@ -38,20 +40,20 @@ export function ResultsToolbar({
   sortKey,
   groupBy
 }: ResultsToolbarProps) {
-  const [selectionPreset, setSelectionPreset] = useState<"all_visible" | "mine" | "others" | "none">(
-    allVisibleSelected ? "all_visible" : "none"
+  const [selectionPreset, setSelectionPreset] = useState<SelectionDisplayValue>(
+    resolveSelectionPreset(allVisibleSelected, selectedVisibleRowCount)
   );
   const { direction, field } = getSortControls(sortKey);
+  const selectionOptions = [
+    ...(selectionPreset === "custom" ? [{ label: "Custom selection", value: "custom" }] : []),
+    { label: "Select all videos", value: "all_visible" },
+    { label: "Videos made by you", value: "mine" },
+    { label: "Videos made by others", value: "others" },
+    { label: "Select none", value: "none" }
+  ];
 
   useEffect(() => {
-    if (allVisibleSelected) {
-      setSelectionPreset("all_visible");
-      return;
-    }
-
-    if (selectedVisibleRowCount === 0) {
-      setSelectionPreset("none");
-    }
+    setSelectionPreset(resolveSelectionPreset(allVisibleSelected, selectedVisibleRowCount));
   }, [allVisibleSelected, selectedVisibleRowCount]);
 
   return (
@@ -62,16 +64,14 @@ export function ResultsToolbar({
           aria-label="Selection preset"
           disabled={selectableRowCount === 0}
           onValueChange={(value) => {
-            const preset = value as "all_visible" | "mine" | "others" | "none";
+            if (value === "custom") {
+              return;
+            }
+            const preset = value as SelectionPreset;
             setSelectionPreset(preset);
             onSelectionPresetChange(preset);
           }}
-          options={[
-            { label: "Select all videos", value: "all_visible" },
-            { label: "Videos made by you", value: "mine" },
-            { label: "Videos made by others", value: "others" },
-            { label: "Select none", value: "none" }
-          ]}
+          options={selectionOptions}
           value={selectionPreset}
         />
       </div>
@@ -139,6 +139,13 @@ export function ResultsToolbar({
       />
     </div>
   );
+}
+
+function resolveSelectionPreset(allVisibleSelected: boolean, selectedVisibleRowCount: number): SelectionDisplayValue {
+  if (allVisibleSelected) {
+    return "all_visible";
+  }
+  return selectedVisibleRowCount === 0 ? "none" : "custom";
 }
 
 function getSortControls(sortKey: VideoSortOption): { field: SortField; direction: SortDirection } {

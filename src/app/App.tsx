@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { RefreshCcw, Trash2 } from "lucide-react";
 import DatePicker from "react-datepicker";
 import { useAppStore } from "@app/store/use-app-store";
-import { selectFilteredVideoRows } from "@app/store/selectors";
+import { selectFilteredVideoRows, selectVisibleDownloadableVideoIds } from "@app/store/selectors";
 import { bootstrapAppState } from "@app/controllers/bootstrap-controller";
 import { closeDownloadSummary, downloadSelectedRows, startOverDownloadSummary } from "@app/controllers/download-controller";
 import { clearDownloadHistoryFromSettings, clearFetchCacheFromSettings, updateSettings } from "@app/controllers/settings-controller";
@@ -328,7 +328,11 @@ export function App() {
       return;
     }
 
-    const defaultSelectionIds = downloadableVideoIds.filter((videoId) => !state.download_history_ids.includes(videoId));
+    const defaultSelectionIds = resolveDefaultDownloadSelectionIds(
+      downloadableVideoIds,
+      state.download_history_ids,
+      state.session_meta.hide_downloaded_videos === true
+    );
     if (defaultSelectionIds.length === 0) {
       return;
     }
@@ -367,7 +371,11 @@ export function App() {
 
   async function handleDownload(): Promise<void> {
     try {
-      const defaultSelectionIds = downloadableVideoIds.filter((videoId) => !state.download_history_ids.includes(videoId));
+      const defaultSelectionIds = resolveDefaultDownloadSelectionIds(
+        downloadableVideoIds,
+        state.download_history_ids,
+        state.session_meta.hide_downloaded_videos === true
+      );
       if (selectedDownloadableRowCount === 0 && defaultSelectionIds.length > 0) {
         state.setSelectedVideoIds([...new Set([...state.selected_video_ids, ...defaultSelectionIds])]);
       }
@@ -441,6 +449,25 @@ export function App() {
     }
 
     handleSetSelectedVideoIds(hiddenSelectedIds);
+  }
+
+  function handleHideDownloadedVideosChange(value: boolean): void {
+    state.setFilters({ hide_downloaded_videos: value });
+    if (value || !autoSelectAllDownloadableRef.current) {
+      return;
+    }
+
+    const nextVisibleIds = selectVisibleDownloadableVideoIds({
+      ...state,
+      session_meta: {
+        ...state.session_meta,
+        hide_downloaded_videos: false
+      }
+    });
+    if (nextVisibleIds.length === 0) {
+      return;
+    }
+    state.setSelectedVideoIds([...new Set([...state.selected_video_ids, ...nextVisibleIds])]);
   }
 
   function handleToggleSource(source: TopLevelSourceType, checked: boolean): void {
@@ -737,7 +764,7 @@ export function App() {
           onToggleSidebar={() => setSidebarCollapsed((current) => !current)}
           onSelectionPresetChange={handleSelectionPresetChange}
           onQueryChange={(value) => state.setFilters({ query: value })}
-          onHideDownloadedVideosChange={(value) => state.setFilters({ hide_downloaded_videos: value })}
+          onHideDownloadedVideosChange={handleHideDownloadedVideosChange}
           onSortKeyChange={(value) => state.setFilters({ sort_key: value })}
           onGroupByChange={(value) => state.setFilters({ group_by: value })}
           hideDownloadedVideos={state.session_meta.hide_downloaded_videos === true}
@@ -967,4 +994,16 @@ export function App() {
       />
     </>
   );
+}
+
+function resolveDefaultDownloadSelectionIds(
+  downloadableVideoIds: string[],
+  downloadHistoryIds: string[],
+  hideDownloadedVideos: boolean
+): string[] {
+  if (!hideDownloadedVideos) {
+    return downloadableVideoIds;
+  }
+  const downloadedIdSet = new Set(downloadHistoryIds);
+  return downloadableVideoIds.filter((videoId) => !downloadedIdSet.has(videoId));
 }
