@@ -81,6 +81,12 @@ describe("remove-watermark utility", () => {
     await expect(getKontenAiMp4WatermarkSource("s_missing_source")).resolves.toBeNull();
   });
 
+  it("returns null without throwing for terminal KontenAI miss statuses", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("", { status: 422 })));
+
+    await expect(getKontenAiMp4WatermarkSource("s_unavailable_source")).resolves.toBeNull();
+  });
+
   it("returns null when queryTask has not produced a URL yet", async () => {
     vi.mocked(sendBackgroundRequest).mockResolvedValueOnce({ ok: true, payload: null });
 

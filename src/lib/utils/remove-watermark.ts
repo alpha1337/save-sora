@@ -88,11 +88,18 @@ export async function getKontenAiMp4WatermarkSource(video_id: string): Promise<s
     }
   });
   if (!response.ok) {
+    if (isTerminalKontenAiStatus(response.status)) {
+      return null;
+    }
     throw new Error(`KontenAI links endpoint failed with status ${response.status}.`);
   }
 
   const payload = (await response.json()) as KontenAiLinksResponse;
   return normalizeOpenAiVideoUrl(payload.links?.mp4_wm_source);
+}
+
+function isTerminalKontenAiStatus(status: number): boolean {
+  return status === 400 || status === 401 || status === 403 || status === 404 || status === 410 || status === 422;
 }
 
 function normalizeOpenAiVideoUrl(value: unknown): string | null {

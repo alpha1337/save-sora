@@ -27,6 +27,7 @@ const DRAFT_RESOLUTION_MAX_RETRIES = 4;
 const WATERMARK_BACKOFF_MS = [600, 1200, 2400] as const;
 const GENERATION_ID_PATTERN = /^gen_[A-Za-z0-9_-]+$/i;
 const SHARED_VIDEO_ID_PATTERN = /^s_[A-Za-z0-9_-]+$/i;
+const RUN_REJECTED_WATERMARK_IDS = new Set<string>();
 
 interface PreflightQueueEntry {
   current_id: string;
@@ -412,16 +413,22 @@ async function resolveNoWatermarkWithRetry(
   videoId: string,
   dependencies: Required<Pick<DownloadPreflightOptions, "getJitterMs" | "removeWatermark" | "sleep">>
 ): Promise<string | null> {
+  if (RUN_REJECTED_WATERMARK_IDS.has(videoId)) {
+    return null;
+  }
+
   for (let attempt = 0; attempt <= WATERMARK_BACKOFF_MS.length; attempt += 1) {
     try {
       const resolvedUrl = normalizeOptionalUrl(await dependencies.removeWatermark(videoId));
       if (resolvedUrl) {
         return resolvedUrl;
       }
+      RUN_REJECTED_WATERMARK_IDS.add(videoId);
       return null;
     } catch (error) {
       const isLastAttempt = attempt >= WATERMARK_BACKOFF_MS.length;
       if (isLastAttempt) {
+        RUN_REJECTED_WATERMARK_IDS.add(videoId);
         logger.warn("watermark removal failed", {
           video_id: videoId,
           error: getUnknownErrorMessage(error)
