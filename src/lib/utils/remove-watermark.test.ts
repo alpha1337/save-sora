@@ -17,33 +17,19 @@ describe("remove-watermark utility", () => {
     vi.unstubAllGlobals();
   });
 
-  it("uses the KontenAI links endpoint and returns links.mp4_wm_source", async () => {
+  it("asks the background worker for the KontenAI mp4_wm_source", async () => {
     const videoId = "s_69e81416de6c8191a0fd3ee91461499c";
     const expectedUrl = "https://videos.openai.com/az/files/00000000-539c-7284-80ec-07117587445a%2Fraw?se=2026-04-30T03%3A00%3A00Z";
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
-      links: {
-        mp4_wm_source: expectedUrl,
-        mp4: "https://videos-us3.ss2.life/az/files/no-watermark/raw"
-      }
-    }), {
-      headers: { "content-type": "application/json" },
-      status: 200
-    }));
-    vi.stubGlobal("fetch", fetchMock);
+
+    vi.mocked(sendBackgroundRequest).mockResolvedValueOnce({ ok: true, payload: expectedUrl });
 
     const result = await removeWatermark(videoId);
 
     expect(result).toBe(expectedUrl);
-    expect(fetchMock).toHaveBeenCalledWith(
-      "https://api.dyysy.com/links20260207/https%3A%2F%2Fsora.chatgpt.com%2Fp%2Fs_69e81416de6c8191a0fd3ee91461499c",
-      {
-        cache: "no-store",
-        headers: {
-          accept: "application/json"
-        }
-      }
-    );
-    expect(sendBackgroundRequest).not.toHaveBeenCalled();
+    expect(sendBackgroundRequest).toHaveBeenCalledWith({
+      type: "resolve-kontenai-links",
+      video_id: videoId
+    });
   });
 
   it("keeps legacy getSoraWatermarkTask -> getSoraWatermarkFreeVideo contract available", async () => {
@@ -68,21 +54,14 @@ describe("remove-watermark utility", () => {
     });
   });
 
-  it("returns null when the KontenAI endpoint has no mp4_wm_source", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
-      links: {
-        mp4: "https://videos-us3.ss2.life/az/files/no-watermark/raw"
-      }
-    }), {
-      headers: { "content-type": "application/json" },
-      status: 200
-    })));
+  it("returns null when the background worker has no KontenAI mp4_wm_source", async () => {
+    vi.mocked(sendBackgroundRequest).mockResolvedValueOnce({ ok: true, payload: null });
 
     await expect(getKontenAiMp4WatermarkSource("s_missing_source")).resolves.toBeNull();
   });
 
-  it("returns null without throwing for terminal KontenAI miss statuses", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => new Response("", { status: 422 })));
+  it("returns null without throwing for quiet background KontenAI misses", async () => {
+    vi.mocked(sendBackgroundRequest).mockResolvedValueOnce({ ok: true, payload: null });
 
     await expect(getKontenAiMp4WatermarkSource("s_unavailable_source")).resolves.toBeNull();
   });

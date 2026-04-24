@@ -116,6 +116,16 @@ export interface GetSoraWatermarkFreeVideoResponse {
   payload: string | null;
 }
 
+export interface ResolveKontenAiLinksRequest {
+  type: "resolve-kontenai-links";
+  video_id: string;
+}
+
+export interface ResolveKontenAiLinksResponse {
+  ok: true;
+  payload: string | null;
+}
+
 export interface FetchCharacterAccountsRequest {
   type: "fetch-character-accounts";
   cursor?: string | null;
@@ -166,6 +176,7 @@ export type BackgroundRequest =
   | ResolveDraftReferenceRequest
   | GetSoraWatermarkTaskRequest
   | GetSoraWatermarkFreeVideoRequest
+  | ResolveKontenAiLinksRequest
   | FetchCharacterAccountsRequest
   | FetchDetailHtmlRequest
   | CleanupHiddenWorkersRequest;
@@ -178,6 +189,7 @@ export type BackgroundResponse =
   | ResolveDraftReferenceResponse
   | GetSoraWatermarkTaskResponse
   | GetSoraWatermarkFreeVideoResponse
+  | ResolveKontenAiLinksResponse
   | FetchCharacterAccountsResponse
   | FetchDetailHtmlResponse
   | CleanupHiddenWorkersResponse;

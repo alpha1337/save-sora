@@ -12,6 +12,7 @@ import type {
   ResolveViewerIdentityResponse
 } from "../src/types/background";
 import { cleanupTrackedHiddenWorkers, HiddenTabPool } from "./hidden-tab-pool";
+import { resolveKontenAiLinks } from "./kontenai-links";
 
 const pool = new HiddenTabPool(3);
 const APP_URL = chrome.runtime.getURL("app.html");
@@ -85,6 +86,11 @@ async function handleRequest(request: BackgroundRequest): Promise<BackgroundResp
       return {
         ok: true,
         payload: await runContentScriptRequest<GetSoraWatermarkFreeVideoResponse["payload"]>(request)
+      };
+    case "resolve-kontenai-links":
+      return {
+        ok: true,
+        payload: await resolveKontenAiLinks(request.video_id)
       };
     case "fetch-character-accounts":
       return {
