@@ -48,6 +48,7 @@ describe("DownloadTakeover", () => {
     expect(screen.getByRole("status")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Archive Ready" })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Building Your Archive" })).not.toBeInTheDocument();
+    expect(screen.getByText("Archive build complete. 2 of 2 files were packaged; review any rejections before closing.")).toHaveClass("ss-download-takeover-message");
     expect(screen.getByRole("button", { name: "Close Summary" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Start Over" })).toBeInTheDocument();
   });
@@ -103,6 +104,7 @@ describe("DownloadTakeover", () => {
 
     expect(screen.getByRole("heading", { name: "Current Queue Video" })).toBeInTheDocument();
     expect(screen.getByText("Phase 3 of 5: Resolving the best available source URL.")).toHaveClass("ss-download-takeover-subtitle");
+    expect(screen.getByText("Resolving source URLs before packaging. 2 of 2 files are ready for ZIP handoff.")).toHaveClass("ss-download-takeover-message");
   });
 
   it("shows active ZIP progress before the first file completes", () => {
@@ -133,6 +135,7 @@ describe("DownloadTakeover", () => {
     expect(screen.getByText("Part 1 / 3: 0 / 165 files")).toBeInTheDocument();
     expect(screen.getByText("0 / 495 total packaged")).toBeInTheDocument();
     expect(screen.getByText("Phase 5 of 5: Starting ZIP worker for part 1/3.")).toBeInTheDocument();
+    expect(screen.getByText("Packaging ZIP part 1 of 3: 0 of 165 files downloaded for this part.")).toHaveClass("ss-download-takeover-message");
   });
 
   it("truncates long takeover titles to 40 characters", () => {

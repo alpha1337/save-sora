@@ -13,14 +13,6 @@ interface DownloadTakeoverProps {
   visible: boolean;
 }
 
-const TAKEOVER_MESSAGES = [
-  "Resolving archive sources",
-  "Validating each file before packaging",
-  "Streaming files into your download set",
-  "Building folders and preserving order",
-  "Finalizing archives for reliable extraction"
-] as const;
-
 const MAX_TAKEOVER_TITLE_LENGTH = 40;
 const MAX_REJECTION_TEXT_LENGTH = 100;
 const TOTAL_TAKEOVER_PHASES = 5;
@@ -43,7 +35,6 @@ export function DownloadTakeover({
   visible
 }: DownloadTakeoverProps) {
   const [showDetails, setShowDetails] = useState(false);
-  const [messageIndex, setMessageIndex] = useState(0);
 
   useEffect(() => {
     if (!visible) {
@@ -55,18 +46,6 @@ export function DownloadTakeover({
 
     return () => {
       document.body.style.overflow = previousBodyOverflow;
-    };
-  }, [visible]);
-
-  useEffect(() => {
-    if (!visible) {
-      return;
-    }
-    const interval = window.setInterval(() => {
-      setMessageIndex((current) => (current + 1) % TAKEOVER_MESSAGES.length);
-    }, 3200);
-    return () => {
-      window.clearInterval(interval);
     };
   }, [visible]);
 
@@ -117,6 +96,7 @@ export function DownloadTakeover({
     downloadProgress.preflight_stage,
     downloadProgress.active_subtitle
   );
+  const takeoverMessage = formatTakeoverMessage(downloadProgress);
   const isZipStage = downloadProgress.preflight_stage === "zipping" && !downloadProgress.zip_completed;
 
   if (!visible) {
@@ -165,8 +145,8 @@ export function DownloadTakeover({
           </div>
         )}
 
-        <div className="ss-download-takeover-message" key={messageIndex}>
-          {TAKEOVER_MESSAGES[messageIndex]}
+        <div className="ss-download-takeover-message">
+          {takeoverMessage}
         </div>
 
         {downloadProgress.swimlanes.length > 0 ? (
@@ -269,6 +249,39 @@ function formatTakeoverSubtitle(stage: DownloadPreflightStage, subtitle: string)
   }
 
   return `Phase ${TAKEOVER_PHASE_BY_STAGE[stage]} of ${TOTAL_TAKEOVER_PHASES}: ${normalizedSubtitle}`;
+}
+
+function formatTakeoverMessage(downloadProgress: DownloadProgressState): string {
+  const total = formatCount(downloadProgress.preflight_total_items || downloadProgress.total_items);
+  const preflightCompleted = formatCount(downloadProgress.preflight_completed_items);
+  const currentPart = formatCount(downloadProgress.zip_part_number);
+  const totalParts = formatCount(downloadProgress.zip_total_parts);
+  const partCompleted = formatCount(downloadProgress.zip_part_completed_items);
+  const partTotalCount = downloadProgress.zip_part_total_items || downloadProgress.total_items;
+  const partTotal = formatCount(partTotalCount);
+  const totalCompleted = formatCount(downloadProgress.completed_items);
+  const totalItems = formatCount(downloadProgress.total_items);
+
+  switch (downloadProgress.preflight_stage) {
+    case "building_queue":
+      return `Building the download queue from ${total} selected files and removing duplicate video IDs.`;
+    case "sharing_drafts":
+      return `Checking draft share status before ZIP handoff. Shared drafts move forward; failed shares keep the watermarked fallback.`;
+    case "resolving_sources":
+      return `Resolving source URLs before packaging. ${preflightCompleted} of ${total} files are ready for ZIP handoff.`;
+    case "zip_handoff":
+      return `Source selection is complete. Watermarked fallbacks and no-watermark files are assigned to their archive folders.`;
+    case "zipping":
+      if (downloadProgress.zip_total_parts > 1) {
+        return `Packaging ZIP part ${currentPart} of ${totalParts}: ${partCompleted} of ${partTotal} files downloaded for this part.`;
+      }
+      return `Packaging ZIP: ${partCompleted} of ${partTotal} files downloaded into the archive.`;
+    case "completed":
+      return `Archive build complete. ${totalCompleted} of ${totalItems} files were packaged; review any rejections before closing.`;
+    case "idle":
+    default:
+      return "Waiting for the download workflow to start.";
+  }
 }
 
 function formatZipPartLabel(downloadProgress: DownloadProgressState): string {
