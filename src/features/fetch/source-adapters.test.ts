@@ -9,7 +9,8 @@ function createState(creatorProfiles: CreatorProfile[]): AppStoreState {
     error_message: "",
     settings: {
       archive_name_template: "save-sora-library",
-      download_directory_name: ""
+      download_directory_name: "",
+      retry_failed_watermark_removals: false
     },
     session_meta: {
       active_sources: {

@@ -122,6 +122,31 @@ export function SettingsDialog({
               <div className="ss-settings-toggle-card">
                 <div className="ss-settings-toggle-row">
                   <div className="ss-settings-toggle-copy">
+                    <span className="ss-settings-toggle-label">Retry previously failed watermark removals?</span>
+                    <span
+                      className="ss-settings-toggle-status"
+                      data-state={settingsDraft.retry_failed_watermark_removals === true ? "enabled" : "disabled"}
+                    >
+                      {settingsDraft.retry_failed_watermark_removals === true ? "Enabled" : "Disabled"}
+                    </span>
+                  </div>
+                  <Switch
+                    ariaLabel="Retry previously failed watermark removals"
+                    checked={settingsDraft.retry_failed_watermark_removals === true}
+                    id="settings-retry-failed-watermark-removals"
+                    onCheckedChange={(checked) =>
+                      onSettingsDraftChange((current) => ({
+                        ...current,
+                        retry_failed_watermark_removals: checked
+                      }))
+                    }
+                  />
+                </div>
+                <p className="ss-muted">When disabled, resume skips videos that already fell back to watermarked sources.</p>
+              </div>
+              <div className="ss-settings-toggle-card">
+                <div className="ss-settings-toggle-row">
+                  <div className="ss-settings-toggle-copy">
                     <span className="ss-settings-toggle-label">Enable Database?</span>
                     <span
                       className="ss-settings-toggle-status"

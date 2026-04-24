@@ -27,7 +27,6 @@ const DRAFT_RESOLUTION_MAX_RETRIES = 4;
 const WATERMARK_BACKOFF_MS = [600, 1200, 2400] as const;
 const GENERATION_ID_PATTERN = /^gen_[A-Za-z0-9_-]+$/i;
 const SHARED_VIDEO_ID_PATTERN = /^s_[A-Za-z0-9_-]+$/i;
-const RUN_REJECTED_WATERMARK_IDS = new Set<string>();
 
 interface PreflightQueueEntry {
   current_id: string;
@@ -56,6 +55,7 @@ interface DownloadPreflightOptions {
   patchQueue?: (patches: DownloadQueuePatch[]) => Promise<DownloadQueueItem[]>;
   removeWatermark?: (videoId: string) => Promise<string | null>;
   replaceQueue?: (items: DownloadQueueItem[]) => Promise<DownloadQueueItem[]>;
+  retryPreviouslyFailedWatermarkRemovals?: boolean;
   resolveDraftRow?: (row: VideoRow) => Promise<VideoRow | null>;
   sleep?: (durationMs: number) => Promise<void>;
 }
@@ -75,7 +75,10 @@ export async function runDownloadPreflight(
     sleep
   };
   const entries = buildPreflightEntries(rows);
-  const historyNoWatermarkById = buildHistoryNoWatermarkMap(await dependencies.listDownloadHistoryRecords());
+  const historyRecords = await dependencies.listDownloadHistoryRecords();
+  const historyNoWatermarkById = buildHistoryNoWatermarkMap(historyRecords);
+  const historyFailedWatermarkIds = buildHistoryFailedWatermarkSet(historyRecords);
+  const runRejectedWatermarkIds = new Set<string>();
   for (const entry of entries) {
     applyHistoryNoWatermark(entry, historyNoWatermarkById);
   }
@@ -94,7 +97,15 @@ export async function runDownloadPreflight(
   await dependencies.replaceQueue(toQueueItems(entries));
 
   await processDraftEntries(entries, rejections, selectedIdRemap, historyNoWatermarkById, publish, dependencies);
-  await processSharedEntries(entries, rejections, publish, dependencies);
+  await processSharedEntries(
+    entries,
+    rejections,
+    historyFailedWatermarkIds,
+    options.retryPreviouslyFailedWatermarkRemovals === true,
+    runRejectedWatermarkIds,
+    publish,
+    dependencies
+  );
 
   publish("zip_handoff", "Zip Handoff", "Queue ready for ZIP handoff", "Passing resolved sources to the ZIP worker.");
   return {
@@ -193,6 +204,9 @@ async function processDraftEntries(
 async function processSharedEntries(
   entries: PreflightQueueEntry[],
   rejections: DownloadQueueRejectionEntry[],
+  historyFailedWatermarkIds: Set<string>,
+  retryPreviouslyFailedWatermarkRemovals: boolean,
+  runRejectedWatermarkIds: Set<string>,
   publish: (stage: DownloadPreflightStage, stageLabel: string, activeLabel: string, activeSubtitle: string) => void,
   dependencies: Required<Pick<DownloadPreflightOptions, "getJitterMs" | "patchQueue" | "removeWatermark" | "sleep">>
 ): Promise<void> {
@@ -209,7 +223,13 @@ async function processSharedEntries(
         return;
       }
 
-      const resolvedUrl = await resolveNoWatermarkWithRetry(entry.current_id, dependencies);
+      if (!retryPreviouslyFailedWatermarkRemovals && hasHistoryWatermarkFailure(entry, historyFailedWatermarkIds)) {
+        markEntryRejected(entry, "access_restricted", rejections);
+        publish("resolving_sources", "Resolving Sources", entry.title, "Skipping no-watermark retry because it failed previously.");
+        return;
+      }
+
+      const resolvedUrl = await resolveNoWatermarkWithRetry(entry.current_id, runRejectedWatermarkIds, dependencies);
       if (resolvedUrl) {
         entry.no_watermark = resolvedUrl;
         entry.row = {
@@ -307,6 +327,26 @@ function buildHistoryNoWatermarkMap(records: DownloadHistoryRecord[]): Map<strin
     }
   }
   return historyNoWatermarkById;
+}
+
+function buildHistoryFailedWatermarkSet(records: DownloadHistoryRecord[]): Set<string> {
+  const historyFailedWatermarkIds = new Set<string>();
+  for (const record of records) {
+    const videoId = record.video_id.trim();
+    if (videoId && record.watermark_removal_failed_at && !record.no_watermark) {
+      historyFailedWatermarkIds.add(videoId);
+    }
+  }
+  return historyFailedWatermarkIds;
+}
+
+function hasHistoryWatermarkFailure(entry: PreflightQueueEntry, historyFailedWatermarkIds: Set<string>): boolean {
+  return [
+    entry.current_id,
+    entry.effective_id,
+    entry.shared_post_id,
+    entry.original_id
+  ].some((videoId) => videoId && historyFailedWatermarkIds.has(videoId));
 }
 
 function applyHistoryNoWatermark(
@@ -411,9 +451,10 @@ function resolveQueueUrls(row: VideoRow): { watermark: string; no_watermark: str
 
 async function resolveNoWatermarkWithRetry(
   videoId: string,
+  runRejectedWatermarkIds: Set<string>,
   dependencies: Required<Pick<DownloadPreflightOptions, "getJitterMs" | "removeWatermark" | "sleep">>
 ): Promise<string | null> {
-  if (RUN_REJECTED_WATERMARK_IDS.has(videoId)) {
+  if (runRejectedWatermarkIds.has(videoId)) {
     return null;
   }
 
@@ -423,12 +464,12 @@ async function resolveNoWatermarkWithRetry(
       if (resolvedUrl) {
         return resolvedUrl;
       }
-      RUN_REJECTED_WATERMARK_IDS.add(videoId);
+      runRejectedWatermarkIds.add(videoId);
       return null;
     } catch (error) {
       const isLastAttempt = attempt >= WATERMARK_BACKOFF_MS.length;
       if (isLastAttempt) {
-        RUN_REJECTED_WATERMARK_IDS.add(videoId);
+        runRejectedWatermarkIds.add(videoId);
         logger.warn("watermark removal failed", {
           video_id: videoId,
           error: getUnknownErrorMessage(error)
@@ -556,7 +597,7 @@ function parseRowPayload(row: Pick<VideoRow, "raw_payload_json">): Record<string
     return null;
   }
   try {
-    const parsed = JSON.parse(row.raw_payload_json);
+    const parsed: unknown = JSON.parse(row.raw_payload_json);
     return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : null;
   } catch {
     return null;

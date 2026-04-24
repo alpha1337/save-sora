@@ -69,7 +69,8 @@ export async function downloadSelectedRows(): Promise<void> {
   const preflightResult = await runDownloadPreflight(targetCandidateRows, {
     onProgress: (progress) => {
       useAppStore.getState().setDownloadProgress(progress);
-    }
+    },
+    retryPreviouslyFailedWatermarkRemovals: state.settings.retry_failed_watermark_removals === true
   });
   if (preflightResult.rows.length > 0) {
     useAppStore.getState().upsertVideoRows(preflightResult.rows);
@@ -163,6 +164,12 @@ export async function downloadSelectedRows(): Promise<void> {
 
   const downloadedVideoIds = new Set<string>();
   const noWatermarkUrlByVideoId = new Map<string, string>();
+  const failedWatermarkRemovalVideoIds = new Set(
+    preflightResult.rejections
+      .filter((entry) => entry.reason === "access_restricted")
+      .map((entry) => entry.id.trim())
+      .filter(Boolean)
+  );
   for (const row of rootWorkPlan.rows) {
     const normalizedVideoId = row.video_id.trim();
     if (!normalizedVideoId) {
@@ -175,7 +182,9 @@ export async function downloadSelectedRows(): Promise<void> {
   }
 
   for (const videoId of downloadedVideoIds) {
-    await appendDownloadHistoryRecord(videoId, noWatermarkUrlByVideoId.get(videoId) ?? null);
+    await appendDownloadHistoryRecord(videoId, noWatermarkUrlByVideoId.get(videoId) ?? null, {
+      watermarkRemovalFailed: failedWatermarkRemovalVideoIds.has(videoId)
+    });
     state.appendDownloadHistoryId(videoId);
   }
 

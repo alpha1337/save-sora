@@ -5,6 +5,7 @@ const SETTINGS_KEY = "settings";
 const DEFAULT_SETTINGS: AppSettings = {
   archive_name_template: "save-sora-library",
   download_directory_name: "",
+  retry_failed_watermark_removals: false,
   enable_fetch_resume: false,
   remember_fetch_date_choice: false,
   remembered_date_range_preset: "all",
@@ -345,6 +346,7 @@ function normalizeSettings(input: Partial<AppSettings>): AppSettings {
   return {
     archive_name_template: archiveNameTemplate,
     download_directory_name: downloadDirectoryName,
+    retry_failed_watermark_removals: input.retry_failed_watermark_removals === true,
     enable_fetch_resume: input.enable_fetch_resume === true,
     remember_fetch_date_choice: input.remember_fetch_date_choice === true,
     remembered_date_range_preset: rememberedDateRangePreset,

@@ -44,12 +44,12 @@ function createRow(overrides: Partial<VideoRow> = {}): VideoRow {
 
 function createPersistence() {
   let queue: DownloadQueueItem[] = [];
-  const listDownloadHistoryRecords = vi.fn(async (): Promise<DownloadHistoryRecord[]> => []);
-  const replaceQueue = vi.fn(async (items: DownloadQueueItem[]) => {
+  const listDownloadHistoryRecords = vi.fn((): Promise<DownloadHistoryRecord[]> => Promise.resolve([]));
+  const replaceQueue = vi.fn((items: DownloadQueueItem[]) => {
     queue = items;
-    return queue;
+    return Promise.resolve(queue);
   });
-  const patchQueue = vi.fn(async (patches: Array<{ current_id: string; id?: string; no_watermark?: string | null; watermark?: string }>) => {
+  const patchQueue = vi.fn((patches: Array<{ current_id: string; id?: string; no_watermark?: string | null; watermark?: string }>) => {
     queue = queue.map((entry) => {
       const patch = patches.find((candidate) => candidate.current_id === entry.id);
       if (!patch) {
@@ -61,9 +61,13 @@ function createPersistence() {
         no_watermark: patch.no_watermark === undefined ? entry.no_watermark : patch.no_watermark
       };
     });
-    return queue;
+    return Promise.resolve(queue);
   });
   return { listDownloadHistoryRecords, patchQueue, replaceQueue };
+}
+
+function sleepNow(): Promise<void> {
+  return Promise.resolve();
 }
 
 describe("download preflight", () => {
@@ -72,13 +76,13 @@ describe("download preflight", () => {
     const result = await runDownloadPreflight([createRow()], {
       ...persistence,
       removeWatermark: vi.fn(),
-      resolveDraftRow: vi.fn(async (row) => ({
+      resolveDraftRow: vi.fn((row: VideoRow): Promise<VideoRow> => Promise.resolve({
         ...row,
         video_id: "s_alpha",
         playback_url: "https://videos.openai.com/watermark-alpha-shared.mp4",
         download_url: "https://videos.openai.com/no-watermark-alpha.mp4"
       })),
-      sleep: async () => undefined
+      sleep: sleepNow
     });
 
     expect(result.queue).toEqual([
@@ -107,8 +111,8 @@ describe("download preflight", () => {
     ], {
       ...persistence,
       removeWatermark: vi.fn(),
-      resolveDraftRow: vi.fn(async () => null),
-      sleep: async () => undefined
+      resolveDraftRow: vi.fn((): Promise<null> => Promise.resolve(null)),
+      sleep: sleepNow
     });
 
     expect(result.queue[0]).toEqual({
@@ -142,7 +146,7 @@ describe("download preflight", () => {
       ...persistence,
       removeWatermark,
       resolveDraftRow: vi.fn(),
-      sleep: async () => undefined
+      sleep: sleepNow
     });
 
     expect(removeWatermark).not.toHaveBeenCalled();
@@ -155,7 +159,8 @@ describe("download preflight", () => {
     persistence.listDownloadHistoryRecords.mockResolvedValue([
       {
         video_id: "s_history",
-        no_watermark: "https://videos.openai.com/no-watermark-history.mp4"
+        no_watermark: "https://videos.openai.com/no-watermark-history.mp4",
+        watermark_removal_failed_at: null
       }
     ]);
     const removeWatermark = vi.fn();
@@ -171,7 +176,7 @@ describe("download preflight", () => {
       ...persistence,
       removeWatermark,
       resolveDraftRow: vi.fn(),
-      sleep: async () => undefined
+      sleep: sleepNow
     });
 
     expect(removeWatermark).not.toHaveBeenCalled();
@@ -192,9 +197,9 @@ describe("download preflight", () => {
       })
     ], {
       ...persistence,
-      removeWatermark: vi.fn(async () => "https://videos.openai.com/no-watermark-utility.mp4"),
+      removeWatermark: vi.fn(() => Promise.resolve("https://videos.openai.com/no-watermark-utility.mp4")),
       resolveDraftRow: vi.fn(),
-      sleep: async () => undefined
+      sleep: sleepNow
     });
 
     expect(result.queue[0]).toEqual({
@@ -210,6 +215,77 @@ describe("download preflight", () => {
     ]);
   });
 
+  it("skips previously failed watermark removals when retry is disabled", async () => {
+    const persistence = createPersistence();
+    persistence.listDownloadHistoryRecords.mockResolvedValue([
+      {
+        video_id: "s_previously_failed",
+        no_watermark: null,
+        watermark_removal_failed_at: "2026-04-24T00:00:00.000Z"
+      }
+    ]);
+    const removeWatermark = vi.fn(() => Promise.resolve("https://videos.openai.com/no-watermark-should-not-run.mp4"));
+    const result = await runDownloadPreflight([
+      createRow({
+        row_id: "profile:s_previously_failed",
+        video_id: "s_previously_failed",
+        source_type: "profile",
+        source_bucket: "published",
+        title: "Previously Failed"
+      })
+    ], {
+      ...persistence,
+      removeWatermark,
+      resolveDraftRow: vi.fn(),
+      sleep: sleepNow
+    });
+
+    expect(removeWatermark).not.toHaveBeenCalled();
+    expect(result.queue[0]).toEqual({
+      id: "s_previously_failed",
+      watermark: "https://videos.openai.com/watermark-alpha.mp4",
+      no_watermark: null
+    });
+    expect(result.rejections).toEqual([
+      {
+        id: "s_previously_failed",
+        title: "Previously Failed",
+        reason: "access_restricted"
+      }
+    ]);
+  });
+
+  it("retries previously failed watermark removals when retry is enabled", async () => {
+    const persistence = createPersistence();
+    persistence.listDownloadHistoryRecords.mockResolvedValue([
+      {
+        video_id: "s_retry_failed",
+        no_watermark: null,
+        watermark_removal_failed_at: "2026-04-24T00:00:00.000Z"
+      }
+    ]);
+    const removeWatermark = vi.fn(() => Promise.resolve("https://videos.openai.com/no-watermark-retry.mp4"));
+    const result = await runDownloadPreflight([
+      createRow({
+        row_id: "profile:s_retry_failed",
+        video_id: "s_retry_failed",
+        source_type: "profile",
+        source_bucket: "published",
+        title: "Retry Failed"
+      })
+    ], {
+      ...persistence,
+      removeWatermark,
+      resolveDraftRow: vi.fn(),
+      retryPreviouslyFailedWatermarkRemovals: true,
+      sleep: sleepNow
+    });
+
+    expect(removeWatermark).toHaveBeenCalledWith("s_retry_failed");
+    expect(result.queue[0]?.no_watermark).toBe("https://videos.openai.com/no-watermark-retry.mp4");
+    expect(result.rejections).toEqual([]);
+  });
+
   it("falls back to watermark and logs access_restricted when utility returns null", async () => {
     const persistence = createPersistence();
     const result = await runDownloadPreflight([
@@ -222,9 +298,9 @@ describe("download preflight", () => {
       })
     ], {
       ...persistence,
-      removeWatermark: vi.fn(async () => null),
+      removeWatermark: vi.fn((): Promise<null> => Promise.resolve(null)),
       resolveDraftRow: vi.fn(),
-      sleep: async () => undefined
+      sleep: sleepNow
     });
 
     expect(result.queue[0]).toEqual({
@@ -256,9 +332,9 @@ describe("download preflight", () => {
       })
     ], {
       ...persistence,
-      removeWatermark: vi.fn(async () => null),
+      removeWatermark: vi.fn((): Promise<null> => Promise.resolve(null)),
       resolveDraftRow,
-      sleep: async () => undefined
+      sleep: sleepNow
     });
 
     expect(resolveDraftRow).not.toHaveBeenCalled();

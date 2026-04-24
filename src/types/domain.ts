@@ -74,6 +74,7 @@ export interface CharacterAccount {
 export interface AppSettings {
   archive_name_template: string;
   download_directory_name: string;
+  retry_failed_watermark_removals: boolean;
   enable_fetch_resume?: boolean;
   remember_fetch_date_choice?: boolean;
   remembered_date_range_preset?: DateRangePreset;
@@ -154,6 +155,7 @@ export interface DraftResolutionRecord {
 export interface DownloadHistoryRecord {
   video_id: string;
   no_watermark: string | null;
+  watermark_removal_failed_at: string | null;
 }
 
 export interface ArchiveOrganizerRow {

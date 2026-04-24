@@ -559,6 +559,7 @@ export function App() {
         archive_name_template: nextArchiveNameTemplate,
         enable_fetch_resume: settingsDraft.enable_fetch_resume === true,
         remember_fetch_date_choice: settingsDraft.remember_fetch_date_choice === true,
+        retry_failed_watermark_removals: settingsDraft.retry_failed_watermark_removals === true,
         remembered_date_range_preset: rememberedPreset,
         remembered_custom_date_start: rememberedStart,
         remembered_custom_date_end: rememberedEnd

@@ -23,7 +23,15 @@ export async function appendDownloadHistoryId(videoId: string): Promise<void> {
   await appendDownloadHistoryRecord(videoId, null);
 }
 
-export async function appendDownloadHistoryRecord(videoId: string, noWatermarkUrl: string | null): Promise<void> {
+interface AppendDownloadHistoryOptions {
+  watermarkRemovalFailed?: boolean;
+}
+
+export async function appendDownloadHistoryRecord(
+  videoId: string,
+  noWatermarkUrl: string | null,
+  options: AppendDownloadHistoryOptions = {}
+): Promise<void> {
   const database = await openDownloadHistoryDb();
   const normalizedVideoId = videoId.trim();
   if (!normalizedVideoId) {
@@ -31,9 +39,13 @@ export async function appendDownloadHistoryRecord(videoId: string, noWatermarkUr
   }
   const existingRecord = normalizeDownloadHistoryRecord(await database.get(DOWNLOAD_HISTORY_STORE, normalizedVideoId));
   const normalizedNoWatermarkUrl = normalizeOptionalUrl(noWatermarkUrl);
+  const nextNoWatermarkUrl = normalizedNoWatermarkUrl ?? existingRecord?.no_watermark ?? null;
   await database.put(DOWNLOAD_HISTORY_STORE, {
     video_id: normalizedVideoId,
-    no_watermark: normalizedNoWatermarkUrl ?? existingRecord?.no_watermark ?? null
+    no_watermark: nextNoWatermarkUrl,
+    watermark_removal_failed_at: nextNoWatermarkUrl
+      ? null
+      : resolveWatermarkRemovalFailedAt(existingRecord, options.watermarkRemovalFailed === true)
   });
 }
 
@@ -52,10 +64,25 @@ function normalizeDownloadHistoryRecord(value: unknown): DownloadHistoryRecord |
   }
   return {
     video_id: record.video_id.trim(),
-    no_watermark: normalizeOptionalUrl(record.no_watermark)
+    no_watermark: normalizeOptionalUrl(record.no_watermark),
+    watermark_removal_failed_at: normalizeTimestamp(record.watermark_removal_failed_at)
   };
 }
 
 function normalizeOptionalUrl(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function normalizeTimestamp(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function resolveWatermarkRemovalFailedAt(
+  existingRecord: DownloadHistoryRecord | null,
+  watermarkRemovalFailed: boolean
+): string | null {
+  if (watermarkRemovalFailed) {
+    return existingRecord?.watermark_removal_failed_at ?? new Date().toISOString();
+  }
+  return existingRecord?.watermark_removal_failed_at ?? null;
 }

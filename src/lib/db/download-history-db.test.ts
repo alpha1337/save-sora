@@ -19,8 +19,8 @@ describe("download-history-db", () => {
 
     await expect(listDownloadHistoryIds()).resolves.toEqual(["s_alpha123", "s_bravo456"]);
     await expect(listDownloadHistoryRecords()).resolves.toEqual([
-      { video_id: "s_alpha123", no_watermark: null },
-      { video_id: "s_bravo456", no_watermark: null }
+      { video_id: "s_alpha123", no_watermark: null, watermark_removal_failed_at: null },
+      { video_id: "s_bravo456", no_watermark: null, watermark_removal_failed_at: null }
     ]);
   });
 
@@ -32,11 +32,35 @@ describe("download-history-db", () => {
     await expect(listDownloadHistoryRecords()).resolves.toEqual([
       {
         video_id: "s_alpha123",
-        no_watermark: "https://videos.openai.com/no-watermark-alpha.mp4"
+        no_watermark: "https://videos.openai.com/no-watermark-alpha.mp4",
+        watermark_removal_failed_at: null
       },
       {
         video_id: "s_bravo456",
-        no_watermark: null
+        no_watermark: null,
+        watermark_removal_failed_at: null
+      }
+    ]);
+  });
+
+  it("persists failed watermark-removal attempts and clears them after success", async () => {
+    await appendDownloadHistoryRecord("s_failed", null, { watermarkRemovalFailed: true });
+
+    await expect(listDownloadHistoryRecords()).resolves.toEqual([
+      {
+        video_id: "s_failed",
+        no_watermark: null,
+        watermark_removal_failed_at: expect.any(String) as string
+      }
+    ]);
+
+    await appendDownloadHistoryRecord("s_failed", "https://videos.openai.com/no-watermark-later.mp4");
+
+    await expect(listDownloadHistoryRecords()).resolves.toEqual([
+      {
+        video_id: "s_failed",
+        no_watermark: "https://videos.openai.com/no-watermark-later.mp4",
+        watermark_removal_failed_at: null
       }
     ]);
   });

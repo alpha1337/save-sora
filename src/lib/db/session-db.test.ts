@@ -27,6 +27,7 @@ describe("session-db", () => {
     await saveSettings({
       archive_name_template: "archive-test",
       download_directory_name: "Sora exports",
+      retry_failed_watermark_removals: true,
       enable_fetch_resume: true,
       remember_fetch_date_choice: true,
       remembered_date_range_preset: "all",
@@ -37,6 +38,7 @@ describe("session-db", () => {
     await expect(loadSettings()).resolves.toEqual({
       archive_name_template: "archive-test",
       download_directory_name: "Sora exports",
+      retry_failed_watermark_removals: true,
       enable_fetch_resume: true,
       remember_fetch_date_choice: true,
       remembered_date_range_preset: "all",
