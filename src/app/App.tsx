@@ -25,7 +25,7 @@ import { createLogger } from "@lib/logging/logger";
 import { cancelActiveFetch, fetchSelectedSources, resolveAndAddCreatorProfile } from "@features/fetch/fetch-controller";
 import { saveSessionState } from "@lib/db/session-db";
 import { getUserFacingErrorMessage } from "@lib/utils/user-facing-errors";
-import type { DateRangePreset, TopLevelSourceType } from "types/domain";
+import type { DateRangePreset, TopLevelSourceType, VideoRow } from "types/domain";
 import {
   extractCharacterAccountIdsFromRawPayload,
   formatDateInput,
@@ -51,7 +51,7 @@ export function App() {
   const state = useAppStore();
   const filteredRows = useMemo(() => selectFilteredVideoRows(state), [state]);
   const downloadableRowsByVideoId = useMemo(() => {
-    const rowsByVideoId = new Map<string, (typeof state.video_rows)[number]>();
+    const rowsByVideoId = new Map<string, VideoRow>();
     for (const row of state.video_rows) {
       if (!isZipReadyRow(row) || rowsByVideoId.has(row.video_id)) {
         continue;
@@ -64,7 +64,7 @@ export function App() {
   const downloadableVideoIdSet = useMemo(() => new Set(downloadableVideoIds), [downloadableVideoIds]);
   const filteredDownloadableRows = useMemo(() => {
     const seenVideoIds = new Set<string>();
-    const dedupedRows: typeof filteredRows = [];
+    const dedupedRows: VideoRow[] = [];
     for (const row of filteredRows) {
       if (!isZipReadyRow(row) || seenVideoIds.has(row.video_id)) {
         continue;
@@ -96,11 +96,18 @@ export function App() {
     () => visibleDownloadableIds.filter((videoId) => state.selected_video_ids.includes(videoId)).length,
     [state.selected_video_ids, visibleDownloadableIds]
   );
+  const hiddenDownloadedRowCount = useMemo(() => {
+    if (state.session_meta.hide_downloaded_videos !== true) {
+      return 0;
+    }
+    const downloadedIdSet = new Set(state.download_history_ids);
+    return downloadableVideoIds.filter((videoId) => downloadedIdSet.has(videoId)).length;
+  }, [downloadableVideoIds, state.download_history_ids, state.session_meta.hide_downloaded_videos]);
   const selectedRows = useMemo(
     () =>
       selectedDownloadableVideoIds
         .map((videoId) => downloadableRowsByVideoId.get(videoId))
-        .filter((row): row is (typeof state.video_rows)[number] => Boolean(row)),
+        .filter((row): row is VideoRow => Boolean(row)),
     [downloadableRowsByVideoId, selectedDownloadableVideoIds]
   );
   const selectedCharacterAccountCount = useMemo(() => {
@@ -175,7 +182,6 @@ export function App() {
   const fetchActionLabel = isFetching ? "Stop Fetch" : canResumeFetch ? "Resume Fetch" : "Fetch Videos";
   const fetchActionDisabled = isDownloading || (!isFetching && selectedSourceCount === 0);
   const viewerUsername = state.session_meta.viewer_username?.trim() || "unknown";
-  const viewerDisplayName = state.session_meta.viewer_display_name?.trim() || viewerUsername;
   const viewerPlanTypeBadge = (state.session_meta.viewer_plan_type?.trim() || "FREE").toUpperCase();
   const viewerProfilePictureUrl = state.session_meta.viewer_profile_picture_url?.trim() || "";
   const [creatorRouteInput, setCreatorRouteInput] = useState("");
@@ -348,7 +354,7 @@ export function App() {
     cancelActiveFetch();
   }
 
-  async function handleClearSessionResults(): Promise<void> {
+  function handleClearSessionResults(): void {
     try {
       if (state.phase === "fetching" || state.phase === "downloading") {
         return;
@@ -723,6 +729,7 @@ export function App() {
           downloadDisabled={!canBuildZip}
           hasSidebar={hasSidebar}
           hasQuery={state.session_meta.query.trim().length > 0}
+          hiddenDownloadedRowCount={hiddenDownloadedRowCount}
           phase={state.phase}
           canClearResults={state.phase !== "fetching" && state.phase !== "downloading"}
           onDownload={() => void handleDownload()}

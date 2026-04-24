@@ -1,6 +1,6 @@
 {
   "name": "save-sora",
-  "version": "3.0.10",
+  "version": "3.0.11",
   "private": true,
   "type": "module",
   "description": "Save Sora build and release tooling.",

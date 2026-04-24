@@ -117,9 +117,9 @@ export function ResultsToolbar({
         />
       </div>
       <div className="ss-toolbar-control">
-        <span className="ss-toolbar-control-label">Hide downloaded videos?</span>
+        <span className="ss-toolbar-control-label">Hide global downloads?</span>
         <Select
-          aria-label="Hide downloaded videos"
+          aria-label="Hide globally downloaded videos"
           onValueChange={(value) => onHideDownloadedVideosChange(value === "true")}
           options={[
             { label: "True", value: "true" },

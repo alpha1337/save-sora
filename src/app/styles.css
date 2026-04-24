@@ -409,6 +409,20 @@ input {
   width: 100%;
 }
 
+.ss-global-history-notice {
+  align-items: center;
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(180, 83, 9, 0.35);
+  border-radius: 8px;
+  color: #78350f;
+  display: flex;
+  font-weight: 700;
+  gap: 0.75rem;
+  justify-content: space-between;
+  line-height: 1.35;
+  padding: 0.75rem;
+}
+
 .ss-list-row {
   justify-content: flex-start;
 }

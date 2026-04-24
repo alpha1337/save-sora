@@ -119,6 +119,7 @@ interface ResultsPanelProps {
   downloadProgress: DownloadProgressState;
   fetchProgress: FetchProgressState;
   hasQuery: boolean;
+  hiddenDownloadedRowCount?: number;
   phase: string;
   rows: VideoRow[];
   selectableRowCount: number;
@@ -158,7 +159,8 @@ export function ResultsPanel({
   fetchProgress,
   downloadDisabled = false,
   hasSidebar = false,
-  hasQuery,
+  hasQuery: _hasQuery,
+  hiddenDownloadedRowCount = 0,
   phase,
   canClearResults = true,
   showClearResults = false,
@@ -498,6 +500,16 @@ export function ResultsPanel({
         selectedVisibleRowCount={selectedVisibleRowCount}
         sortKey={sortKey}
       />
+      {hideDownloadedVideos && hiddenDownloadedRowCount > 0 ? (
+        <div className="ss-global-history-notice">
+          <span>
+            {`${formatCount(hiddenDownloadedRowCount)} videos are hidden by global download history. This can include downloads from other Sora accounts.`}
+          </span>
+          <Button onClick={() => onHideDownloadedVideosChange(false)} tone="secondary" type="button">
+            Show downloaded rows
+          </Button>
+        </div>
+      ) : null}
       <div className="ss-table-shell">
         {rows.length === 0 ? (
           <div className="ss-empty-state">

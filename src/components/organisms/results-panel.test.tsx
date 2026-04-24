@@ -207,6 +207,45 @@ describe("ResultsPanel", () => {
     expect(screen.queryByText("Ready for download")).not.toBeInTheDocument();
   });
 
+  it("explains and reveals rows hidden by global download history", () => {
+    const onHideDownloadedVideosChange = vi.fn();
+
+    render(
+      <ResultsPanel
+        allVisibleSelected={false}
+        downloadableRowCount={2510}
+        downloadProgress={emptyDownloadProgress}
+        fetchProgress={emptyFetchProgress}
+        hasQuery={false}
+        hiddenDownloadedRowCount={495}
+        hideDownloadedVideos
+        groupBy="none"
+        phase="ready"
+        onDownload={vi.fn()}
+        onHideDownloadedVideosChange={onHideDownloadedVideosChange}
+        onSelectionPresetChange={vi.fn()}
+        onGroupByChange={vi.fn()}
+        onQueryChange={vi.fn()}
+        onSetSelectedVideoIds={vi.fn()}
+        onSortKeyChange={vi.fn()}
+        onToggleSelectedVideoId={vi.fn()}
+        query=""
+        rows={[baseRow]}
+        selectableRowCount={1}
+        selectedDownloadableRowCount={2015}
+        selectedBytes={1024 * 1024 * 3}
+        selectedVideoIds={[]}
+        selectedVisibleRowCount={1}
+        sortKey="published_newest"
+        totalRowCount={2510}
+      />
+    );
+
+    expect(screen.getByText("495 videos are hidden by global download history. This can include downloads from other Sora accounts.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Show downloaded rows" }));
+    expect(onHideDownloadedVideosChange).toHaveBeenCalledWith(false);
+  });
+
   it("explains when search hides rows already fetched into the session", () => {
     render(
       <ResultsPanel
@@ -594,7 +633,7 @@ describe("ResultsPanel", () => {
     expect(screen.queryByText(/Processing Batch/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/^Page \d+\//i)).not.toBeInTheDocument();
 
-    const fill = container.querySelector(".ss-download-progress-fill") as HTMLElement | null;
+    const fill = container.querySelector<HTMLElement>(".ss-download-progress-fill");
     expect(fill).not.toBeNull();
     const widthPercent = Number.parseFloat(fill?.style.width ?? "0");
     expect(widthPercent).toBeCloseTo(15, 3);
@@ -649,7 +688,7 @@ describe("ResultsPanel", () => {
     );
 
     expect(screen.getByText("Processing Batch 19 of 757 (Page 2/24)")).toBeInTheDocument();
-    const fill = container.querySelector(".ss-download-progress-fill") as HTMLElement | null;
+    const fill = container.querySelector<HTMLElement>(".ss-download-progress-fill");
     expect(fill).not.toBeNull();
     const widthPercent = Number.parseFloat(fill?.style.width ?? "0");
     expect(widthPercent).toBeCloseTo((2 / 24) * 100, 3);
