@@ -27,19 +27,83 @@ export interface SavedUserSession {
   created_at: string;
   character_count: number | null;
   display_name: string;
+  isOnboarded: boolean;
   last_seen_at: string;
 }
 
-interface SavedAccountRecord {
+export interface DownloadQueueItem {
   id: string;
-  kind: "creator_profile" | "side_character_selection" | "user";
+  watermark: string;
+  no_watermark: string | null;
+}
+
+export interface DownloadQueuePatch {
+  current_id: string;
+  id?: string;
+  watermark?: string;
+  no_watermark?: string | null;
+}
+
+const USER_RECORD_ID = "user";
+const DOWNLOAD_QUEUE_RECORD_ID = "download_queue";
+
+interface SavedAccountRecordBase {
+  id: string;
+  updated_at: string;
+  creators?: string;
+  side_characters?: string;
+  user_index?: "user";
+}
+
+interface SavedCreatorProfileRecord extends SavedAccountRecordBase {
+  kind: "creator_profile";
   account_id: string;
   account_type: "creator" | "side_character";
-  creators: 0 | 1;
-  side_characters: 0 | 1;
-  profile: CreatorProfile | null;
-  user?: SavedUserSession[];
-  updated_at: string;
+  creators?: string;
+  profile: CreatorProfile;
+}
+
+interface SavedSideCharacterSelectionRecord extends SavedAccountRecordBase {
+  kind: "side_character_selection";
+  account_id: string;
+  account_type: "side_character";
+  profile: null;
+  side_characters: string;
+}
+
+interface SavedUserRecord extends SavedAccountRecordBase {
+  kind: "user";
+  account_id: "user";
+  account_type: "user";
+  profile: null;
+  user_index: "user";
+  user: SavedUserSession[];
+}
+
+interface SavedDownloadQueueRecord extends SavedAccountRecordBase {
+  kind: "download_queue";
+  queue: DownloadQueueItem[];
+}
+
+type SavedAccountRecord =
+  | SavedCreatorProfileRecord
+  | SavedSideCharacterSelectionRecord
+  | SavedUserRecord
+  | SavedDownloadQueueRecord;
+
+interface SavedAccountRecordWithUserList extends Partial<SavedAccountRecordBase> {
+  kind?: string;
+  user?: unknown;
+}
+
+interface SavedAccountRecordWithDownloadQueue extends Partial<SavedAccountRecordBase> {
+  kind?: string;
+  queue?: unknown;
+}
+
+interface SavedAccountsStoreLike {
+  delete: (id: string) => Promise<unknown>;
+  put: (value: SavedDownloadQueueRecord) => Promise<unknown>;
 }
 
 /**
@@ -63,11 +127,77 @@ export async function loadSettings(): Promise<AppSettings | null> {
   return normalizeSettings(rawSettings as Partial<AppSettings>);
 }
 
+export async function loadDownloadQueue(): Promise<DownloadQueueItem[]> {
+  const database = await openSessionDb();
+  return extractDownloadQueueItems(await database.get(SAVED_ACCOUNTS_STORE, DOWNLOAD_QUEUE_RECORD_ID));
+}
+
+export async function replaceDownloadQueue(items: DownloadQueueItem[]): Promise<DownloadQueueItem[]> {
+  const database = await openSessionDb();
+  const transaction = database.transaction(SAVED_ACCOUNTS_STORE, "readwrite");
+  const savedAccountsStore = transaction.objectStore(SAVED_ACCOUNTS_STORE);
+  const normalizedQueue = normalizeDownloadQueueItems(items);
+  await saveDownloadQueueRecord(savedAccountsStore, normalizedQueue);
+  await transaction.done;
+  return normalizedQueue;
+}
+
+export async function patchDownloadQueue(patches: DownloadQueuePatch[]): Promise<DownloadQueueItem[]> {
+  if (!Array.isArray(patches) || patches.length === 0) {
+    return loadDownloadQueue();
+  }
+
+  const database = await openSessionDb();
+  const transaction = database.transaction(SAVED_ACCOUNTS_STORE, "readwrite");
+  const savedAccountsStore = transaction.objectStore(SAVED_ACCOUNTS_STORE);
+  const currentItems = extractDownloadQueueItems(await savedAccountsStore.get(DOWNLOAD_QUEUE_RECORD_ID));
+  if (currentItems.length === 0) {
+    await transaction.done;
+    return [];
+  }
+
+  const normalizedPatches = patches.filter((entry) => isDownloadQueuePatch(entry));
+  if (normalizedPatches.length === 0) {
+    await transaction.done;
+    return currentItems;
+  }
+
+  const patchedItems = currentItems.map((entry) => {
+    let nextEntry = entry;
+    for (const patch of normalizedPatches) {
+      if (patch.current_id !== nextEntry.id) {
+        continue;
+      }
+      nextEntry = {
+        id: typeof patch.id === "string" && patch.id.trim() ? patch.id.trim() : nextEntry.id,
+        watermark: typeof patch.watermark === "string" && patch.watermark.trim()
+          ? patch.watermark.trim()
+          : nextEntry.watermark,
+        no_watermark: patch.no_watermark === undefined
+          ? nextEntry.no_watermark
+          : normalizeOptionalUrl(patch.no_watermark)
+      };
+    }
+    return nextEntry;
+  });
+
+  const normalizedPatchedItems = normalizeDownloadQueueItems(patchedItems);
+  await saveDownloadQueueRecord(savedAccountsStore, normalizedPatchedItems);
+  await transaction.done;
+  return normalizedPatchedItems;
+}
+
+export async function clearDownloadQueue(): Promise<void> {
+  const database = await openSessionDb();
+  await database.delete(SAVED_ACCOUNTS_STORE, DOWNLOAD_QUEUE_RECORD_ID);
+}
+
 export async function saveSessionState(state: PersistedSessionState): Promise<void> {
   const database = await openSessionDb();
   const transaction = database.transaction(SAVED_ACCOUNTS_STORE, "readwrite");
   const savedAccountsStore = transaction.objectStore(SAVED_ACCOUNTS_STORE);
-  const existingUserSessions = extractSavedUserSessions(await savedAccountsStore.get("user"));
+  const existingUserSessions = extractSavedUserSessions(await savedAccountsStore.get(USER_RECORD_ID));
+  const existingDownloadQueue = extractDownloadQueueItems(await savedAccountsStore.get(DOWNLOAD_QUEUE_RECORD_ID));
   await savedAccountsStore.clear();
 
   const nowIso = new Date().toISOString();
@@ -77,18 +207,19 @@ export async function saveSessionState(state: PersistedSessionState): Promise<vo
     if (!isCreatorProfile(profile)) {
       continue;
     }
-    const accountType: SavedAccountRecord["account_type"] =
+    const accountType: SavedCreatorProfileRecord["account_type"] =
       profile.account_type === "sideCharacter" || profile.is_character_profile ? "side_character" : "creator";
-    const record: SavedAccountRecord = {
+    const recordBase: SavedCreatorProfileRecord = {
       id: `creator_profile:${profile.profile_id}`,
       kind: "creator_profile",
       account_id: profile.profile_id,
       account_type: accountType,
-      creators: accountType === "creator" ? 1 : 0,
-      side_characters: accountType === "side_character" ? 1 : 0,
       profile,
       updated_at: nowIso
     };
+    const record = accountType === "creator"
+      ? { ...recordBase, creators: profile.profile_id }
+      : recordBase;
     await savedAccountsStore.put(record);
   }
 
@@ -98,13 +229,12 @@ export async function saveSessionState(state: PersistedSessionState): Promise<vo
       .filter(Boolean)
   )];
   for (const accountId of selectedCharacterAccountIds) {
-    const record: SavedAccountRecord = {
+    const record: SavedSideCharacterSelectionRecord = {
       id: `side_character_selection:${accountId}`,
       kind: "side_character_selection",
       account_id: accountId,
       account_type: "side_character",
-      creators: 0,
-      side_characters: 1,
+      side_characters: accountId,
       profile: null,
       updated_at: nowIso
     };
@@ -112,18 +242,21 @@ export async function saveSessionState(state: PersistedSessionState): Promise<vo
   }
 
   if (mergedUserSessions.length > 0) {
-    const userRecord: SavedAccountRecord = {
-      id: "user",
+    const userRecord: SavedUserRecord = {
+      id: USER_RECORD_ID,
       kind: "user",
-      account_id: "user",
-      account_type: "creator",
-      creators: 0,
-      side_characters: 0,
+      account_id: USER_RECORD_ID,
+      account_type: "user",
+      user_index: USER_RECORD_ID,
       profile: null,
       user: mergedUserSessions,
       updated_at: nowIso
     };
     await savedAccountsStore.put(userRecord);
+  }
+
+  if (existingDownloadQueue.length > 0) {
+    await saveDownloadQueueRecord(savedAccountsStore, existingDownloadQueue, nowIso);
   }
 
   await transaction.done;
@@ -229,6 +362,7 @@ function sanitizeSavedUserSessions(entries: SavedUserSession[]): SavedUserSessio
     }
     sanitizedEntries.push({
       ...entry,
+      isOnboarded: entry.isOnboarded === true,
       last_seen_at: entry.last_seen_at.trim()
     });
   }
@@ -255,6 +389,7 @@ function mergeSavedUserSessions(
       display_name: entry.display_name.trim(),
       permalink: entry.permalink.trim(),
       created_at: entry.created_at.trim(),
+      isOnboarded: previous?.isOnboarded === true || entry.isOnboarded === true,
       last_seen_at: nowIso
     };
     mergedByUserId.set(normalizedUserId, mergedEntry);
@@ -285,6 +420,7 @@ function isSavedUserSession(value: unknown): value is SavedUserSession {
   const characterCount = record.character_count;
   const profilePictureUrl = record.profile_picture_url;
   const planType = record.plan_type;
+  const isOnboarded = record.isOnboarded;
   return (
     typeof record.user_id === "string" &&
     typeof record.username === "string" &&
@@ -293,6 +429,7 @@ function isSavedUserSession(value: unknown): value is SavedUserSession {
     typeof record.created_at === "string" &&
     typeof record.last_seen_at === "string" &&
     typeof record.can_cameo === "boolean" &&
+    (isOnboarded === undefined || typeof isOnboarded === "boolean") &&
     (profilePictureUrl === null || typeof profilePictureUrl === "string") &&
     (planType === null || typeof planType === "string") &&
     (characterCount === null || (typeof characterCount === "number" && Number.isFinite(characterCount)))
@@ -303,9 +440,86 @@ function extractSavedUserSessions(value: unknown): SavedUserSession[] {
   if (!value || typeof value !== "object") {
     return [];
   }
-  const record = value as Partial<SavedAccountRecord>;
+  const record = value as SavedAccountRecordWithUserList;
   if (record.kind !== "user" || !Array.isArray(record.user)) {
     return [];
   }
-  return sanitizeSavedUserSessions(record.user);
+  return sanitizeSavedUserSessions(record.user as SavedUserSession[]);
+}
+
+async function saveDownloadQueueRecord(
+  savedAccountsStore: SavedAccountsStoreLike,
+  queueItems: DownloadQueueItem[],
+  nowIso = new Date().toISOString()
+): Promise<void> {
+  const normalizedQueue = normalizeDownloadQueueItems(queueItems);
+  if (normalizedQueue.length === 0) {
+    await savedAccountsStore.delete(DOWNLOAD_QUEUE_RECORD_ID);
+    return;
+  }
+
+  const record: SavedDownloadQueueRecord = {
+    id: DOWNLOAD_QUEUE_RECORD_ID,
+    kind: "download_queue",
+    queue: normalizedQueue,
+    updated_at: nowIso
+  };
+  await savedAccountsStore.put(record);
+}
+
+function extractDownloadQueueItems(value: unknown): DownloadQueueItem[] {
+  if (!value || typeof value !== "object") {
+    return [];
+  }
+  const record = value as SavedAccountRecordWithDownloadQueue;
+  if (record.kind !== "download_queue" || !Array.isArray(record.queue)) {
+    return [];
+  }
+  return normalizeDownloadQueueItems(record.queue as DownloadQueueItem[]);
+}
+
+function normalizeDownloadQueueItems(items: DownloadQueueItem[]): DownloadQueueItem[] {
+  const normalizedItems: DownloadQueueItem[] = [];
+  for (const item of items) {
+    if (!isDownloadQueueItem(item)) {
+      continue;
+    }
+    normalizedItems.push({
+      id: item.id.trim(),
+      watermark: item.watermark.trim(),
+      no_watermark: normalizeOptionalUrl(item.no_watermark)
+    });
+  }
+  return normalizedItems;
+}
+
+function isDownloadQueueItem(value: unknown): value is DownloadQueueItem {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.id === "string" &&
+    record.id.trim().length > 0 &&
+    typeof record.watermark === "string" &&
+    record.watermark.trim().length > 0 &&
+    (record.no_watermark === null ||
+      (typeof record.no_watermark === "string" && record.no_watermark.trim().length > 0))
+  );
+}
+
+function isDownloadQueuePatch(value: unknown): value is DownloadQueuePatch {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  return typeof record.current_id === "string" && record.current_id.trim().length > 0;
+}
+
+function normalizeOptionalUrl(value: string | null | undefined): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const normalizedValue = value.trim();
+  return normalizedValue.length > 0 ? normalizedValue : null;
 }

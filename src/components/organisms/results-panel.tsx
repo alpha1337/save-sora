@@ -4,7 +4,6 @@ import type { DownloadProgressState, FetchProgressState, GroupByOption, VideoRow
 import { Button } from "@components/atoms/button";
 import { Checkbox } from "@components/atoms/checkbox";
 import { Panel } from "@components/atoms/panel";
-import { SummaryStat } from "@components/atoms/summary-stat";
 import { ResultsToolbar } from "@components/molecules/results-toolbar";
 import { VideoMetadataCard } from "@components/molecules/video-metadata-card";
 import { formatBytes, formatCount } from "@lib/utils/format-utils";
@@ -119,7 +118,6 @@ interface ResultsPanelProps {
   downloadableRowCount: number;
   downloadProgress: DownloadProgressState;
   fetchProgress: FetchProgressState;
-  hasRows: boolean;
   hasQuery: boolean;
   phase: string;
   rows: VideoRow[];
@@ -160,7 +158,6 @@ export function ResultsPanel({
   fetchProgress,
   downloadDisabled = false,
   hasSidebar = false,
-  hasRows,
   hasQuery,
   phase,
   canClearResults = true,
@@ -409,16 +406,6 @@ export function ResultsPanel({
           </Button>
         </div>
       </div>
-      {hasRows ? (
-        <div className="ss-summary-stat-grid">
-          <SummaryStat
-            hint="Ready videos selected for ZIP"
-            label="Selected"
-            value={`${formatCount(selectedDownloadableRowCount)} of ${formatCount(downloadableRowCount)}`}
-          />
-          <SummaryStat hint="Combined estimated size of selected rows" label="Selected Size" value={formatBytes(selectedBytes)} />
-        </div>
-      ) : null}
       {showFetchProgress ? (
         <div className="ss-download-progress-panel">
           <div className="ss-download-progress-head">

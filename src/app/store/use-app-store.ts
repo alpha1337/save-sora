@@ -42,6 +42,7 @@ const defaultSessionMeta: SessionMeta = {
   viewer_created_at: "",
   viewer_character_count: null,
   viewer_can_cameo: true,
+  viewer_is_onboarded: false,
   last_fetch_at: null
 };
 

@@ -89,12 +89,10 @@ function formatCharacterVideoCount(
   draftCount: number | null,
   overrideCount?: number
 ): string {
-  if (typeof overrideCount === "number") {
-    return overrideCount > 0 ? `${formatCount(overrideCount)} videos` : "No videos";
-  }
   const safeAppearanceCount = typeof appearanceCount === "number" ? appearanceCount : 0;
   const safeDraftCount = typeof draftCount === "number" ? draftCount : 0;
-  const total = safeAppearanceCount + safeDraftCount;
+  const baseTotal = safeAppearanceCount + safeDraftCount;
+  const total = typeof overrideCount === "number" ? Math.max(baseTotal, overrideCount) : baseTotal;
 
   if (total > 0) {
     return `${formatCount(total)} videos`;

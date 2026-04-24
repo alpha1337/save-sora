@@ -1,7 +1,7 @@
 import { openDB } from "idb";
 
 export const SAVE_SORA_V3_DB_NAME = "save-sora-v3";
-export const SAVE_SORA_V3_DB_VERSION = 1;
+export const SAVE_SORA_V3_DB_VERSION = 2;
 
 export const DOWNLOAD_HISTORY_STORE = "download_history";
 export const SETTINGS_STORE = "settings";
@@ -12,6 +12,7 @@ export const ROWS_STORE = "rows";
 
 export const SAVED_ACCOUNTS_CREATORS_INDEX = "creators";
 export const SAVED_ACCOUNTS_SIDE_CHARACTERS_INDEX = "side_characters";
+export const SAVED_ACCOUNTS_USER_INDEX = "user";
 export const JOB_ROWS_BY_JOB_ID_INDEX = "by_job_id";
 export const JOB_ROWS_BY_ROW_ID_INDEX = "by_row_id";
 export const JOB_ROWS_BY_UPDATED_AT_INDEX = "by_updated_at";
@@ -36,6 +37,9 @@ export async function openSaveSoraV3Db() {
       }
       if (!savedAccountsStore.indexNames.contains(SAVED_ACCOUNTS_SIDE_CHARACTERS_INDEX)) {
         savedAccountsStore.createIndex(SAVED_ACCOUNTS_SIDE_CHARACTERS_INDEX, "side_characters", { unique: false });
+      }
+      if (!savedAccountsStore.indexNames.contains(SAVED_ACCOUNTS_USER_INDEX)) {
+        savedAccountsStore.createIndex(SAVED_ACCOUNTS_USER_INDEX, "user_index", { unique: false });
       }
 
       if (!database.objectStoreNames.contains(CURSOR_CHECKPOINTS_STORE)) {

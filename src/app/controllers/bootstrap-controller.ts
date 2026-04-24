@@ -50,6 +50,9 @@ export async function bootstrapAppState(reportStatus?: BootstrapStatusReporter):
   if (savedCharacterAccountIds.length === 0) {
     reportStatus?.("Loading saved characters… (none found, skipping)");
   }
+  const persistedViewerSession = persistedSessionState?.user?.find(
+    (userSession) => userSession.user_id === viewerIdentity.user_id
+  );
 
   const resumeEnabled = savedSettings?.enable_fetch_resume === true;
   let cachedRows: VideoRow[] = [];
@@ -94,6 +97,7 @@ export async function bootstrapAppState(reportStatus?: BootstrapStatusReporter):
     viewer_character_count:
       viewerIdentity?.character_count ?? existingSessionMeta.viewer_character_count ?? null,
     viewer_can_cameo: viewerCanCameo,
+    viewer_is_onboarded: persistedViewerSession?.isOnboarded === true,
     exclude_session_creator_only: existingSessionMeta.exclude_session_creator_only ?? false,
     hide_downloaded_videos: existingSessionMeta.hide_downloaded_videos ?? true,
     fetch_range_confirmed: existingSessionMeta.fetch_range_confirmed ?? false,

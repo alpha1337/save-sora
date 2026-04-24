@@ -102,6 +102,7 @@ export interface SessionMeta {
   viewer_created_at?: string;
   viewer_character_count?: number | null;
   viewer_can_cameo?: boolean;
+  viewer_is_onboarded?: boolean;
   last_fetch_at: string | null;
 }
 

@@ -1,11 +1,20 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  clearDownloadQueue,
+  loadDownloadQueue,
   loadSessionState,
   loadSettings,
   openSessionDb,
+  patchDownloadQueue,
+  replaceDownloadQueue,
   saveSessionState,
   saveSettings
 } from "./session-db";
+import {
+  SAVED_ACCOUNTS_CREATORS_INDEX,
+  SAVED_ACCOUNTS_SIDE_CHARACTERS_INDEX,
+  SAVED_ACCOUNTS_USER_INDEX
+} from "./save-sora-v3-db";
 
 describe("session-db", () => {
   beforeEach(async () => {
@@ -50,6 +59,20 @@ describe("session-db", () => {
           appearance_count: 524,
           draft_count: null,
           created_at: "2026-04-01T00:00:00.000Z"
+        },
+        {
+          profile_id: "user-creator-1",
+          user_id: "user-creator-1",
+          account_type: "creator",
+          username: "creator.one",
+          display_name: "Creator One",
+          permalink: "https://sora.chatgpt.com/profile/creator.one",
+          profile_picture_url: null,
+          is_character_profile: false,
+          published_count: 2,
+          appearance_count: 0,
+          draft_count: 1,
+          created_at: "2026-04-01T00:00:00.000Z"
         }
       ],
       selected_character_account_ids: ["ch_123", "ch_123"]
@@ -69,6 +92,20 @@ describe("session-db", () => {
           published_count: 0,
           appearance_count: 524,
           draft_count: null,
+          created_at: "2026-04-01T00:00:00.000Z"
+        },
+        {
+          profile_id: "user-creator-1",
+          user_id: "user-creator-1",
+          account_type: "creator",
+          username: "creator.one",
+          display_name: "Creator One",
+          permalink: "https://sora.chatgpt.com/profile/creator.one",
+          profile_picture_url: null,
+          is_character_profile: false,
+          published_count: 2,
+          appearance_count: 0,
+          draft_count: 1,
           created_at: "2026-04-01T00:00:00.000Z"
         }
       ],
@@ -91,6 +128,7 @@ describe("session-db", () => {
           created_at: "1760411457.623549",
           character_count: 6,
           display_name: "What Really Happened",
+          isOnboarded: true,
           last_seen_at: "2026-04-23T00:00:00.000Z"
         }
       ]
@@ -102,8 +140,154 @@ describe("session-db", () => {
       user_id: "user-1",
       username: "whatreallyhappened",
       plan_type: "plus",
+      isOnboarded: true,
       character_count: 6
     });
+  });
+
+  it("indexes creators, side characters, and user records separately", async () => {
+    await saveSessionState({
+      creator_profiles: [
+        {
+          profile_id: "user-creator-1",
+          user_id: "user-creator-1",
+          account_type: "creator",
+          username: "creator.one",
+          display_name: "Creator One",
+          permalink: "https://sora.chatgpt.com/profile/creator.one",
+          profile_picture_url: null,
+          is_character_profile: false,
+          published_count: 2,
+          appearance_count: 0,
+          draft_count: 1,
+          created_at: "2026-04-01T00:00:00.000Z"
+        },
+        {
+          profile_id: "ch_123",
+          user_id: "ch_123",
+          account_type: "sideCharacter",
+          username: "next.thur.thursday",
+          display_name: "Thursday",
+          permalink: "https://sora.chatgpt.com/profile/next.thur.thursday",
+          profile_picture_url: null,
+          is_character_profile: true,
+          published_count: 0,
+          appearance_count: 524,
+          draft_count: null,
+          created_at: "2026-04-01T00:00:00.000Z"
+        }
+      ],
+      selected_character_account_ids: ["ch_123"],
+      user: [
+        {
+          user_id: "user-1",
+          username: "whatreallyhappened",
+          profile_picture_url: "https://example.com/avatar.png",
+          plan_type: null,
+          permalink: "https://sora.chatgpt.com/profile/whatreallyhappened",
+          can_cameo: true,
+          created_at: "1760411457.623549",
+          character_count: 6,
+          display_name: "What Really Happened",
+          isOnboarded: false,
+          last_seen_at: "2026-04-23T00:00:00.000Z"
+        }
+      ]
+    });
+
+    const database = await openSessionDb();
+    const transaction = database.transaction("saved_accounts", "readonly");
+    const store = transaction.objectStore("saved_accounts");
+    const creatorRows = await store.index(SAVED_ACCOUNTS_CREATORS_INDEX).getAll();
+    const sideCharacterRows = await store.index(SAVED_ACCOUNTS_SIDE_CHARACTERS_INDEX).getAll();
+    const userRows = await store.index(SAVED_ACCOUNTS_USER_INDEX).getAll();
+
+    expect(creatorRows).toHaveLength(1);
+    expect(sideCharacterRows).toHaveLength(1);
+    expect(userRows).toHaveLength(1);
+    expect((creatorRows[0] as { kind?: string }).kind).toBe("creator_profile");
+    expect((sideCharacterRows[0] as { kind?: string }).kind).toBe("side_character_selection");
+    expect((userRows[0] as { kind?: string }).kind).toBe("user");
+    await transaction.done;
+  });
+
+  it("replaces, patches, and clears download_queue record", async () => {
+    await expect(loadDownloadQueue()).resolves.toEqual([]);
+
+    const replacedQueue = await replaceDownloadQueue([
+      {
+        id: "gen_123",
+        watermark: "https://videos.openai.com/watermark-a.mp4",
+        no_watermark: null
+      },
+      {
+        id: "s_456",
+        watermark: "https://videos.openai.com/watermark-b.mp4",
+        no_watermark: "https://videos.openai.com/no-watermark-b.mp4"
+      }
+    ]);
+    expect(replacedQueue).toHaveLength(2);
+
+    const patchedQueue = await patchDownloadQueue([
+      {
+        current_id: "gen_123",
+        id: "s_123",
+        no_watermark: "https://videos.openai.com/no-watermark-a.mp4"
+      }
+    ]);
+    expect(patchedQueue).toEqual([
+      {
+        id: "s_123",
+        watermark: "https://videos.openai.com/watermark-a.mp4",
+        no_watermark: "https://videos.openai.com/no-watermark-a.mp4"
+      },
+      {
+        id: "s_456",
+        watermark: "https://videos.openai.com/watermark-b.mp4",
+        no_watermark: "https://videos.openai.com/no-watermark-b.mp4"
+      }
+    ]);
+
+    await clearDownloadQueue();
+    await expect(loadDownloadQueue()).resolves.toEqual([]);
+  });
+
+  it("preserves download_queue while replacing saved session state", async () => {
+    await replaceDownloadQueue([
+      {
+        id: "s_999",
+        watermark: "https://videos.openai.com/watermark-z.mp4",
+        no_watermark: null
+      }
+    ]);
+
+    await saveSessionState({
+      creator_profiles: [
+        {
+          profile_id: "user-creator-1",
+          user_id: "user-creator-1",
+          account_type: "creator",
+          username: "creator.one",
+          display_name: "Creator One",
+          permalink: "https://sora.chatgpt.com/profile/creator.one",
+          profile_picture_url: null,
+          is_character_profile: false,
+          published_count: 2,
+          appearance_count: 0,
+          draft_count: 1,
+          created_at: "2026-04-01T00:00:00.000Z"
+        }
+      ],
+      selected_character_account_ids: []
+    });
+
+    await expect(loadDownloadQueue()).resolves.toEqual([
+      {
+        id: "s_999",
+        watermark: "https://videos.openai.com/watermark-z.mp4",
+        no_watermark: null
+      }
+    ]);
   });
 
   it("returns null when no session state is saved", async () => {

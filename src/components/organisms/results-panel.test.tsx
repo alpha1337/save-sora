@@ -66,7 +66,6 @@ describe("ResultsPanel", () => {
         downloadProgress={emptyDownloadProgress}
         fetchProgress={emptyFetchProgress}
         hasSidebar
-        hasRows={false}
         hasQuery={false}
         groupBy="none"
         phase="idle"
@@ -100,7 +99,6 @@ describe("ResultsPanel", () => {
         downloadProgress={emptyDownloadProgress}
         fetchProgress={emptyFetchProgress}
         hasSidebar
-        hasRows={false}
         hasQuery={false}
         groupBy="none"
         phase="idle"
@@ -135,7 +133,6 @@ describe("ResultsPanel", () => {
         downloadableRowCount={0}
         downloadProgress={emptyDownloadProgress}
         fetchProgress={emptyFetchProgress}
-        hasRows={false}
         hasQuery={false}
         groupBy="none"
         phase="idle"
@@ -171,7 +168,6 @@ describe("ResultsPanel", () => {
         downloadableRowCount={120000}
         downloadProgress={emptyDownloadProgress}
         fetchProgress={emptyFetchProgress}
-        hasRows
         hasQuery
         groupBy="none"
         phase="ready"
@@ -194,7 +190,7 @@ describe("ResultsPanel", () => {
       />
     );
 
-    expect(screen.getByText("Selected Size")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Build ZIP \(12 · 3.00 MB\)/i })).toBeInTheDocument();
     expect(screen.queryByText("Processing")).not.toBeInTheDocument();
     expect(screen.queryByText("Ready for download")).not.toBeInTheDocument();
   });
@@ -206,7 +202,6 @@ describe("ResultsPanel", () => {
         downloadableRowCount={120000}
         downloadProgress={emptyDownloadProgress}
         fetchProgress={emptyFetchProgress}
-        hasRows
         hasQuery
         groupBy="none"
         phase="ready"
@@ -247,7 +242,6 @@ describe("ResultsPanel", () => {
         downloadableRowCount={2}
         downloadProgress={emptyDownloadProgress}
         fetchProgress={emptyFetchProgress}
-        hasRows
         hasQuery={false}
         groupBy="creator"
         phase="ready"
@@ -289,7 +283,6 @@ describe("ResultsPanel", () => {
         downloadableRowCount={2}
         downloadProgress={emptyDownloadProgress}
         fetchProgress={emptyFetchProgress}
-        hasRows
         hasQuery={false}
         groupBy="creator"
         phase="ready"
@@ -341,7 +334,6 @@ describe("ResultsPanel", () => {
         downloadableRowCount={0}
         downloadProgress={emptyDownloadProgress}
         fetchProgress={activeFetchProgress}
-        hasRows={false}
         hasQuery={false}
         groupBy="none"
         phase="fetching"
@@ -393,7 +385,6 @@ describe("ResultsPanel", () => {
         downloadableRowCount={0}
         downloadProgress={emptyDownloadProgress}
         fetchProgress={activeFetchProgress}
-        hasRows={false}
         hasQuery={false}
         groupBy="none"
         phase="fetching"
@@ -445,7 +436,6 @@ describe("ResultsPanel", () => {
         downloadableRowCount={0}
         downloadProgress={emptyDownloadProgress}
         fetchProgress={activeFetchProgress}
-        hasRows={false}
         hasQuery={false}
         groupBy="none"
         phase="fetching"
@@ -503,7 +493,6 @@ describe("ResultsPanel", () => {
         downloadableRowCount={0}
         downloadProgress={emptyDownloadProgress}
         fetchProgress={activeFetchProgress}
-        hasRows={false}
         hasQuery={false}
         groupBy="none"
         phase="fetching"
@@ -567,7 +556,6 @@ describe("ResultsPanel", () => {
         downloadableRowCount={0}
         downloadProgress={emptyDownloadProgress}
         fetchProgress={activeFetchProgress}
-        hasRows={false}
         hasQuery={false}
         groupBy="none"
         phase="fetching"
@@ -626,7 +614,6 @@ describe("ResultsPanel", () => {
         downloadableRowCount={0}
         downloadProgress={emptyDownloadProgress}
         fetchProgress={activeFetchProgress}
-        hasRows={false}
         hasQuery={false}
         groupBy="none"
         phase="fetching"

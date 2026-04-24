@@ -1,6 +1,6 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Heart, RefreshCcw, Settings, Trash2 } from "lucide-react";
+import { RefreshCcw, Trash2 } from "lucide-react";
 import DatePicker from "react-datepicker";
 import { useAppStore } from "@app/store/use-app-store";
 import { selectFilteredVideoRows } from "@app/store/selectors";
@@ -14,14 +14,16 @@ import { CreatorProfileManager } from "@components/molecules/creator-profile-man
 import { Input } from "@components/atoms/input";
 import { Panel } from "@components/atoms/panel";
 import { SourceMultiSelectDropdown } from "@components/molecules/source-multi-select-dropdown";
+import { AppHeader } from "@components/organisms/app-header";
 import { ResultsPanel } from "@components/organisms/results-panel";
 import { DownloadTakeover } from "@components/organisms/download-takeover";
+import { FetchDateRangeDialog } from "@components/organisms/fetch-date-range-dialog";
+import { OnboardingTakeover } from "@components/organisms/onboarding-takeover";
 import { SessionBootstrapTakeover } from "@components/organisms/session-bootstrap-takeover";
 import { AppShellTemplate } from "@components/templates/app-shell-template";
 import { createLogger } from "@lib/logging/logger";
 import { cancelActiveFetch, fetchSelectedSources, resolveAndAddCreatorProfile } from "@features/fetch/fetch-controller";
 import { saveSessionState } from "@lib/db/session-db";
-import { formatBytes, formatCount } from "@lib/utils/format-utils";
 import { getUserFacingErrorMessage } from "@lib/utils/user-facing-errors";
 import type { DateRangePreset, TopLevelSourceType } from "types/domain";
 import {
@@ -167,9 +169,11 @@ export function App() {
   const allVisibleSelected = visibleDownloadableIds.length > 0 && selectedVisibleRowCount === visibleDownloadableIds.length;
   const isFetching = state.phase === "fetching";
   const isDownloading = state.phase === "downloading";
+  const selectedSourceCount = Object.values(state.session_meta.active_sources).filter(Boolean).length;
   const canBuildZip = !isDownloading && !isFetching && downloadableRowsCount > 0;
   const canResumeFetch = state.settings.enable_fetch_resume === true && state.session_meta.resume_fetch_available === true;
   const fetchActionLabel = isFetching ? "Stop Fetch" : canResumeFetch ? "Resume Fetch" : "Fetch Videos";
+  const fetchActionDisabled = isDownloading || (!isFetching && selectedSourceCount === 0);
   const viewerUsername = state.session_meta.viewer_username?.trim() || "unknown";
   const viewerDisplayName = state.session_meta.viewer_display_name?.trim() || viewerUsername;
   const viewerPlanTypeBadge = (state.session_meta.viewer_plan_type?.trim() || "FREE").toUpperCase();
@@ -182,6 +186,8 @@ export function App() {
   const [rememberFetchChoiceDraft, setRememberFetchChoiceDraft] = useState(false);
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
   const [settingsDraft, setSettingsDraft] = useState(state.settings);
+  const [onboardingOpen, setOnboardingOpen] = useState(false);
+  const [onboardingEnableDatabaseDraft, setOnboardingEnableDatabaseDraft] = useState(false);
   const [isStateHydrated, setIsStateHydrated] = useState(false);
   const [bootstrapStatusText, setBootstrapStatusText] = useState("Loading user data…");
   const [bootstrapErrorMessage, setBootstrapErrorMessage] = useState("");
@@ -237,6 +243,7 @@ export function App() {
           created_at: state.session_meta.viewer_created_at?.trim() || "",
           character_count: state.session_meta.viewer_character_count ?? null,
           display_name: state.session_meta.viewer_display_name?.trim() || viewerUsername,
+          isOnboarded: state.session_meta.viewer_is_onboarded === true,
           last_seen_at: new Date().toISOString()
         }
       ]
@@ -256,6 +263,7 @@ export function App() {
     state.session_meta.viewer_character_count,
     state.session_meta.viewer_created_at,
     state.session_meta.viewer_display_name,
+    state.session_meta.viewer_is_onboarded,
     state.session_meta.viewer_permalink,
     state.session_meta.viewer_plan_type,
     state.session_meta.viewer_profile_picture_url,
@@ -268,6 +276,19 @@ export function App() {
       setSettingsDraft(state.settings);
     }
   }, [settingsModalOpen, state.settings]);
+
+  useEffect(() => {
+    if (!isStateHydrated || !state.session_meta.viewer_user_id || state.session_meta.viewer_is_onboarded === true) {
+      return;
+    }
+    setOnboardingEnableDatabaseDraft(state.settings.enable_fetch_resume === true);
+    setOnboardingOpen(true);
+  }, [
+    isStateHydrated,
+    state.session_meta.viewer_is_onboarded,
+    state.session_meta.viewer_user_id,
+    state.settings.enable_fetch_resume
+  ]);
 
   function setAppError(error: unknown): void {
     const userFacingMessage = getUserFacingErrorMessage(error);
@@ -432,6 +453,10 @@ export function App() {
       handleCancelFetch();
       return;
     }
+    if (selectedSourceCount === 0) {
+      useAppStore.getState().setErrorMessage("Select at least one source before fetching videos.");
+      return;
+    }
 
     if (state.settings.remember_fetch_date_choice === true && isFetchRangeConfigured(rememberedDatePreset, rememberedCustomDateStart, rememberedCustomDateEnd)) {
       applyFetchRangeToSession(rememberedDatePreset, rememberedCustomDateStart, rememberedCustomDateEnd);
@@ -492,6 +517,27 @@ export function App() {
         remembered_custom_date_end: rememberedEnd
       });
       setSettingsModalOpen(false);
+    } catch (error) {
+      setAppError(error);
+    }
+  }
+
+  async function handleCompleteOnboarding(): Promise<void> {
+    try {
+      await updateSettings({
+        ...state.settings,
+        enable_fetch_resume: onboardingEnableDatabaseDraft
+      });
+      const currentState = useAppStore.getState();
+      currentState.setSessionMeta({
+        ...currentState.session_meta,
+        viewer_is_onboarded: true
+      });
+      setSettingsDraft((current) => ({
+        ...current,
+        enable_fetch_resume: onboardingEnableDatabaseDraft
+      }));
+      setOnboardingOpen(false);
     } catch (error) {
       setAppError(error);
     }
@@ -582,7 +628,7 @@ export function App() {
             showCameos={state.session_meta.viewer_can_cameo !== false}
             sourceSelections={state.session_meta.active_sources}
           />
-          <Button disabled={isDownloading} onClick={() => void handleFetchAction()} tone={isFetching ? "warning" : "default"} type="button">
+          <Button disabled={fetchActionDisabled} onClick={() => void handleFetchAction()} tone={isFetching ? "warning" : "default"} type="button">
             <RefreshCcw size={16} />
             {fetchActionLabel}
           </Button>
@@ -640,58 +686,18 @@ export function App() {
         sidebarCollapsed={sidebarCollapsed}
         sidebar={sidebar}
         header={
-          <div className="ss-header-grid">
-            <div className="ss-header-identity">
-              <div className="ss-header-title-row">
-                <h1>Save Sora</h1>
-                <span aria-label={`Version ${APP_VERSION}`} className="ss-header-version">{`v${APP_VERSION}`}</span>
-              </div>
-              <div className="ss-header-session ss-muted">
-                {viewerProfilePictureUrl ? (
-                  <img
-                    alt={`${viewerUsername} profile`}
-                    className="ss-header-session-avatar"
-                    src={viewerProfilePictureUrl}
-                  />
-                ) : null}
-                <div className="ss-header-session-meta">
-                  <span>{`Logged in as ${viewerUsername} (${viewerDisplayName})`}</span>
-                  <span className="ss-badge ss-badge--default ss-header-plan-badge">{viewerPlanTypeBadge}</span>
-                </div>
-              </div>
-            </div>
-            <div aria-label="Selection summary" className="ss-header-metrics">
-              <div className="ss-header-metric">
-                <span className="ss-header-metric-label">Selected</span>
-                <strong className="ss-header-metric-value">
-                  {`${formatCount(selectedDownloadableRowCount)} of ${formatCount(downloadableRowsCount)}`}
-                </strong>
-                <span className="ss-header-metric-hint">Ready videos selected for ZIP</span>
-              </div>
-              <div className="ss-header-metric">
-                <span className="ss-header-metric-label">Selected Size</span>
-                <strong className="ss-header-metric-value">{formatBytes(selectedBytes)}</strong>
-                <span className="ss-header-metric-hint">Combined estimated size of selected rows</span>
-              </div>
-            </div>
-            <div className="ss-inline-actions ss-header-actions">
-              <Button asChild tone="info">
-                <a href="https://ko-fi.com/savesora" rel="noreferrer noopener" target="_blank">
-                  <Heart size={16} />
-                  Donate
-                </a>
-              </Button>
-              <Button
-                disabled={state.phase === "fetching" || state.phase === "downloading"}
-                onClick={openSettingsModal}
-                tone="secondary"
-                type="button"
-              >
-                <Settings size={16} />
-                Settings
-              </Button>
-            </div>
-          </div>
+          <AppHeader
+            appVersion={APP_VERSION}
+            disabledSettings={state.phase === "fetching" || state.phase === "downloading"}
+            onOpenSettings={openSettingsModal}
+            selectedBytes={selectedBytes}
+            selectedCount={selectedDownloadableRowCount}
+            totalCount={downloadableRowsCount}
+            viewerDisplayName={viewerDisplayName}
+            viewerPlanTypeBadge={viewerPlanTypeBadge}
+            viewerProfilePictureUrl={viewerProfilePictureUrl}
+            viewerUsername={viewerUsername}
+          />
         }
       >
       <div className="ss-stack ss-stack--stretch">
@@ -703,7 +709,6 @@ export function App() {
           fetchProgress={state.fetch_progress}
           downloadDisabled={!canBuildZip}
           hasSidebar={hasSidebar}
-          hasRows={downloadableRowsCount > 0}
           hasQuery={state.session_meta.query.trim().length > 0}
           phase={state.phase}
           canClearResults={state.phase !== "fetching" && state.phase !== "downloading"}
@@ -732,94 +737,19 @@ export function App() {
           showClearResults={filteredDownloadableRows.length > 0}
         />
       </div>
-      <Dialog.Root onOpenChange={setFetchDateModalOpen} open={fetchDateModalOpen}>
-        <Dialog.Portal>
-          <Dialog.Overlay className="ss-dialog-overlay" />
-          <Dialog.Content className="ss-dialog-content">
-            <Dialog.Title>Choose Fetch Date Range</Dialog.Title>
-            <Dialog.Description>
-              Select the time window for this fetch run, then submit to continue.
-            </Dialog.Description>
-            <div className="ss-stack">
-              <div className="ss-date-preset-grid" role="radiogroup" aria-label="Fetch date range presets">
-                {[
-                  { label: "Today", value: "24h" },
-                  { label: "This week", value: "7d" },
-                  { label: "Last 30 days", value: "1m" },
-                  { label: "Last 3 months", value: "3m" },
-                  { label: "All time", value: "all" },
-                  { label: "Custom", value: "custom" }
-                ].map((option) => (
-                  <button
-                    aria-checked={fetchDatePresetDraft === option.value}
-                    className="ss-date-preset-button"
-                    data-selected={fetchDatePresetDraft === option.value}
-                    key={option.value}
-                    onClick={() => setFetchDatePresetDraft(option.value as DateRangePreset)}
-                    role="radio"
-                    type="button"
-                  >
-                    {option.label}
-                  </button>
-                ))}
-              </div>
-              {fetchDatePresetDraft === "custom" ? (
-                <div className="ss-date-picker-row">
-                  <DatePicker
-                    calendarClassName="ss-react-datepicker"
-                    className="ss-input"
-                    dateFormat="yyyy-MM-dd"
-                    onChange={(value: Date | null) => setFetchDateStartDraft(formatDateInput(value))}
-                    placeholderText="Start date"
-                    selected={parseDateInput(fetchDateStartDraft)}
-                  />
-                  <DatePicker
-                    calendarClassName="ss-react-datepicker"
-                    className="ss-input"
-                    dateFormat="yyyy-MM-dd"
-                    minDate={parseDateInput(fetchDateStartDraft)}
-                    onChange={(value: Date | null) => setFetchDateEndDraft(formatDateInput(value))}
-                    placeholderText="End date"
-                    selected={parseDateInput(fetchDateEndDraft)}
-                  />
-                </div>
-              ) : null}
-              <div className="ss-settings-toggle-card ss-settings-toggle-card--compact">
-                <div className="ss-settings-toggle-row">
-                  <div className="ss-settings-toggle-copy">
-                    <span className="ss-settings-toggle-label">Remember this choice?</span>
-                    <span
-                      className="ss-settings-toggle-status"
-                      data-state={rememberFetchChoiceDraft ? "enabled" : "disabled"}
-                    >
-                      {rememberFetchChoiceDraft ? "Enabled" : "Disabled"}
-                    </span>
-                  </div>
-                  <Switch
-                    ariaLabel="Remember selected fetch date range"
-                    checked={rememberFetchChoiceDraft}
-                    id="fetch-date-remember-choice"
-                    onCheckedChange={setRememberFetchChoiceDraft}
-                  />
-                </div>
-                <p className="ss-muted">If enabled, future fetches will skip this dialog and use the saved range.</p>
-              </div>
-            </div>
-            <div className="ss-inline-actions ss-dialog-footer-actions">
-              <Dialog.Close asChild>
-                <Button tone="secondary" type="button">Cancel</Button>
-              </Dialog.Close>
-              <Button
-                disabled={!isFetchRangeConfigured(fetchDatePresetDraft, fetchDateStartDraft, fetchDateEndDraft)}
-                onClick={() => void handleFetchDateSubmit()}
-                type="button"
-              >
-                Submit and Fetch
-              </Button>
-            </div>
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
+      <FetchDateRangeDialog
+        customEnd={fetchDateEndDraft}
+        customStart={fetchDateStartDraft}
+        onCustomEndChange={setFetchDateEndDraft}
+        onCustomStartChange={setFetchDateStartDraft}
+        onOpenChange={setFetchDateModalOpen}
+        onPresetChange={setFetchDatePresetDraft}
+        onRememberChoiceChange={setRememberFetchChoiceDraft}
+        onSubmit={() => void handleFetchDateSubmit()}
+        open={fetchDateModalOpen}
+        preset={fetchDatePresetDraft}
+        rememberChoice={rememberFetchChoiceDraft}
+      />
       <Dialog.Root onOpenChange={setSettingsModalOpen} open={settingsModalOpen}>
         <Dialog.Portal>
           <Dialog.Overlay className="ss-dialog-overlay ss-settings-takeover-overlay" />
@@ -995,6 +925,14 @@ export function App() {
         downloadProgress={state.download_progress}
         selectedBytes={selectedBytes}
         visible={state.phase === "downloading"}
+      />
+      <OnboardingTakeover
+        backgroundVideoSrc={takeoverBackgroundVideo}
+        enableDatabase={onboardingEnableDatabaseDraft}
+        iconSrc={takeoverIcon}
+        onEnableDatabaseChange={setOnboardingEnableDatabaseDraft}
+        onSubmit={() => void handleCompleteOnboarding()}
+        open={onboardingOpen}
       />
       <SessionBootstrapTakeover
         errorMessage={bootstrapErrorMessage}

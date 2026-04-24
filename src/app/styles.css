@@ -99,20 +99,20 @@ input {
 }
 
 .ss-header-grid {
-  align-items: stretch;
-  display: grid;
-  gap: 0.9rem;
-  grid-template-columns: minmax(260px, 1fr) minmax(420px, 1.25fr) auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
 }
 
 .ss-header-identity {
-  background: rgba(15, 23, 42, 0.04);
-  border: 1px solid rgba(148, 163, 184, 0.22);
-  border-radius: 14px;
-  display: grid;
-  gap: 0.5rem;
+  display: flex;
+  align-items: center;
+  flex: 1;
+  justify-content: space-between;
+  gap: 1rem;
   min-width: 0;
-  padding: 0.72rem 0.88rem;
+  padding: 1rem;
 }
 
 .ss-header-title-row {
@@ -140,43 +140,36 @@ input {
   padding: 0.38rem 0.56rem;
 }
 
-.ss-header-metrics {
-  display: grid;
-  gap: 0.6rem;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  min-width: 0;
-}
-
-.ss-header-metric {
+.ss-selection-summary {
   background: rgba(15, 23, 42, 0.04);
   border: 1px solid rgba(148, 163, 184, 0.24);
   border-radius: 14px;
   display: grid;
   gap: 0.28rem;
-  min-height: 4.6rem;
-  padding: 0.68rem 0.82rem;
+  min-width: min(30rem, 100%);
+  padding: 0.82rem 1rem;
 }
 
-.ss-header-metric-label,
-.ss-header-metric-hint {
+.ss-selection-summary-label,
+.ss-selection-summary-hint {
   color: #475569;
   letter-spacing: 0.03em;
 }
 
-.ss-header-metric-label {
+.ss-selection-summary-label {
   font-size: 0.68rem;
   font-weight: 700;
   line-height: 1;
   text-transform: uppercase;
 }
 
-.ss-header-metric-value {
+.ss-selection-summary-value {
   font-size: 1.35rem;
   font-variant-numeric: tabular-nums;
   line-height: 1.05;
 }
 
-.ss-header-metric-hint {
+.ss-selection-summary-hint {
   font-size: 0.82rem;
   font-weight: 600;
   line-height: 1.2;
@@ -184,8 +177,6 @@ input {
 
 .ss-header-actions {
   align-items: stretch;
-  background: rgba(15, 23, 42, 0.03);
-  border: 1px solid rgba(148, 163, 184, 0.2);
   border-radius: 14px;
   display: flex;
   gap: 0.55rem;
@@ -253,7 +244,7 @@ input {
   align-items: center;
   background: rgba(255, 255, 255, 0.78);
   border: 1px solid rgba(148, 163, 184, 0.35);
-  border-radius: 999px;
+  border-radius: 0;
   color: #0f172a;
   cursor: pointer;
   display: inline-flex;
@@ -271,7 +262,7 @@ input {
 .ss-source-dropdown-menu {
   background: rgba(255, 255, 255, 0.98);
   border: 1px solid rgba(148, 163, 184, 0.3);
-  border-radius: 14px;
+  border-radius: 0;
   box-shadow: 0 16px 36px rgba(15, 23, 42, 0.16);
   display: flex;
   flex-direction: column;
@@ -320,7 +311,6 @@ input {
 }
 
 .ss-sidebar-actions .ss-source-dropdown-trigger {
-  border-radius: 14px;
   justify-content: space-between;
   min-height: 2.75rem;
   width: 100%;
@@ -426,39 +416,6 @@ input {
 .ss-fetch-step-actions {
   display: flex;
   gap: 0.6rem;
-}
-
-.ss-summary-stat-grid {
-  display: grid;
-  gap: 0.75rem;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-}
-
-.ss-summary-stat {
-  border-radius: 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 0.3rem;
-  min-width: 0;
-  padding: 0.75rem;
-}
-
-.ss-summary-stat-label,
-.ss-summary-stat-hint {
-  font-size: 0.8125rem;
-}
-
-.ss-summary-stat-label {
-  color: #475569;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.ss-summary-stat-value {
-  font-size: 1.1rem;
-  font-variant-numeric: tabular-nums;
-  line-height: 1.1;
 }
 
 .ss-download-progress-panel {
@@ -792,7 +749,7 @@ input {
 .ss-select-trigger {
   background: rgba(255, 255, 255, 0.95);
   border: 1px solid rgba(148, 163, 184, 0.28);
-  border-radius: 14px;
+  border-radius: 0;
   min-height: 2.75rem;
   padding: 0.65rem 0.9rem;
 }
@@ -847,6 +804,7 @@ input {
 }
 
 .ss-select-content {
+  border-radius: 0;
   max-height: min(58vh, 420px);
   max-width: min(440px, calc(100vw - 1rem));
   overflow-y: auto;
@@ -1591,18 +1549,15 @@ input {
   }
 
   .ss-header-grid {
-    grid-template-columns: 1fr;
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .ss-header-identity,
-  .ss-header-metrics,
+  .ss-selection-summary,
   .ss-header-actions {
     min-width: 0;
     width: 100%;
-  }
-
-  .ss-header-metrics {
-    grid-template-columns: 1fr 1fr;
   }
 
   .ss-header-actions {
@@ -1648,8 +1603,8 @@ input {
 }
 
 @media (max-width: 640px) {
-  .ss-header-metrics {
-    grid-template-columns: 1fr;
+  .ss-selection-summary {
+    min-width: 0;
   }
 
   .ss-results-pagination {
