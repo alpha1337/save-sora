@@ -73,6 +73,7 @@ export interface CharacterAccount {
 
 export interface AppSettings {
   archive_name_template: string;
+  download_directory_name: string;
   enable_fetch_resume?: boolean;
   remember_fetch_date_choice?: boolean;
   remembered_date_range_preset?: DateRangePreset;

@@ -1,8 +1,10 @@
 import { useAppStore } from "@app/store/use-app-store";
 import type { AppSettings } from "types/domain";
+import { clearDownloadDirectoryHandle, saveDownloadDirectoryHandle } from "@lib/db/download-directory-db";
 import { clearDownloadHistory, listDownloadHistoryIds } from "@lib/db/download-history-db";
 import { clearFetchCacheDatabase } from "@lib/db/fetch-cache-db";
 import { saveSettings } from "@lib/db/session-db";
+import { pickWritableDownloadDirectory } from "@lib/utils/file-system-access";
 
 /**
  * Settings-side persistence and the only destructive entrypoint for permanent
@@ -11,6 +13,27 @@ import { saveSettings } from "@lib/db/session-db";
 export async function updateSettings(nextSettings: AppSettings): Promise<void> {
   await saveSettings(nextSettings);
   useAppStore.getState().setSettings(nextSettings);
+}
+
+export async function chooseDownloadDirectoryFromSettings(currentSettings: AppSettings): Promise<AppSettings> {
+  const directoryHandle = await pickWritableDownloadDirectory();
+  await saveDownloadDirectoryHandle(directoryHandle);
+  const nextSettings: AppSettings = {
+    ...currentSettings,
+    download_directory_name: directoryHandle.name
+  };
+  await updateSettings(nextSettings);
+  return nextSettings;
+}
+
+export async function clearDownloadDirectoryFromSettings(currentSettings: AppSettings): Promise<AppSettings> {
+  await clearDownloadDirectoryHandle();
+  const nextSettings: AppSettings = {
+    ...currentSettings,
+    download_directory_name: ""
+  };
+  await updateSettings(nextSettings);
+  return nextSettings;
 }
 
 export async function clearDownloadHistoryFromSettings(): Promise<void> {

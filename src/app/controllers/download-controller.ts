@@ -5,6 +5,7 @@ import { downloadBlob, downloadTextFile } from "@lib/utils/download-utils";
 import { selectSelectedVideoRows } from "@app/store/selectors";
 import { createLogger } from "@lib/logging/logger";
 import { clearDownloadQueue } from "@lib/db/session-db";
+import { loadDownloadDirectoryHandle } from "@lib/db/download-directory-db";
 import { runDownloadPreflight } from "./download-preflight";
 import type { ArchiveSupplementalEntry, ArchiveWorkPlan, DownloadProgressState } from "types/domain";
 
@@ -86,10 +87,12 @@ export async function downloadSelectedRows(): Promise<void> {
   const rootWorkPlan = buildArchiveWorkPlan(targetRows, state.settings.archive_name_template, preflightResult.queue);
   const zipParts = splitRowsIntoZipParts(rootWorkPlan.rows);
   const totalParts = zipParts.length;
+  const downloadDirectoryHandle = await loadDownloadDirectoryHandle();
   logger.info("zip build start", {
     selected_rows: rootWorkPlan.rows.length,
     archive_name: rootWorkPlan.archive_name,
-    parts: totalParts
+    parts: totalParts,
+    download_directory: downloadDirectoryHandle?.name ?? "browser-downloads"
   });
 
   const finalZipPartRows = zipParts[zipParts.length - 1] ?? rootWorkPlan.rows;
@@ -150,12 +153,12 @@ export async function downloadSelectedRows(): Promise<void> {
       totalParts
     });
     completedRowsAcrossParts += partRows.length;
-    downloadBlob(partArchiveName, partArchiveBlob);
+    await downloadBlob(partArchiveName, partArchiveBlob, { directoryHandle: downloadDirectoryHandle });
     await waitForNextTick();
   }
 
   if (totalParts > 1) {
-    downloadExtractionHelpersForSplitArchive(rootWorkPlan.archive_name);
+    await downloadExtractionHelpersForSplitArchive(rootWorkPlan.archive_name, downloadDirectoryHandle);
   }
 
   const downloadedVideoIds = new Set<string>();
@@ -361,9 +364,12 @@ function buildArchiveFileName(baseArchiveName: string, partNumber: number, total
   return `${baseArchiveName}.part-${normalizedPartNumber}-of-${normalizedTotalParts}.zip`;
 }
 
-function downloadExtractionHelpersForSplitArchive(archiveName: string): void {
-  downloadTextFile("extract-all-windows.bat", buildWindowsExtractScript(archiveName));
-  downloadTextFile("extract-all-macOS.command", buildMacExtractScript(archiveName));
+async function downloadExtractionHelpersForSplitArchive(
+  archiveName: string,
+  directoryHandle: FileSystemDirectoryHandle | null
+): Promise<void> {
+  await downloadTextFile("extract-all-windows.bat", buildWindowsExtractScript(archiveName), "text/plain;charset=utf-8", { directoryHandle });
+  await downloadTextFile("extract-all-macOS.command", buildMacExtractScript(archiveName), "text/plain;charset=utf-8", { directoryHandle });
 }
 
 function buildWindowsExtractScript(archiveName: string): string {

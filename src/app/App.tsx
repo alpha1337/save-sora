@@ -1,17 +1,19 @@
-import * as Dialog from "@radix-ui/react-dialog";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { RefreshCcw, Trash2 } from "lucide-react";
-import DatePicker from "react-datepicker";
+import { RefreshCcw } from "lucide-react";
 import { useAppStore } from "@app/store/use-app-store";
 import { selectFilteredVideoRows, selectVisibleDownloadableVideoIds } from "@app/store/selectors";
 import { bootstrapAppState } from "@app/controllers/bootstrap-controller";
 import { closeDownloadSummary, downloadSelectedRows, startOverDownloadSummary } from "@app/controllers/download-controller";
-import { clearDownloadHistoryFromSettings, clearFetchCacheFromSettings, updateSettings } from "@app/controllers/settings-controller";
+import {
+  chooseDownloadDirectoryFromSettings,
+  clearDownloadDirectoryFromSettings,
+  clearDownloadHistoryFromSettings,
+  clearFetchCacheFromSettings,
+  updateSettings
+} from "@app/controllers/settings-controller";
 import { Button } from "@components/atoms/button";
-import { Switch } from "@components/atoms/switch";
 import { CharacterAccountSelector } from "@components/molecules/character-account-selector";
 import { CreatorProfileManager } from "@components/molecules/creator-profile-manager";
-import { Input } from "@components/atoms/input";
 import { Panel } from "@components/atoms/panel";
 import { SourceMultiSelectDropdown } from "@components/molecules/source-multi-select-dropdown";
 import { AppHeader } from "@components/organisms/app-header";
@@ -20,26 +22,25 @@ import { DownloadTakeover } from "@components/organisms/download-takeover";
 import { FetchDateRangeDialog } from "@components/organisms/fetch-date-range-dialog";
 import { OnboardingTakeover } from "@components/organisms/onboarding-takeover";
 import { SessionBootstrapTakeover } from "@components/organisms/session-bootstrap-takeover";
+import { SettingsDialog } from "@components/organisms/settings-dialog";
 import { AppShellTemplate } from "@components/templates/app-shell-template";
 import { createLogger } from "@lib/logging/logger";
 import { cancelActiveFetch, fetchSelectedSources, resolveAndAddCreatorProfile } from "@features/fetch/fetch-controller";
 import { saveSessionState } from "@lib/db/session-db";
+import { canPickDownloadDirectory, isDirectoryPickerAbort } from "@lib/utils/file-system-access";
 import { getUserFacingErrorMessage } from "@lib/utils/user-facing-errors";
 import type { DateRangePreset, TopLevelSourceType, VideoRow } from "types/domain";
 import {
   extractCharacterAccountIdsFromRawPayload,
-  formatDateInput,
   isFetchRangeConfigured,
   isZipReadyRow,
   normalizeCharacterLabel,
   normalizeIdentity,
   normalizeRememberedDatePreset,
-  parseDateInput,
   waitForFetchToStop
 } from "@app/utils/app-helpers";
 import takeoverBackgroundVideo from "../../assets/update-takeover-bg.mp4";
 import takeoverIcon from "../../assets/icon-48.png";
-import "./settings-modal.css";
 
 const logger = createLogger("app");
 const APP_VERSION = __APP_VERSION__;
@@ -192,6 +193,7 @@ export function App() {
   const [rememberFetchChoiceDraft, setRememberFetchChoiceDraft] = useState(false);
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
   const [settingsDraft, setSettingsDraft] = useState(state.settings);
+  const [choosingDownloadDirectory, setChoosingDownloadDirectory] = useState(false);
   const [onboardingOpen, setOnboardingOpen] = useState(false);
   const [onboardingEnableDatabaseDraft, setOnboardingEnableDatabaseDraft] = useState(false);
   const [hasJustCompletedOnboarding, setHasJustCompletedOnboarding] = useState(false);
@@ -567,6 +569,40 @@ export function App() {
     }
   }
 
+  async function handleChooseDownloadDirectory(): Promise<void> {
+    if (!canPickDownloadDirectory()) {
+      useAppStore.getState().setErrorMessage("This browser does not support choosing a default ZIP folder.");
+      return;
+    }
+
+    setChoosingDownloadDirectory(true);
+    try {
+      const nextSettings = await chooseDownloadDirectoryFromSettings(useAppStore.getState().settings);
+      setSettingsDraft((current) => ({
+        ...current,
+        download_directory_name: nextSettings.download_directory_name
+      }));
+    } catch (error) {
+      if (!isDirectoryPickerAbort(error)) {
+        setAppError(error);
+      }
+    } finally {
+      setChoosingDownloadDirectory(false);
+    }
+  }
+
+  async function handleClearDownloadDirectory(): Promise<void> {
+    try {
+      const nextSettings = await clearDownloadDirectoryFromSettings(useAppStore.getState().settings);
+      setSettingsDraft((current) => ({
+        ...current,
+        download_directory_name: nextSettings.download_directory_name
+      }));
+    } catch (error) {
+      setAppError(error);
+    }
+  }
+
   async function handleCompleteOnboarding(): Promise<void> {
     try {
       await updateSettings({
@@ -797,176 +833,24 @@ export function App() {
         preset={fetchDatePresetDraft}
         rememberChoice={rememberFetchChoiceDraft}
       />
-      <Dialog.Root onOpenChange={setSettingsModalOpen} open={settingsModalOpen}>
-        <Dialog.Portal>
-          <Dialog.Overlay className="ss-dialog-overlay ss-settings-takeover-overlay" />
-          <Dialog.Content className="ss-dialog-content ss-settings-takeover-content">
-            <div className="ss-settings-takeover-backdrop" aria-hidden="true">
-              <video
-                autoPlay
-                className="ss-settings-takeover-video"
-                loop
-                muted
-                playsInline
-                preload="auto"
-                src={takeoverBackgroundVideo}
-              />
-              <div className="ss-settings-takeover-video-overlay" />
-            </div>
-            <div className="ss-settings-takeover-panel">
-              <div className="ss-settings-takeover-header">
-                <img alt="" aria-hidden="true" className="ss-settings-takeover-icon" src={takeoverIcon} />
-                <div className="ss-settings-takeover-title-wrap">
-                  <Dialog.Title className="ss-settings-modal-title">Settings</Dialog.Title>
-                  <Dialog.Description className="ss-settings-modal-description">
-                    What would you like your zip file to be named?
-                  </Dialog.Description>
-                </div>
-              </div>
-              <div className="ss-stack">
-                <label className="ss-stack">
-                  <span className="ss-settings-name-label">ZIP file name</span>
-                  <Input
-                    onChange={(event) =>
-                      setSettingsDraft((current) => ({
-                        ...current,
-                        archive_name_template: event.target.value
-                      }))
-                    }
-                    value={settingsDraft.archive_name_template}
-                  />
-                </label>
-                <div className="ss-settings-toggle-card">
-                  <div className="ss-settings-toggle-row">
-                    <div className="ss-settings-toggle-copy">
-                      <span className="ss-settings-toggle-label">Enable Database?</span>
-                      <span
-                        className="ss-settings-toggle-status"
-                        data-state={settingsDraft.enable_fetch_resume === true ? "enabled" : "disabled"}
-                      >
-                        {settingsDraft.enable_fetch_resume === true ? "Enabled" : "Disabled"}
-                      </span>
-                    </div>
-                    <Switch
-                      ariaLabel="Enable database cache and resume checkpoints"
-                      checked={settingsDraft.enable_fetch_resume === true}
-                      id="settings-enable-fetch-resume"
-                      onCheckedChange={(checked) =>
-                        setSettingsDraft((current) => ({
-                          ...current,
-                          enable_fetch_resume: checked
-                        }))
-                      }
-                    />
-                  </div>
-                  <p className="ss-muted">Loads saved rows and resumes checkpoints.</p>
-                </div>
-                <div className="ss-settings-toggle-card">
-                  <div className="ss-settings-toggle-row">
-                    <div className="ss-settings-toggle-copy">
-                      <span className="ss-settings-toggle-label">Remember fetch date?</span>
-                      <span
-                        className="ss-settings-toggle-status"
-                        data-state={settingsDraft.remember_fetch_date_choice === true ? "enabled" : "disabled"}
-                      >
-                        {settingsDraft.remember_fetch_date_choice === true ? "Enabled" : "Disabled"}
-                      </span>
-                    </div>
-                    <Switch
-                      ariaLabel="Remember selected fetch date range and skip date prompt"
-                      checked={settingsDraft.remember_fetch_date_choice === true}
-                      id="settings-remember-fetch-date-choice"
-                      onCheckedChange={(checked) =>
-                        setSettingsDraft((current) => ({
-                          ...current,
-                          remember_fetch_date_choice: checked
-                        }))
-                      }
-                    />
-                  </div>
-                  <p className="ss-muted">Select the saved range used when the fetch date prompt is skipped.</p>
-                  <div className="ss-date-preset-grid" aria-label="Remembered fetch date range" role="radiogroup">
-                    {[
-                      { label: "Today", value: "24h" },
-                      { label: "This week", value: "7d" },
-                      { label: "Last 30 days", value: "1m" },
-                      { label: "Last 3 months", value: "3m" },
-                      { label: "All time", value: "all" },
-                      { label: "Custom", value: "custom" }
-                    ].map((option) => (
-                      <button
-                        aria-checked={settingsRememberedDatePreset === option.value}
-                        className="ss-date-preset-button"
-                        data-selected={settingsRememberedDatePreset === option.value}
-                        key={`settings-${option.value}`}
-                        onClick={() =>
-                          setSettingsDraft((current) => ({
-                            ...current,
-                            remembered_date_range_preset: option.value as DateRangePreset
-                          }))
-                        }
-                        role="radio"
-                        type="button"
-                      >
-                        {option.label}
-                      </button>
-                    ))}
-                  </div>
-                  {settingsRememberedDatePreset === "custom" ? (
-                    <div className="ss-date-picker-row">
-                      <DatePicker
-                        calendarClassName="ss-react-datepicker"
-                        className="ss-input"
-                        dateFormat="yyyy-MM-dd"
-                        onChange={(value: Date | null) =>
-                          setSettingsDraft((current) => ({
-                            ...current,
-                            remembered_custom_date_start: formatDateInput(value)
-                          }))
-                        }
-                        placeholderText="Start date"
-                        selected={parseDateInput(settingsRememberedCustomDateStart)}
-                      />
-                      <DatePicker
-                        calendarClassName="ss-react-datepicker"
-                        className="ss-input"
-                        dateFormat="yyyy-MM-dd"
-                        minDate={parseDateInput(settingsRememberedCustomDateStart)}
-                        onChange={(value: Date | null) =>
-                          setSettingsDraft((current) => ({
-                            ...current,
-                            remembered_custom_date_end: formatDateInput(value)
-                          }))
-                        }
-                        placeholderText="End date"
-                        selected={parseDateInput(settingsRememberedCustomDateEnd)}
-                      />
-                    </div>
-                  ) : null}
-                </div>
-                <div className="ss-settings-actions-row">
-                  <Button onClick={() => void handleClearFetchDatabase()} tone="warning" type="button">
-                    <Trash2 size={16} />
-                    Clear Fetch Database
-                  </Button>
-                  <Button onClick={() => void handleClearDownloadHistory()} tone="danger" type="button">
-                    <Trash2 size={16} />
-                    Clear Download History
-                  </Button>
-                </div>
-              </div>
-              <div className="ss-settings-actions-row">
-                <Dialog.Close asChild>
-                  <Button tone="secondary" type="button">Cancel</Button>
-                </Dialog.Close>
-                <Button onClick={() => void handleSaveSettings()} type="button">
-                  Save Settings
-                </Button>
-              </div>
-            </div>
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
+      <SettingsDialog
+        backgroundVideoSrc={takeoverBackgroundVideo}
+        choosingDownloadDirectory={choosingDownloadDirectory}
+        directoryPickerSupported={canPickDownloadDirectory()}
+        iconSrc={takeoverIcon}
+        onChooseDownloadDirectory={() => void handleChooseDownloadDirectory()}
+        onClearDownloadDirectory={() => void handleClearDownloadDirectory()}
+        onClearDownloadHistory={() => void handleClearDownloadHistory()}
+        onClearFetchDatabase={() => void handleClearFetchDatabase()}
+        onOpenChange={setSettingsModalOpen}
+        onSave={() => void handleSaveSettings()}
+        onSettingsDraftChange={setSettingsDraft}
+        open={settingsModalOpen}
+        rememberedCustomDateEnd={settingsRememberedCustomDateEnd}
+        rememberedCustomDateStart={settingsRememberedCustomDateStart}
+        rememberedDatePreset={settingsRememberedDatePreset}
+        settingsDraft={settingsDraft}
+      />
       </AppShellTemplate>
       <DownloadTakeover
         downloadProgress={state.download_progress}

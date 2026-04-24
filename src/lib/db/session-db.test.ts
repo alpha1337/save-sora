@@ -26,6 +26,7 @@ describe("session-db", () => {
   it("persists settings", async () => {
     await saveSettings({
       archive_name_template: "archive-test",
+      download_directory_name: "Sora exports",
       enable_fetch_resume: true,
       remember_fetch_date_choice: true,
       remembered_date_range_preset: "all",
@@ -35,6 +36,7 @@ describe("session-db", () => {
 
     await expect(loadSettings()).resolves.toEqual({
       archive_name_template: "archive-test",
+      download_directory_name: "Sora exports",
       enable_fetch_resume: true,
       remember_fetch_date_choice: true,
       remembered_date_range_preset: "all",

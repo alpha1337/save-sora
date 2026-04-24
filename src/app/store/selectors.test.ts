@@ -48,6 +48,7 @@ function createState(sortKey: VideoSortOption, rows: VideoRow[]): AppStoreState 
     error_message: "",
     settings: {
       archive_name_template: "save-sora-library",
+      download_directory_name: ""
     },
     session_meta: {
       active_sources: {

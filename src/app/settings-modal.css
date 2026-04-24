@@ -149,6 +149,30 @@
   justify-content: space-between;
 }
 
+.ss-settings-directory-row {
+  align-items: center;
+  display: flex;
+  gap: 0.75rem;
+  justify-content: space-between;
+}
+
+.ss-settings-directory-name {
+  color: rgba(201, 220, 234, 0.9);
+  font-weight: 700;
+}
+
+.ss-settings-directory-actions {
+  align-items: center;
+  display: flex;
+  flex: 0 0 auto;
+  gap: 0.5rem;
+}
+
+.ss-settings-directory-actions .ss-button {
+  flex: 0 0 auto;
+  width: auto;
+}
+
 .ss-settings-toggle-copy {
   display: flex;
   flex-direction: column;
@@ -276,5 +300,18 @@
 
   .ss-settings-actions-row .ss-button {
     width: 100%;
+  }
+
+  .ss-settings-directory-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .ss-settings-directory-actions {
+    justify-content: stretch;
+  }
+
+  .ss-settings-directory-actions .ss-button {
+    flex: 1 1 auto;
   }
 }

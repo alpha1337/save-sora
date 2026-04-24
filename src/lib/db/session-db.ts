@@ -4,6 +4,7 @@ import { SAVED_ACCOUNTS_STORE, SETTINGS_STORE, openSaveSoraV3Db } from "./save-s
 const SETTINGS_KEY = "settings";
 const DEFAULT_SETTINGS: AppSettings = {
   archive_name_template: "save-sora-library",
+  download_directory_name: "",
   enable_fetch_resume: false,
   remember_fetch_date_choice: false,
   remembered_date_range_preset: "all",
@@ -114,7 +115,7 @@ export async function saveSettings(settings: AppSettings): Promise<void> {
 
 export async function loadSettings(): Promise<AppSettings | null> {
   const database = await openSessionDb();
-  const rawSettings = await database.get(SETTINGS_STORE, SETTINGS_KEY);
+  const rawSettings: unknown = await database.get(SETTINGS_STORE, SETTINGS_KEY);
   if (!rawSettings || typeof rawSettings !== "object") {
     return null;
   }
@@ -323,6 +324,9 @@ function normalizeSettings(input: Partial<AppSettings>): AppSettings {
   const archiveNameTemplate = typeof input.archive_name_template === "string" && input.archive_name_template.trim()
     ? input.archive_name_template.trim()
     : DEFAULT_SETTINGS.archive_name_template;
+  const downloadDirectoryName = typeof input.download_directory_name === "string"
+    ? input.download_directory_name.trim()
+    : DEFAULT_SETTINGS.download_directory_name;
   const rememberedDateRangePreset = input.remembered_date_range_preset === "24h" ||
     input.remembered_date_range_preset === "7d" ||
     input.remembered_date_range_preset === "1m" ||
@@ -340,6 +344,7 @@ function normalizeSettings(input: Partial<AppSettings>): AppSettings {
 
   return {
     archive_name_template: archiveNameTemplate,
+    download_directory_name: downloadDirectoryName,
     enable_fetch_resume: input.enable_fetch_resume === true,
     remember_fetch_date_choice: input.remember_fetch_date_choice === true,
     remembered_date_range_preset: rememberedDateRangePreset,

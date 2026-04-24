@@ -13,6 +13,7 @@ const defaultSourceSelectionState: SourceSelectionState = {
 
 const defaultSettings: AppSettings = {
   archive_name_template: "save-sora-library",
+  download_directory_name: "",
   enable_fetch_resume: false,
   remember_fetch_date_choice: false,
   remembered_date_range_preset: "all",
