@@ -82,12 +82,13 @@ describe("DownloadTakeover", () => {
     expect(screen.getAllByText("could_not_share_video").length).toBeGreaterThan(0);
   });
 
-  it("renders a concise current-video action subtitle", () => {
+  it("renders a phase-prefixed current-video action subtitle", () => {
     render(
       <DownloadTakeover
         downloadProgress={createProgress({
           active_label: "Current Queue Video",
-          active_subtitle: "Resolving the best available source URL."
+          active_subtitle: "Resolving the best available source URL.",
+          preflight_stage: "resolving_sources"
         })}
         onCloseSummary={vi.fn()}
         onStartOver={vi.fn()}
@@ -97,12 +98,12 @@ describe("DownloadTakeover", () => {
     );
 
     expect(screen.getByRole("heading", { name: "Current Queue Video" })).toBeInTheDocument();
-    expect(screen.getByText("Resolving the best available source URL.")).toHaveClass("ss-download-takeover-subtitle");
+    expect(screen.getByText("Phase 3 of 5: Resolving the best available source URL.")).toHaveClass("ss-download-takeover-subtitle");
   });
 
-  it("truncates long takeover titles to 50 characters", () => {
+  it("truncates long takeover titles to 40 characters", () => {
     const longTitle = "Archive Ready".repeat(6);
-    const expectedTitle = `${longTitle.slice(0, 47)}...`;
+    const expectedTitle = `${longTitle.slice(0, 37)}...`;
 
     render(
       <DownloadTakeover

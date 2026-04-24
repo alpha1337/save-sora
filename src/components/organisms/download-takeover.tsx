@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { ChevronDown, HardDriveDownload } from "lucide-react";
-import type { DownloadProgressState } from "types/domain";
+import type { DownloadPreflightStage, DownloadProgressState } from "types/domain";
 import { Button } from "@components/atoms/button";
 import { formatBytes, formatCount } from "@lib/utils/format-utils";
 import "./download-takeover.css";
@@ -21,8 +21,18 @@ const TAKEOVER_MESSAGES = [
   "Finalizing archives for reliable extraction"
 ] as const;
 
-const MAX_TAKEOVER_TITLE_LENGTH = 50;
+const MAX_TAKEOVER_TITLE_LENGTH = 40;
 const MAX_REJECTION_TEXT_LENGTH = 100;
+const TOTAL_TAKEOVER_PHASES = 5;
+const TAKEOVER_PHASE_BY_STAGE: Record<DownloadPreflightStage, number> = {
+  idle: 1,
+  building_queue: 1,
+  sharing_drafts: 2,
+  resolving_sources: 3,
+  zip_handoff: 4,
+  zipping: 5,
+  completed: 5
+};
 
 export function DownloadTakeover({
   downloadProgress,
@@ -85,7 +95,10 @@ export function DownloadTakeover({
   const isComplete = downloadProgress.zip_completed;
   const stageLabel = downloadProgress.preflight_stage_label || (isComplete ? "Summary" : "Archive");
   const takeoverTitle = downloadProgress.active_label || "Preparing archive workflow…";
-  const takeoverSubtitle = downloadProgress.active_subtitle?.trim() ?? "";
+  const takeoverSubtitle = formatTakeoverSubtitle(
+    downloadProgress.preflight_stage,
+    downloadProgress.active_subtitle
+  );
 
   if (!visible) {
     return null;
@@ -220,4 +233,13 @@ function truncateText(value: string, maxLength: number): string {
   }
 
   return `${value.slice(0, maxLength - 3)}...`;
+}
+
+function formatTakeoverSubtitle(stage: DownloadPreflightStage, subtitle: string): string {
+  const normalizedSubtitle = subtitle.trim();
+  if (!normalizedSubtitle) {
+    return "";
+  }
+
+  return `Phase ${TAKEOVER_PHASE_BY_STAGE[stage]} of ${TOTAL_TAKEOVER_PHASES}: ${normalizedSubtitle}`;
 }
