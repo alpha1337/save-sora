@@ -183,6 +183,7 @@ export interface ArchiveWorkPlanRow extends VideoRow {
   archive_path: string;
   archive_variant: ArchiveVariant;
   archive_download_url: string;
+  metadata_text: string;
 }
 
 export interface ArchiveWorkPlan {
@@ -198,6 +199,7 @@ export interface ZipWorkerRow {
   source_bucket: SourceBucket;
   archive_path: string;
   archive_download_url: string;
+  metadata_text: string;
 }
 
 export interface ZipWorkerWorkPlan {

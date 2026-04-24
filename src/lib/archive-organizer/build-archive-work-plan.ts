@@ -43,7 +43,8 @@ export function buildZipWorkerWorkPlan(
       title: row.title,
       source_bucket: row.source_bucket,
       archive_path: row.archive_path,
-      archive_download_url: row.archive_download_url
+      archive_download_url: row.archive_download_url,
+      metadata_text: row.metadata_text
     }))
   };
 }
@@ -60,12 +61,18 @@ function buildArchiveRow(
   }
 
   const archiveVariant: ArchiveVariant = variantUrls.noWatermark ? "no-watermark" : "watermark";
-  const archivePath = [archiveRootFolder, ...resolveArchiveFolder(row, archiveVariant), sanitizePathSegment(row.video_id, "video")].join("/");
-  return {
+  const archiveBaseName = buildArchiveBaseName(row);
+  const archivePath = [archiveRootFolder, ...resolveArchiveFolder(row, archiveVariant), archiveBaseName].join("/");
+  const archiveRow: ArchiveWorkPlanRow = {
     ...row,
     archive_path: archivePath,
     archive_variant: archiveVariant,
-    archive_download_url: archiveDownloadUrl
+    archive_download_url: archiveDownloadUrl,
+    metadata_text: ""
+  };
+  return {
+    ...archiveRow,
+    metadata_text: buildMetadataText(archiveRow)
   };
 }
 
@@ -294,6 +301,104 @@ function normalizeOptionalDownloadUrl(value: unknown): string {
 function sanitizePathSegment(value: string, fallback: string): string {
   const sanitized = sanitizeFileNamePart(value, fallback).trim().replace(/[\\/]+/g, "-");
   return sanitized || fallback;
+}
+
+function buildArchiveBaseName(row: VideoRow): string {
+  return `${resolveArchiveDatePrefix(row)}-${sanitizePathSegment(row.video_id, "video")}`;
+}
+
+function resolveArchiveDatePrefix(row: VideoRow): string {
+  for (const value of [row.published_at, row.created_at, row.fetched_at]) {
+    const prefix = formatDatePrefix(value);
+    if (prefix) {
+      return prefix;
+    }
+  }
+  return "00000000";
+}
+
+function formatDatePrefix(value: string | null | undefined): string {
+  if (!value) {
+    return "";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(date.getUTCDate()).padStart(2, "0");
+  const year = String(date.getUTCFullYear());
+  return `${month}${day}${year}`;
+}
+
+function buildMetadataText(row: ArchiveWorkPlanRow): string {
+  const metadata: Array<[string, unknown]> = [
+    ["video_id", row.video_id],
+    ["row_id", row.row_id],
+    ["title", row.title],
+    ["prompt", row.prompt],
+    ["discovery_phrase", row.discovery_phrase],
+    ["description", row.description],
+    ["caption", row.caption],
+    ["creator_name", row.creator_name],
+    ["creator_username", row.creator_username],
+    ["character_name", row.character_name],
+    ["character_username", row.character_username],
+    ["character_names", row.character_names],
+    ["category_tags", row.category_tags],
+    ["source_type", row.source_type],
+    ["source_bucket", row.source_bucket],
+    ["source_order", row.source_order],
+    ["created_at", row.created_at],
+    ["published_at", row.published_at],
+    ["fetched_at", row.fetched_at],
+    ["like_count", row.like_count],
+    ["view_count", row.view_count],
+    ["share_count", row.share_count],
+    ["repost_count", row.repost_count],
+    ["remix_count", row.remix_count],
+    ["detail_url", row.detail_url],
+    ["thumbnail_url", row.thumbnail_url],
+    ["gif_url", row.gif_url],
+    ["playback_url", row.playback_url],
+    ["download_url", row.download_url],
+    ["duration_seconds", row.duration_seconds],
+    ["estimated_size_bytes", row.estimated_size_bytes],
+    ["width", row.width],
+    ["height", row.height],
+    ["is_downloadable", row.is_downloadable],
+    ["skip_reason", row.skip_reason],
+    ["archive_variant", row.archive_variant],
+    ["archive_path", row.archive_path],
+    ["archive_download_url", row.archive_download_url],
+    ["raw_payload_json", row.raw_payload_json]
+  ];
+
+  return `${metadata
+    .map(([key, value]) => formatMetadataLine(key, value))
+    .filter((line) => line.length > 0)
+    .join("\n")}\n`;
+}
+
+function formatMetadataLine(key: string, value: unknown): string {
+  const formattedValue = formatMetadataValue(value);
+  return formattedValue ? `${key}: ${formattedValue}` : "";
+}
+
+function formatMetadataValue(value: unknown): string {
+  if (value === null || value === undefined) {
+    return "";
+  }
+  if (Array.isArray(value)) {
+    return value.map(formatMetadataValue).filter(Boolean).join(", ");
+  }
+  if (typeof value === "object") {
+    return JSON.stringify(value).replace(/\s+/g, " ").trim();
+  }
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+    return String(value).replace(/\s+/g, " ").trim();
+  }
+  return "";
 }
 
 function dedupeRowsByVideoId(rows: ArchiveWorkPlanRow[]): ArchiveWorkPlanRow[] {

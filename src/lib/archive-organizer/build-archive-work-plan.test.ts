@@ -60,7 +60,7 @@ describe("buildArchiveWorkPlan", () => {
 
     expect(plan.rows).toHaveLength(1);
     expect(plan.rows[0]?.video_id).toBe("s_alpha123");
-    expect(plan.rows[0]?.archive_path).toBe("Sora Library- April 2026/me/published/posts/watermark/s_alpha123");
+    expect(plan.rows[0]?.archive_path).toBe("Sora Library- April 2026/me/published/posts/watermark/04112026-s_alpha123");
     expect(plan.rows[0]?.archive_variant).toBe("watermark");
     expect(plan.rows[0]?.archive_download_url).toBe("https://videos.openai.com/raw.mp4");
     expect(plan.archive_name).toBe("Sora Library- April 2026");
@@ -97,7 +97,7 @@ describe("buildArchiveWorkPlan", () => {
     expect(plan.rows).toHaveLength(1);
     expect(plan.rows[0]?.archive_variant).toBe("no-watermark");
     expect(plan.rows[0]?.archive_download_url).toBe("https://videos.openai.com/no-watermark.mp4");
-    expect(plan.rows[0]?.archive_path).toBe("Sora/liked/no-watermark/s_nowm");
+    expect(plan.rows[0]?.archive_path).toBe("Sora/liked/no-watermark/04112026-s_nowm");
   });
 
   it("uses queue-resolved source URLs for deterministic archive rows", () => {
@@ -122,7 +122,7 @@ describe("buildArchiveWorkPlan", () => {
 
     expect(plan.rows[0]?.archive_variant).toBe("watermark");
     expect(plan.rows[0]?.archive_download_url).toBe("https://videos.openai.com/watermark-queue.mp4");
-    expect(plan.rows[0]?.archive_path).toBe("Sora/me/published/posts/watermark/s_queue");
+    expect(plan.rows[0]?.archive_path).toBe("Sora/me/published/posts/watermark/04112026-s_queue");
   });
 
   it("uses row no-watermark URL before a queue watermark fallback", () => {
@@ -148,7 +148,7 @@ describe("buildArchiveWorkPlan", () => {
 
     expect(plan.rows[0]?.archive_variant).toBe("no-watermark");
     expect(plan.rows[0]?.archive_download_url).toBe("https://videos.openai.com/no-watermark-row.mp4");
-    expect(plan.rows[0]?.archive_path).toBe("Sora/me/published/posts/no-watermark/s_row_nowm");
+    expect(plan.rows[0]?.archive_path).toBe("Sora/me/published/posts/no-watermark/04112026-s_row_nowm");
   });
 
   it("places queue-resolved no-watermark variants in the no-watermark folder", () => {
@@ -168,7 +168,7 @@ describe("buildArchiveWorkPlan", () => {
 
     expect(plan.rows[0]?.archive_variant).toBe("no-watermark");
     expect(plan.rows[0]?.archive_download_url).toBe("https://videos.openai.com/no-watermark-queue.mp4");
-    expect(plan.rows[0]?.archive_path).toBe("Sora/me/published/posts/no-watermark/s_queue_nowm");
+    expect(plan.rows[0]?.archive_path).toBe("Sora/me/published/posts/no-watermark/04112026-s_queue_nowm");
     expect(buildZipWorkerWorkPlan(plan).rows[0]?.archive_download_url).toBe("https://videos.openai.com/no-watermark-queue.mp4");
   });
 
@@ -211,14 +211,27 @@ describe("buildArchiveWorkPlan", () => {
 
     const plan = buildArchiveWorkPlan([sideCharacterRow], "Sora");
     expect(plan.rows).toHaveLength(1);
-    expect(plan.rows[0]?.archive_path).toBe("Sora/side-characters/Crystal Sparkle/watermark/s_side123");
+    expect(plan.rows[0]?.archive_path).toBe("Sora/side-characters/Crystal Sparkle/watermark/04112026-s_side123");
   });
 
-  it("builds a compact ZIP worker plan without full row metadata", () => {
+  it("prefixes archive file names with the best available row date", () => {
+    const plan = buildArchiveWorkPlan([
+      createRow({
+        video_id: "s_date",
+        published_at: null,
+        created_at: "2026-01-20T17:30:00.000Z",
+        fetched_at: "2026-02-01T00:00:00.000Z"
+      })
+    ], "Sora");
+
+    expect(plan.rows[0]?.archive_path).toBe("Sora/me/published/posts/watermark/01202026-s_date");
+  });
+
+  it("builds ZIP worker rows with sidecar metadata text", () => {
     const plan = buildArchiveWorkPlan([
       createRow({
         raw_payload_json: JSON.stringify({
-          heavy: "metadata-that-should-not-cross-worker-boundary"
+          heavy: "metadata-that-should-cross-worker-boundary"
         })
       })
     ], "Sora");
@@ -226,14 +239,18 @@ describe("buildArchiveWorkPlan", () => {
     const workerPlan = buildZipWorkerWorkPlan(plan);
 
     expect(workerPlan.rows).toEqual([
-      {
+      expect.objectContaining({
         video_id: "s_alpha123",
         title: "Nebula Run",
         source_bucket: "published",
-        archive_path: "Sora/me/published/posts/watermark/s_alpha123",
+        archive_path: "Sora/me/published/posts/watermark/04112026-s_alpha123",
         archive_download_url: "https://videos.openai.com/raw.mp4"
-      }
+      })
     ]);
-    expect(JSON.stringify(workerPlan)).not.toContain("metadata-that-should-not-cross-worker-boundary");
+    expect(workerPlan.rows[0]?.metadata_text).toContain("video_id: s_alpha123\n");
+    expect(workerPlan.rows[0]?.metadata_text).toContain("title: Nebula Run\n");
+    expect(workerPlan.rows[0]?.metadata_text).toContain("character_names: Nova\n");
+    expect(workerPlan.rows[0]?.metadata_text).toContain("archive_variant: watermark\n");
+    expect(workerPlan.rows[0]?.metadata_text).toContain("metadata-that-should-cross-worker-boundary");
   });
 });

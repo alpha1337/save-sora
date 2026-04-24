@@ -154,9 +154,10 @@ async function buildArchive(workPlan: ZipWorkerWorkPlan): Promise<void> {
         worker.active_item_label = "Download ready";
         activeSubtitle = "Adding video to archive.";
         publishProgress();
-        const entry = new ZipPassThrough(buildArchiveEntryName(row, result.extension));
-        zip.add(entry);
-        entry.push(result.bytes, true);
+        appendZipEntry(zip, buildArchiveEntryName(row, result.extension), result.bytes);
+        activeSubtitle = "Adding video metadata to archive.";
+        publishProgress();
+        appendZipEntry(zip, buildMetadataEntryName(row), new TextEncoder().encode(resolveMetadataText(row)));
         successfulItems += 1;
         worker.last_completed_item_label = "Complete!";
         logZipStep("row:complete", {
@@ -221,10 +222,17 @@ async function appendSupplementalEntries(
     if (contentBytes.byteLength <= 0) {
       continue;
     }
-    const supplementalFile = new ZipPassThrough(archivePath);
-    zip.add(supplementalFile);
-    supplementalFile.push(contentBytes, true);
+    appendZipEntry(zip, archivePath, contentBytes);
   }
+}
+
+function appendZipEntry(zip: Zip, archivePath: string, contentBytes: Uint8Array): void {
+  if (contentBytes.byteLength <= 0) {
+    return;
+  }
+  const entry = new ZipPassThrough(archivePath);
+  zip.add(entry);
+  entry.push(contentBytes, true);
 }
 
 async function toBytes(content: Blob | string): Promise<Uint8Array> {
@@ -324,6 +332,15 @@ async function fetchDirectVideoBytes(url: string, context?: { video_id?: string;
 function buildArchiveEntryName(row: ZipWorkerRow, extension: string): string {
   const safePath = normalizeArchivePath(row.archive_path || row.video_id || "video");
   return `${safePath}.${normalizeVideoExtension(extension)}`;
+}
+
+function buildMetadataEntryName(row: ZipWorkerRow): string {
+  const safePath = normalizeArchivePath(row.archive_path || row.video_id || "video");
+  return `${safePath}.txt`;
+}
+
+function resolveMetadataText(row: ZipWorkerRow): string {
+  return row.metadata_text.trim() ? row.metadata_text : `video_id: ${row.video_id}\n`;
 }
 
 function normalizeArchivePath(value: string): string {
