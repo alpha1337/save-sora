@@ -178,7 +178,7 @@ async function processDraftEntries(
         continue;
       }
 
-      const resolvedRow = await dependencies.resolveDraftRow(entry.row);
+      const resolvedRow = await resolveDraftEntry(entry, dependencies.resolveDraftRow);
       if (resolvedRow && isSharedVideoId(resolvedRow.video_id)) {
         patches.push(markEntryShared(entry, resolvedRow.video_id, selectedIdRemap, historyNoWatermarkById, resolvedRow));
         publish("sharing_drafts", "Sharing Drafts", entry.title, "Shared draft and refreshed download URLs.");
@@ -229,7 +229,7 @@ async function processSharedEntries(
         return;
       }
 
-      const resolvedUrl = await resolveNoWatermarkWithRetry(entry.current_id, runRejectedWatermarkIds, dependencies);
+      const resolvedUrl = await resolveSharedNoWatermark(entry, runRejectedWatermarkIds, dependencies);
       if (resolvedUrl) {
         entry.no_watermark = resolvedUrl;
         entry.row = {
@@ -254,6 +254,38 @@ async function processSharedEntries(
     if (patches.length > 0) {
       await dependencies.patchQueue(patches);
     }
+  }
+}
+
+async function resolveDraftEntry(
+  entry: PreflightQueueEntry,
+  resolveDraftRow: (row: VideoRow) => Promise<VideoRow | null>
+): Promise<VideoRow | null> {
+  try {
+    return await resolveDraftRow(entry.row);
+  } catch (error) {
+    logger.warn("draft sharing failed", {
+      video_id: entry.current_id,
+      error: getUnknownErrorMessage(error)
+    });
+    return null;
+  }
+}
+
+async function resolveSharedNoWatermark(
+  entry: PreflightQueueEntry,
+  runRejectedWatermarkIds: Set<string>,
+  dependencies: Required<Pick<DownloadPreflightOptions, "getJitterMs" | "removeWatermark" | "sleep">>
+): Promise<string | null> {
+  try {
+    return await resolveNoWatermarkWithRetry(entry.current_id, runRejectedWatermarkIds, dependencies);
+  } catch (error) {
+    runRejectedWatermarkIds.add(entry.current_id);
+    logger.warn("watermark removal failed", {
+      video_id: entry.current_id,
+      error: getUnknownErrorMessage(error)
+    });
+    return null;
   }
 }
 

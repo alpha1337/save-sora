@@ -129,6 +129,58 @@ describe("download preflight", () => {
     ]);
   });
 
+  it("continues through the batch when a draft share attempt throws", async () => {
+    const persistence = createPersistence();
+    const resolveDraftRow = vi.fn((row: VideoRow): Promise<VideoRow | null> => {
+      if (row.video_id === "gen_throws") {
+        return Promise.reject(new Error("share failed"));
+      }
+      return Promise.resolve({
+        ...row,
+        video_id: "s_after_throw",
+        playback_url: "https://videos.openai.com/watermark-after-throw.mp4",
+        download_url: "https://videos.openai.com/no-watermark-after-throw.mp4"
+      });
+    });
+    const result = await runDownloadPreflight([
+      createRow({
+        row_id: "drafts:gen_throws",
+        video_id: "gen_throws",
+        title: "Throws"
+      }),
+      createRow({
+        row_id: "drafts:gen_after_throw",
+        video_id: "gen_after_throw",
+        title: "After Throw"
+      })
+    ], {
+      ...persistence,
+      removeWatermark: vi.fn(),
+      resolveDraftRow,
+      sleep: sleepNow
+    });
+
+    expect(result.queue).toEqual([
+      {
+        id: "gen_throws",
+        watermark: "https://videos.openai.com/watermark-alpha.mp4",
+        no_watermark: null
+      },
+      {
+        id: "s_after_throw",
+        watermark: "https://videos.openai.com/watermark-after-throw.mp4",
+        no_watermark: "https://videos.openai.com/no-watermark-after-throw.mp4"
+      }
+    ]);
+    expect(result.rejections).toEqual([
+      {
+        id: "gen_throws",
+        title: "Throws",
+        reason: "could_not_share_video"
+      }
+    ]);
+  });
+
   it("bypasses the utility when an existing no-watermark URL is available", async () => {
     const persistence = createPersistence();
     const removeWatermark = vi.fn();
@@ -246,6 +298,61 @@ describe("download preflight", () => {
       watermark: "https://videos.openai.com/watermark-alpha.mp4",
       no_watermark: null
     });
+    expect(result.rejections).toEqual([
+      {
+        id: "s_previously_failed",
+        title: "Previously Failed",
+        reason: "access_restricted"
+      }
+    ]);
+  });
+
+  it("continues shared source resolution after a previously failed watermark skip", async () => {
+    const persistence = createPersistence();
+    persistence.listDownloadHistoryRecords.mockResolvedValue([
+      {
+        video_id: "s_previously_failed",
+        no_watermark: null,
+        watermark_removal_failed_at: "2026-04-24T00:00:00.000Z"
+      }
+    ]);
+    const removeWatermark = vi.fn(() => Promise.resolve("https://videos.openai.com/no-watermark-next.mp4"));
+    const result = await runDownloadPreflight([
+      createRow({
+        row_id: "profile:s_previously_failed",
+        video_id: "s_previously_failed",
+        source_type: "profile",
+        source_bucket: "published",
+        title: "Previously Failed"
+      }),
+      createRow({
+        row_id: "profile:s_next",
+        video_id: "s_next",
+        source_type: "profile",
+        source_bucket: "published",
+        title: "Next Video"
+      })
+    ], {
+      ...persistence,
+      removeWatermark,
+      resolveDraftRow: vi.fn(),
+      sleep: sleepNow
+    });
+
+    expect(removeWatermark).toHaveBeenCalledTimes(1);
+    expect(removeWatermark).toHaveBeenCalledWith("s_next");
+    expect(result.queue).toEqual([
+      {
+        id: "s_previously_failed",
+        watermark: "https://videos.openai.com/watermark-alpha.mp4",
+        no_watermark: null
+      },
+      {
+        id: "s_next",
+        watermark: "https://videos.openai.com/watermark-alpha.mp4",
+        no_watermark: "https://videos.openai.com/no-watermark-next.mp4"
+      }
+    ]);
     expect(result.rejections).toEqual([
       {
         id: "s_previously_failed",
