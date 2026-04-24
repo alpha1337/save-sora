@@ -104,11 +104,10 @@ describe("buildArchiveWorkPlan", () => {
     const row = createRow({
       video_id: "s_queue",
       playback_url: "https://videos.openai.com/watermark-row.mp4",
-      download_url: "https://videos.openai.com/no-watermark-row.mp4",
+      download_url: "https://videos.openai.com/watermark-row.mp4",
       raw_payload_json: JSON.stringify({
         download_urls: {
-          watermark: "https://videos.openai.com/watermark-row.mp4",
-          no_watermark: "https://videos.openai.com/no-watermark-row.mp4"
+          watermark: "https://videos.openai.com/watermark-row.mp4"
         }
       })
     });
@@ -124,6 +123,32 @@ describe("buildArchiveWorkPlan", () => {
     expect(plan.rows[0]?.archive_variant).toBe("watermark");
     expect(plan.rows[0]?.archive_download_url).toBe("https://videos.openai.com/watermark-queue.mp4");
     expect(plan.rows[0]?.archive_path).toBe("Sora/me/published/posts/watermark/s_queue");
+  });
+
+  it("uses row no-watermark URL before a queue watermark fallback", () => {
+    const row = createRow({
+      video_id: "s_row_nowm",
+      playback_url: "https://videos.openai.com/watermark-row.mp4",
+      download_url: "https://videos.openai.com/no-watermark-row.mp4",
+      raw_payload_json: JSON.stringify({
+        download_urls: {
+          watermark: "https://videos.openai.com/watermark-row.mp4",
+          no_watermark: "https://videos.openai.com/no-watermark-row.mp4"
+        }
+      })
+    });
+
+    const plan = buildArchiveWorkPlan([row], "Sora", [
+      {
+        id: "s_row_nowm",
+        watermark: "https://videos.openai.com/watermark-queue.mp4",
+        no_watermark: null
+      }
+    ]);
+
+    expect(plan.rows[0]?.archive_variant).toBe("no-watermark");
+    expect(plan.rows[0]?.archive_download_url).toBe("https://videos.openai.com/no-watermark-row.mp4");
+    expect(plan.rows[0]?.archive_path).toBe("Sora/me/published/posts/no-watermark/s_row_nowm");
   });
 
   it("places queue-resolved no-watermark variants in the no-watermark folder", () => {
@@ -144,6 +169,7 @@ describe("buildArchiveWorkPlan", () => {
     expect(plan.rows[0]?.archive_variant).toBe("no-watermark");
     expect(plan.rows[0]?.archive_download_url).toBe("https://videos.openai.com/no-watermark-queue.mp4");
     expect(plan.rows[0]?.archive_path).toBe("Sora/me/published/posts/no-watermark/s_queue_nowm");
+    expect(buildZipWorkerWorkPlan(plan).rows[0]?.archive_download_url).toBe("https://videos.openai.com/no-watermark-queue.mp4");
   });
 
   it("keeps deduping stable after draft ids are converted", () => {

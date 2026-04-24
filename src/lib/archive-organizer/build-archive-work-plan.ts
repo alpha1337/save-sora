@@ -53,9 +53,7 @@ function buildArchiveRow(
   archiveRootFolder: string,
   queueDecision?: DownloadQueueItem
 ): ArchiveWorkPlanRow | null {
-  const variantUrls = queueDecision
-    ? { noWatermark: queueDecision.no_watermark ?? "", watermark: queueDecision.watermark }
-    : resolveVideoVariantUrls(row);
+  const variantUrls = resolveArchiveVariantUrls(row, queueDecision);
   const archiveDownloadUrl = variantUrls.noWatermark || variantUrls.watermark;
   if (!archiveDownloadUrl) {
     return null;
@@ -68,6 +66,21 @@ function buildArchiveRow(
     archive_path: archivePath,
     archive_variant: archiveVariant,
     archive_download_url: archiveDownloadUrl
+  };
+}
+
+function resolveArchiveVariantUrls(
+  row: VideoRow,
+  queueDecision?: DownloadQueueItem
+): { noWatermark: string; watermark: string } {
+  const rowVariantUrls = resolveVideoVariantUrls(row);
+  if (!queueDecision) {
+    return rowVariantUrls;
+  }
+
+  return {
+    noWatermark: normalizeOptionalDownloadUrl(queueDecision.no_watermark) || rowVariantUrls.noWatermark,
+    watermark: normalizeOptionalDownloadUrl(queueDecision.watermark) || rowVariantUrls.watermark
   };
 }
 
@@ -272,6 +285,10 @@ function normalizeOpenAiVideoUrl(value: unknown): string {
     return "";
   }
   return "";
+}
+
+function normalizeOptionalDownloadUrl(value: unknown): string {
+  return typeof value === "string" && value.trim() ? value.trim() : "";
 }
 
 function sanitizePathSegment(value: string, fallback: string): string {
